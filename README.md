@@ -1,6 +1,10 @@
 # FlowStep Harness
 
-**An AI-native n8n.** Same controllability. Different grain.
+Codex and Claude usually **overuse intelligence**. For every small task they generate fresh code in the session: a crop, a hash, a fetch, a one-off Playwright script. A skill is developed as markdown and a worker. It does **not** come with a toolbox. The scripts that do exist land in `~/.codex/skills` or `~/.claude/skills`, not in the project `src`. Different products share one skill folder, so tools mix, drift, and cannot be reused as project code.
+
+That is the problem. The flow is not controllable.
+
+**An AI-native n8n** is the fix. Same controllability. Different grain.
 
 n8n works because every node has a contract: known inputs, known outputs, reusable tools, no improvisation. It fails AI work because every crop, fetch, and hash becomes its own node. The canvas gets stiff. One product change means rewiring the graph.
 
@@ -9,10 +13,10 @@ This skill keeps n8n’s control and inverts the node:
 ```text
 n8n:     node = one action          (HTTP, crop, IF, hash)
 here:    node = one semantic milestone a human would inspect
-         tools = pre-made Python functions used *inside* that milestone
+         tools = pre-made Python functions in the *project* toolbox
 ```
 
-The problem this solves is **controllability**. The model may invent *inside* a milestone. It may not invent the path, the I/O, or the toolbox.
+The model may invent *inside* a milestone. It may not invent the path, the I/O, or the toolbox. Product tools live in `<repo>/flowsteps/tools/`, never in the skill folder. The skill is doctrine and a driver. The project owns the code.
 
 ```text
 request
@@ -85,11 +89,12 @@ Controllability is the schema. If the schema is loose, the flow is not a flow.
 | **Intelligence** | Optional draft / judge / image *inside* a milestone. Still schema-bound. |
 | **Driver** | Order of milestones. `scripts/run_flow.py`. |
 
-Product tools belong in the **codebase**, not in this skill:
+Product tools belong in the **project**, not in this skill. That is how skills stay unmixed:
 
 ```text
-<repo>/flowsteps/tools/<tool_id>/      # toolbox
-<repo>/flowsteps/flows/<flow_id>/      # milestone flow + instruction
+~/.codex/skills/flowstep-harness-builder/   # doctrine + driver only
+<repo>/flowsteps/tools/<tool_id>/           # reusable Python toolbox
+<repo>/flowsteps/flows/<flow_id>/           # milestone flow + instruction
 ```
 
 ## Audit, then generate
