@@ -1,8 +1,9 @@
 # Tool vs intelligence
 
-A **tool** is a pre-made function in `flowsteps/tools/`. It is not a
-FlowStep. A **FlowStep is a milestone** (see `milestone.md`). Intelligence
-is how a milestone may be reached, not a third kind of canvas node.
+A **tool** is a pre-made function in `flowsteps/tools/`. A **FlowStep**
+is that tool used *inside* a **milestone** (see `milestone.md`).
+Intelligence is how a milestone may be reached, not a third canvas node
+and not a FlowStep.
 
 Classify every **tool** and every **milestone’s intelligence** before
 generate. The class is not a label for the YAML. It decides whether the

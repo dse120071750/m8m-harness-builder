@@ -118,7 +118,10 @@ def is_under_codex_skills(path: Path) -> bool:
 
 def is_builder_fixture(path: Path) -> bool:
     text = path.resolve().as_posix().replace("\\", "/").lower()
-    return "flowstep-harness-builder/examples/" in text
+    return (
+        "flowstep-harness-builder/examples/" in text
+        or "m8m-harness-builder/examples/" in text
+    )
 
 
 def assert_product_harness_location(path: Path) -> None:

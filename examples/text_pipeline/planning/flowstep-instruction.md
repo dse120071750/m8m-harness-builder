@@ -2,13 +2,13 @@
 # FlowStep instruction: text_pipeline_v1
 
 This file is the skill instruction. Each section is a milestone.
-Use only the listed toolbox functions inside a milestone.
-Mark a milestone DONE when its output schema PASSes.
+A milestone input schema is the previous milestone output schema.
+FlowSteps listed on a milestone run tools. Mark DONE when the output schema PASSes.
 
 - harness: `C:\Users\gasil\.codex\skills\flowstep-harness-builder\examples\text_pipeline`
 - flow_id: `text_pipeline_v1`
 - final_payload: `label_v1` from `label`
-- updated_at: 2026-08-19T14:39:12Z
+- updated_at: 2026-08-19T17:03:16Z
 
 ## Run
 

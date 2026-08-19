@@ -1,87 +1,99 @@
 # M8M
 
-**M8M is milestone-to-milestone.** A semantic n8n. Each milestone consumes the previous milestone’s output schema as its input schema. FlowSteps live *inside* the milestone and are tool-heavy.
+**M8M is milestone-to-milestone.** A semantic n8n.
 
-This is not a chat skill. It is a **skill for making skills** that produce assets or a standardized workflow — cards, packages, IO receipts — not another session transcript.
+Three words. Do not mix them:
+
+| Word | What it is | What it is not |
+| --- | --- | --- |
+| **Milestone** | The only canvas node. A human checkpoint. Input schema **is** the previous milestone’s output schema. | Not a crop. Not a fetch. Not a tool. |
+| **FlowStep** | A tool-heavy unit **inside** a milestone. Listed on that milestone. Never drawn on the canvas. | Not a milestone. Not free-form session code. |
+| **Tool** | The premade Python implementation a FlowStep runs: `<repo>/flowsteps/tools/<id>/`. Input schema in, output schema out. | Not stored in `~/.codex/skills`. |
+
+This is a **skill for making skills** that produce assets or a standardized workflow — not another session transcript.
 
 ## The problem
 
-Codex and Claude usually **overuse intelligence**. For every small task they generate fresh code in the session: a crop, a hash, a fetch, a one-off Playwright script. A skill is developed as markdown and a worker. It does **not** come with a toolbox. The scripts that do exist land in `~/.codex/skills` or `~/.claude/skills`, not in the project `src`. Different products share one skill folder, so tools mix, drift, and cannot be reused as project code.
+Codex and Claude usually **overuse intelligence**. For every small task they generate fresh code in the session: a crop, a hash, a fetch, a one-off Playwright script. A skill is developed as markdown and a worker. It does **not** come with a toolbox. The scripts that do exist land in `~/.codex/skills` or `~/.claude/skills`, not in the project. Different products share one skill folder, so tools mix.
 
 That is the problem. The flow is not controllable. The skill does not ship an asset.
 
 ## What M8M is
 
-n8n is controllable because every node has a contract. It is the wrong grain for AI: every crop and hash becomes its own canvas node.
-
-M8M keeps n8n’s control and changes the grain to **milestone → milestone**:
-
 ```text
 n8n:     node = one action          (HTTP, crop, IF, hash)
-M8M:     node = one milestone a human would inspect
-         FlowSteps = premade tools that run *inside* that milestone
+M8M:     node = one milestone
          next.in   = previous.out   (fixed schema)
+         FlowSteps = tool-heavy units *inside* that milestone
+         Tool      = premade Python those FlowSteps run
 ```
 
 ```text
 request
-  → source_ready.in  = request
-  → source_ready.out
-  → plan_frozen.in   = source_ready.out
-  → plan_frozen.out
-  → assets_bound.in  = plan_frozen.out
-  → assets_bound.out
-  → cards_rendered.in = assets_bound.out
-  → cards_rendered.out
-  → release_packaged.in = cards_rendered.out
-  → release_packaged.out = asset {path, sha256}
+  → milestone source_ready
+        FlowSteps: normalize, hash_bind   (tools)
+        out schema PASSes
+  → milestone plan_frozen
+        in  = source_ready.out
+        FlowSteps: hash_bind, schema_validate
+        intelligence only if the schema cannot compute the plan
+        out schema PASSes
+  → milestone assets_bound
+        in  = plan_frozen.out
+        FlowSteps: crop, hash_bind, image_size_check
+        out schema PASSes
+  → milestone release_packaged
+        in  = previous.out
+        out = asset {path, sha256}
 ```
 
-The next milestone cannot start until the previous output schema PASSes. Crop, hash, fetch, render stay **inside** the milestone as tools. The canvas never draws them.
+The driver advances **milestone → milestone**. It does not draw crop then hash then IF. Crop is a FlowStep inside a milestone. The tool is the Python in the project toolbox.
 
-The M8M skill is doctrine and a driver. Product tools live in `<repo>/flowsteps/tools/`.
+Invoke this Codex skill as **`$m8m-harness-builder`**.
 
 ## Why M8M, not another agent loop
 
 | n8n | Usual Codex / Claude skill | M8M |
 | --- | --- | --- |
-| Action node | Generate code for the tiny task | Premade tool *inside* a milestone |
+| Action node | Generate code for the tiny task | **FlowStep** inside a milestone, running a **tool** |
 | Integrations on the canvas | Scripts dumped in `~/.codex/skills` | `<repo>/flowsteps/tools/<id>/` |
 | Graph of HTTP/IF/crop | Markdown + worker, no toolbox | **Milestone → milestone** |
-| Typed I/O | Chat in, chat out | **Next input schema = previous output schema** |
-| Runs to a side effect | Stops at a draft | Stops at an **asset** or a verified receipt |
+| Typed I/O | Chat in, chat out | **This milestone.in = previous milestone.out** |
+| Runs to a side effect | Stops at a draft | Stops at an **asset** |
 
-A milestone named `crop_4x5` or `fetch_record` is invalid. Those are FlowSteps inside a milestone. Use them heavily. Do not regenerate them.
+A milestone named `crop_4x5` or `fetch_record` is invalid. Those names are FlowSteps (and tools). Use them heavily. Do not regenerate them in the session.
 
 ## Three rules
 
 ### 1. Milestone to milestone
 
-A milestone is something you would stop and inspect, not a mechanical action.
+A milestone is something you would stop and inspect.
 
-- Valid: `source_ready`, `plan_frozen`, `assets_bound`, `cards_rendered`, `release_decided`
-- Invalid: `crop_4x5`, `fetch_record`, `hash_bind`
+- Valid milestones: `source_ready`, `plan_frozen`, `assets_bound`, `cards_rendered`, `release_decided`
+- Invalid as milestones: `crop_4x5`, `fetch_record`, `hash_bind` — those are FlowSteps / tools
 
-How many times a crop runs stays **inside** the milestone. The next milestone starts only when this one’s output schema PASSes. That output **is** the next input schema.
+The next milestone starts only when this one’s **output schema** PASSes. That object **is** the next milestone’s **input schema**.
 
 ### 2. FlowSteps live inside the milestone (tool-heavy)
 
-| | Tool (default, inside the milestone) | Intelligence (exception, still inside) |
+Each milestone lists the FlowSteps it may run. Each FlowStep runs one **tool**.
+
+| | Tool (default) | Intelligence (exception) |
 | --- | --- | --- |
-| What | Premade Python script | Judgment the schema cannot compute |
-| Where | `<repo>/flowsteps/tools/<id>/` | Optional `NEED_MODEL` *on* that milestone |
-| Contract | Same input → same action. Fixture-testable | Draft only. The tools still emit the payload |
+| What | Premade Python a FlowStep runs | Judgment the schema cannot compute |
+| Where | `<repo>/flowsteps/tools/<id>/` | Optional `NEED_MODEL` *on the milestone* |
+| Contract | Same input → same action. Fixture-testable | Draft only. FlowSteps still emit the payload |
 | Examples | fetch, crop, hash, render, package, validate | plan, caption, choose, release-judge |
 
-The agent **calls** tools. It does not write SQL, crop math, or Playwright in the session. Intelligence must not pick the next milestone.
+The agent **calls** tools through FlowSteps. It does not write SQL, crop math, or Playwright in the session. Intelligence must not pick the next milestone.
 
-Every audit and every generated skill must emit this table. The contract is
+Every audit and every generated skill must emit this table. Contract:
 [`contracts/tool_vs_intelligence_table_v1.schema.json`](contracts/tool_vs_intelligence_table_v1.schema.json).
 
 | id | class | test | why |
 | --- | --- | --- | --- |
 | `fetch_record` | `tool` | same id → same record | structured read; MCP/DB/HTTP GET |
-| `crop_4x5` | `tool` | fixture PNG in, PNG+hash out | pixel math; not a milestone |
+| `crop_4x5` | `tool` | fixture PNG in, PNG+hash out | pixel math; FlowStep, not a milestone |
 | `hash_bind` | `tool` | same bytes → same sha256 | pure bind; `file_ref_v2` receipt |
 | `schema_validate` | `tool` | pass/fail from rules | JSON Schema gate |
 | `render_html_shell` | `tool` | fixture HTML → screenshot hash | fixed viewport generator |
@@ -91,19 +103,14 @@ Every audit and every generated skill must emit this table. The contract is
 | `image_generate` | `intelligence` | model produces bytes | invention; `hash_bind` still sizes and binds |
 | `release_judge` | `intelligence` | not a pixel measurement | taste / teaching quality; footer geometry stays a tool |
 
-A row is one toolbox function or one milestone intelligence. Columns are
-fixed: **id**, **class**, **test**, **why**. Audit writes the instance table
-into `planning/flowstep-audit.json`. Generate writes
-`planning/tool-vs-intelligence.json` and copies the same table into the
-product skill and the flow instruction.
+Columns are fixed: **id**, **class**, **test**, **why**.
 
 ### 3. Previous schema in. This schema out.
 
 ```text
-validate this milestone's input.schema.json
-  (= previous milestone's output.schema.json)
-  → run the FlowSteps listed on this milestone (tools)
-  → validate this milestone's output.schema.json
+validate milestone input.schema.json   (= previous output.schema.json)
+  → run the FlowSteps listed on this milestone (each FlowStep → one tool)
+  → validate milestone output.schema.json
   → that object is the next milestone's input
 ```
 
@@ -112,32 +119,25 @@ validate this milestone's input.schema.json
 - A file is a `file_ref_v2` (`path` + `sha256`).
 - A BLOCKED run stays BLOCKED.
 
-If the schema is loose, you do not have a workflow. You have a chat.
-
 ## Ownership
 
 ```text
-this skill (M8M)                         doctrine + audit + driver
-<repo>/flowsteps/tools/<tool_id>/        premade FlowSteps (the real product)
-<repo>/flowsteps/flows/<flow_id>/        milestone → milestone + instruction
+this skill ($m8m-harness-builder)        doctrine + audit + driver
+<repo>/flowsteps/tools/<tool_id>/        tools (premade Python)
+<repo>/flowsteps/flows/<flow_id>/        milestones + which FlowSteps they run
 ```
 
-Do not put product tools in `~/.codex/skills` or `~/.claude/skills`. That is how skills mix.
+Do not put product tools in `~/.codex/skills` or `~/.claude/skills`.
 
-## Factory (audit → toolbox → flow → validate → ship)
+## Factory
 
-Five premade milestones in `flows/m8m_build_v1.yaml`. One driver:
+Five milestones in `flows/m8m_build_v1.yaml`:
 
 ```powershell
 python scripts/run_m8m.py --target <skill-or-flow-dir> --codebase <repo>
 ```
 
-That writes `planning/flowstep-audit.json`, copies seed tools into
-`<repo>/flowsteps/tools/`, generates the milestone chain from the audit
-(each input schema is the previous output; last step is an `asset`
-receipt), validates, and ships `<repo>/.agents/skills/<name>/SKILL.md`.
-
-Or step by step:
+Writes the audit, copies seed **tools** into the project, generates the milestone chain (each input schema is the previous output; FlowSteps listed per milestone), validates, and ships `<repo>/.agents/skills/<name>/SKILL.md`.
 
 ```powershell
 python scripts/audit_harness.py --target <skill-or-flow-dir>
@@ -150,13 +150,13 @@ Read [references/milestone.md](references/milestone.md) and [references/tool-vs-
 ## Install
 
 ```powershell
-git clone https://github.com/dse120071750/m8m-harness-builder.git $env:USERPROFILE\.codex\skills\flowstep-harness-builder
-pip install -r $env:USERPROFILE\.codex\skills\flowstep-harness-builder\requirements.txt
+git clone https://github.com/dse120071750/m8m-harness-builder.git $env:USERPROFILE\.codex\skills\m8m-harness-builder
+pip install -r $env:USERPROFILE\.codex\skills\m8m-harness-builder\requirements.txt
 ```
 
-Repo-local: copy this folder to `<repo>/.agents/skills/flowstep-harness-builder/`.
+Repo-local: `<repo>/.agents/skills/m8m-harness-builder/`.
 
-Invoke `$flowstep-harness-builder`.
+Invoke **`$m8m-harness-builder`**.
 
 ```powershell
 pip install -r requirements.txt
@@ -166,7 +166,7 @@ python -m unittest discover -s tests -v
 ## Layout
 
 ```text
-SKILL.md                 M8M working method (the skill that makes skills)
+SKILL.md                 M8M working method
 scripts/                 audit, generate, validate, run
 contracts/               shared JSON schemas
 references/              milestone + tool-vs-intelligence

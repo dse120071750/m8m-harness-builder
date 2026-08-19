@@ -1,6 +1,6 @@
 ---
 name: __SKILL_NAME__
-description: Sequential FlowStep skill. Every step is a Python tool with input and output schemas. Use the flowstep-harness-builder driver; do not perform steps from this file.
+description: M8M product skill. Milestones consume the previous output schema. FlowSteps inside each milestone run project tools. Use the $m8m-harness-builder driver.
 ---
 
 # __SKILL_NAME__

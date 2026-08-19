@@ -5,6 +5,6 @@ description: Reference FlowStep v2 skill. Normalize text, segment sentences, the
 
 # text-pipeline
 
-Reference tree for `flowstep-harness-builder`. The instruction is
+Reference tree for `$m8m-harness-builder`. The instruction is
 `planning/flowstep-instruction.md`. Run the builder driver against this
 directory.

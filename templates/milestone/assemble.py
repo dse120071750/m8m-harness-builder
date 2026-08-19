@@ -19,16 +19,19 @@ def _codebase() -> Path:
 
 
 def _builder_tools() -> Any:
-    env = os.environ.get("FLOWSTEP_BUILDER")
+    env = os.environ.get("M8M_BUILDER") or os.environ.get("FLOWSTEP_BUILDER")
     candidates = []
     if env:
         candidates.append(Path(env) / "scripts" / "flowstep_tools.py")
-    candidates.append(Path.home() / ".codex" / "skills" / "flowstep-harness-builder" / "scripts" / "flowstep_tools.py")
+    home_skills = Path.home() / ".codex" / "skills"
+    for skill_name in ("m8m-harness-builder", "flowstep-harness-builder"):
+        candidates.append(home_skills / skill_name / "scripts" / "flowstep_tools.py")
     here = Path(__file__).resolve()
     for parent in here.parents:
-        candidate = parent / "flowstep-harness-builder" / "scripts" / "flowstep_tools.py"
-        if candidate.is_file():
-            candidates.append(candidate)
+        for skill_name in ("m8m-harness-builder", "flowstep-harness-builder"):
+            candidate = parent / skill_name / "scripts" / "flowstep_tools.py"
+            if candidate.is_file():
+                candidates.append(candidate)
     for path in candidates:
         if path.is_file():
             spec = importlib.util.spec_from_file_location("m8m_flowstep_tools", path)
@@ -37,7 +40,7 @@ def _builder_tools() -> Any:
             module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(module)
             return module
-    raise RuntimeError("M8M builder not found; set FLOWSTEP_BUILDER to the skill root")
+    raise RuntimeError("M8M builder not found; set M8M_BUILDER to the skill root")
 
 
 def _first_path(value: Any) -> str | None:

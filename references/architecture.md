@@ -1,12 +1,17 @@
-# FlowStep v2 architecture
+# M8M architecture
 
-Protocol reference for the FlowStep Harness Engineer. The skill file owns
-the engineering method. This file owns YAML, the tool protocol, and the
-driver.
+Protocol reference. The skill file owns the engineering method. This
+file owns YAML, the tool protocol, and the driver.
 
-v3 product flows live at `<codebase>/flowsteps/flows/<flow_id>/`.
-Reusable tools live at `<codebase>/flowsteps/tools/<tool_id>/`.
-A FlowStep is a milestone. Tools are not milestones. See `milestone.md`.
+```text
+Milestone  = canvas node. this.in = previous.out
+FlowStep   = tool-heavy unit inside a milestone
+Tool       = premade Python at flowsteps/tools/<id>/
+```
+
+v3 product **milestones** live at `<codebase>/flowsteps/flows/<flow_id>/`.
+Reusable **tools** live at `<codebase>/flowsteps/tools/<tool_id>/`.
+See `milestone.md`.
 
 ## Control plane
 

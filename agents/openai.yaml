@@ -1,6 +1,6 @@
 interface:
   display_name: "M8M"
-  short_description: "Milestone to milestone: tool-heavy FlowSteps inside each checkpoint"
-  default_prompt: "Use $flowstep-harness-builder as M8M, milestone to milestone. Each milestone input schema is the previous output schema. FlowSteps (tools) run inside the milestone and are tool-heavy. First audit (scripts/audit_harness.py --target <skill>) and return planning/flowstep-audit.md. Do not generate session code for crop/fetch/hash. Do not put product tools in ~/.codex/skills. The finished skill must produce an asset or a standardized workflow."
+  short_description: "Milestone to milestone. FlowSteps inside milestones run tools."
+  default_prompt: "Use $m8m-harness-builder as M8M. Milestone = canvas node (this.in = previous.out). FlowStep = tool-heavy unit inside the milestone. Tool = premade Python in the project toolbox. First audit (scripts/audit_harness.py --target <skill>) and return planning/flowstep-audit.md. Do not generate session code for crop/fetch/hash. Do not put product tools in ~/.codex/skills. The finished skill must produce an asset or a standardized workflow."
 policy:
   allow_implicit_invocation: true

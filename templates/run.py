@@ -1,4 +1,4 @@
-"""Delegate to flowstep-harness-builder so this skill does not fork the driver."""
+"""Delegate to $m8m-harness-builder so this skill does not fork the driver."""
 
 from __future__ import annotations
 
@@ -11,18 +11,20 @@ SKILL_DIR = Path(__file__).resolve().parents[1]
 
 
 def _builder_run_flow() -> Path:
-    env = os.environ.get("FLOWSTEP_BUILDER")
+    env = os.environ.get("M8M_BUILDER") or os.environ.get("FLOWSTEP_BUILDER")
     if env:
         candidate = Path(env) / "scripts" / "run_flow.py"
         if candidate.is_file():
             return candidate
-    sibling = Path(__file__).resolve().parents[2] / "flowstep-harness-builder" / "scripts" / "run_flow.py"
-    if sibling.is_file():
-        return sibling
+    skills_parent = Path(__file__).resolve().parents[2]
+    for skill_name in ("m8m-harness-builder", "flowstep-harness-builder"):
+        sibling = skills_parent / skill_name / "scripts" / "run_flow.py"
+        if sibling.is_file():
+            return sibling
     default = Path(r"__BUILDER_ROOT__") / "scripts" / "run_flow.py"
     if default.is_file():
         return default
-    raise SystemExit("Cannot find flowstep-harness-builder. Set FLOWSTEP_BUILDER.")
+    raise SystemExit("Cannot find $m8m-harness-builder. Set M8M_BUILDER.")
 
 
 def main() -> None:
