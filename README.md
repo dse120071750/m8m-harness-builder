@@ -9,6 +9,7 @@ Three words. Do not mix them:
 | **Milestone** | The only canvas node. A human checkpoint. Input schema **is** the previous milestone’s output schema. | Not a crop. Not a fetch. Not a tool. |
 | **FlowStep** | A tool-heavy unit **inside** a milestone. Listed on that milestone. Never drawn on the canvas. | Not a milestone. Not free-form session code. |
 | **Tool** | The premade Python implementation a FlowStep runs: `<repo>/flowsteps/tools/<id>/`. Input schema in, output schema out. | Not stored in `~/.codex/skills`. |
+| **Gate / foreach** | n8n IF and Loop Over Items, as JSON Schema. `when` = instance validates. `foreach` = typed array + `maxItems`. | Not a milestone. Not semantic approval. Not `NEED_MODEL`. |
 
 This is a **skill for making skills** that produce assets or a standardized workflow — not another session transcript.
 
@@ -118,6 +119,30 @@ validate milestone input.schema.json   (= previous output.schema.json)
 - `{ok: boolean}` stubs are invalid.
 - A file is a `file_ref_v2` (`path` + `sha256`).
 - A BLOCKED run stays BLOCKED.
+
+### 4. If/else and loop are schema gates
+
+n8n IF/Switch/Loop exist in M8M as **control on a milestone**, not as canvas nodes.
+
+```yaml
+next:
+  - when: schemas/gates/kind_url.schema.json
+    then: url_ready
+  - when: schemas/gates/kind_file.schema.json
+    then: file_ready
+else: BLOCKED
+
+foreach:
+  path: pages
+  item_schema: schemas/page_v1.json
+  tools: [hash_bind]
+  max_items: 7
+  collect: pages
+```
+
+`when` means the previous (or this) payload **validates** against that JSON Schema — the same engine as `schema_validate`. First match wins. `else` is required. `foreach` walks a typed array that already has `maxItems` on the previous output schema. A milestone named `if_*` / `loop_*` is invalid. There is no “loop until the model is happy”.
+
+Audit infers these from **existing** output-schema fields (`enum` / `const` / array `maxItems`). Generate writes `schemas/gates/*.schema.json`. Intelligence may fill a field; it may not pick `then`.
 
 ## Ownership
 

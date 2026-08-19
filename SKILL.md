@@ -43,6 +43,11 @@ Milestone named crop_* / fetch_* / hash_*  = invalid (that is a FlowStep / tool)
 FlowStep without a tool                    = invalid
 Tool living under ~/.codex/skills          = invalid
 This milestone.in != previous milestone.out = invalid
+if_* / loop_* milestone names               = invalid (schema gates, not checkpoints)
+foreach without maxItems                    = invalid
+next without else                           = invalid
+gate field not on this output schema        = invalid
+foreach owned by intelligence               = invalid
 ```
 
 Intelligence may exist *on* a milestone (`NEED_MODEL`) and may only call
@@ -84,6 +89,7 @@ The markdown always includes:
 - FlowSteps / tools to standardize to Python (`flowsteps/tools/<id>/`)
 - input and output schema of each **milestone** (next.in = previous.out)
 - tool vs intelligence table (`tool_vs_intelligence_table_v1`)
+- schema control (`next.when` / `foreach`) inferred from output JSON Schema, never from a model
 
 ```powershell
 python scripts/audit_harness.py --target <skill-or-flow-dir>
@@ -98,6 +104,7 @@ python scripts/audit_harness.py --codebase <repo> --flow-id <flow_id>
 - intelligence with file/hash outputs and no FlowSteps
 - stub tools or `{ok: boolean}` schemas
 - a milestone input schema that is not the previous output schema
+- if/else or loop decided by intelligence instead of JSON Schema
 
 ## Response
 

@@ -259,6 +259,8 @@ def generate_v3_flow(
     for mid in milestones:
         if not STEP_ID_RE.match(mid):
             raise FlowError(f"invalid milestone id: {mid}")
+        if any(mid.startswith(prefix) for prefix in ("if_", "loop_", "switch_", "when_", "else_")):
+            raise FlowError(f"{mid}: if/loop/switch are schema gates, not milestones")
         if step_class_hint(mid) == "tool":
             raise FlowError(f"{mid}: use --tool for crop/fetch/hash; milestones are checkpoints")
     for tool_id in sorted({*(tools or []), *[str(t) for spec in (milestone_specs or []) for t in (spec.get("tools") or [])]}):
@@ -298,6 +300,28 @@ def generate_v3_flow(
         if intel_value != "none":
             item["model_justification"] = spec.get("model_justification") or "judgment that is not a typed transform"
             item["draft_schema"] = f"milestones/{mid}/draft.schema.json"
+        if spec.get("next"):
+            edges = []
+            gate_schemas: dict[str, Any] = dict(spec.get("_gate_schemas") or {})
+            for edge in spec["next"]:
+                public_edge = {"when": edge["when"], "then": edge["then"]}
+                edges.append(public_edge)
+                if edge.get("schema"):
+                    gate_schemas[str(edge["when"])] = edge["schema"]
+            item["next"] = edges
+            item["else"] = spec.get("else") or "BLOCKED"
+            item["_gate_schemas"] = gate_schemas
+        if spec.get("foreach"):
+            fe = dict(spec["foreach"])
+            item["_item_schema_object"] = fe.pop("item_schema_object", None)
+            item["foreach"] = fe
+        if spec.get("join"):
+            item["join"] = spec["join"]
+            item["_input_schema_object"] = {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "type": "object",
+                "additionalProperties": True,
+            }
         items.append(item)
         previous = item
     flow = {
@@ -386,6 +410,13 @@ def generate_v3_flow(
             draft = harness / "milestones" / mid / "draft.schema.json"
             if _write_text(draft, _render("step/draft.schema.json", {"STEP_ID": mid}), overwrite=overwrite):
                 created.append(str(draft))
+        for rel, schema_obj in (item.get("_gate_schemas") or {}).items():
+            if isinstance(schema_obj, dict) and _write_json(harness / rel, schema_obj, overwrite=overwrite):
+                created.append(str(harness / rel))
+        if item.get("foreach") and isinstance(item.get("_item_schema_object"), dict):
+            item_schema_path = harness / str(item["foreach"]["item_schema"])
+            if _write_json(item_schema_path, item["_item_schema_object"], overwrite=overwrite):
+                created.append(str(item_schema_path))
         previous_id = mid
     loaded = load_flow(harness, flow_path)
     instruction = write_instruction(harness, loaded)
@@ -440,6 +471,37 @@ def write_product_skill(
     return str(dest)
 
 
+def _copy_missing_control_schemas(harness: Path, audit: dict[str, Any]) -> None:
+    sources: list[Path] = []
+    grade = audit.get("grade") if isinstance(audit.get("grade"), dict) else {}
+    for raw in (audit.get("target"), grade.get("target"), grade.get("flow_path")):
+        if not raw:
+            continue
+        path = Path(str(raw))
+        if path.is_file():
+            path = path.parent
+        if path.is_dir():
+            sources.append(path)
+    rels: list[str] = []
+    for item in audit.get("proposed_milestones") or []:
+        for edge in item.get("next") or []:
+            if isinstance(edge, dict) and edge.get("when"):
+                rels.append(str(edge["when"]))
+        fe = item.get("foreach") or {}
+        if fe.get("item_schema"):
+            rels.append(str(fe["item_schema"]))
+    for rel in rels:
+        dest = harness / rel
+        if dest.is_file():
+            continue
+        for src_root in sources:
+            cand = src_root / rel
+            if cand.is_file():
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(cand, dest)
+                break
+
+
 def generate_from_audit(
     codebase: Path,
     audit: dict[str, Any],
@@ -485,6 +547,15 @@ def generate_from_audit(
             "input_schema_object": item.get("input_schema"),
             "inputs": item.get("inputs"),
             "model_justification": item.get("model_justification"),
+            "next": item.get("next"),
+            "else": item.get("else"),
+            "foreach": item.get("foreach"),
+            "join": item.get("join"),
+            "_gate_schemas": {
+                str(edge["when"]): edge["schema"]
+                for edge in (item.get("next") or [])
+                if isinstance(edge, dict) and edge.get("schema")
+            },
         }
         specs.append(spec)
     result = generate_v3_flow(
@@ -495,6 +566,7 @@ def generate_from_audit(
         overwrite=overwrite,
         milestone_specs=specs,
     )
+    _copy_missing_control_schemas(Path(result["harness_dir"]), audit)
     table = audit.get("tool_vs_intelligence") or classification_from_audit(audit)
     table["flow_id"] = raw_flow_id
     table_path = Path(result["harness_dir"]) / "planning" / "tool-vs-intelligence.json"
@@ -532,6 +604,23 @@ def yaml_dump_v3(flow: dict[str, Any]) -> str:
             lines.append(f"    model_justification: {json.dumps(item.get('model_justification') or '', ensure_ascii=False)}")
             lines.append(f"    draft_schema: {item['draft_schema']}")
         lines.append(f"    handler: {item['handler']}")
+        if item.get("next"):
+            lines.append("    next:")
+            for edge in item["next"]:
+                lines.append(f"      - when: {edge['when']}")
+                lines.append(f"        then: {edge['then']}")
+            lines.append(f"    else: {item.get('else') or 'BLOCKED'}")
+        if item.get("foreach"):
+            fe = item["foreach"]
+            lines.append("    foreach:")
+            lines.append(f"      path: {fe['path']}")
+            lines.append(f"      item_schema: {fe['item_schema']}")
+            lines.append(f"      tools: [{', '.join(fe['tools'])}]")
+            lines.append(f"      max_items: {fe['max_items']}")
+            if fe.get("collect"):
+                lines.append(f"      collect: {fe['collect']}")
+        if item.get("join"):
+            lines.append(f"    join: [{', '.join(item['join'])}]")
     lines.append("")
     return "\n".join(lines)
 

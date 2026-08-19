@@ -20,8 +20,9 @@ M8M:     node = one milestone
          Tool = the Python those FlowSteps run
 ```
 
-The driver advances milestone → milestone. It does not micro-orchestrate
-crop then hash then IF.
+The driver advances milestone → milestone. Crop/hash stay FlowSteps
+inside a milestone. n8n IF/loop are **schema gates** (`next.when` /
+`foreach`), not canvas nodes and not intelligence.
 
 Intelligence is optional *on* a milestone (`NEED_MODEL`). It is not a
 third canvas node.
@@ -49,3 +50,22 @@ A **tool** is the Python package. A **FlowStep** is that tool used
 inside a milestone. Adding a missing capability means adding
 `flowsteps/tools/<id>/`, not drawing another milestone. See
 `references/tool-vs-intelligence.md`.
+
+## Schema gates (if/else and loop)
+
+Criterion is JSON Schema validity, never a model.
+
+- `next[].when` + `else`: exclusive branch. First gate schema that
+  validates `this.out` wins. `else: BLOCKED` is allowed.
+- `foreach.path` + `item_schema` + `max_items`: loop over a typed array
+  already declared on the previous output schema (`maxItems` required).
+- Join after a branch: `join: [url_ready, file_ready]` binds the PASS
+  branch. Downstream input is still a schema (`oneOf` / open object).
+
+Audit infers `next` from `enum`/`const` fields that match later milestone
+ids, and `foreach` from a previous array that already declares
+`maxItems`. Generate writes the gate schemas. The model does not approve
+the branch.
+
+Forbidden: `if_*` / `loop_*` milestone ids, unbounded while, intelligence
+choosing `then`, “repeat until it looks good”.

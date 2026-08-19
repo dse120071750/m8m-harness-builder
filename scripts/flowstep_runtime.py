@@ -108,6 +108,8 @@ def step_class_hint(step_id: str) -> str | None:
         return "tool"
     if tokens & set(INTEL_ID_HINTS):
         return "intelligence"
+    if any(lowered.startswith(prefix) for prefix in ("if_", "loop_", "switch_", "when_", "else_")):
+        return "tool"
     return None
 
 
@@ -227,6 +229,8 @@ def _load_flow_v3(skill_dir: Path, path: Path, raw: dict[str, Any]) -> dict[str,
             raise FlowError(f"invalid milestone id: {step_id}")
         if step_id in ids:
             raise FlowError(f"duplicate milestone id: {step_id}")
+        if any(step_id.startswith(prefix) for prefix in ("if_", "loop_", "switch_", "when_", "else_")):
+            raise FlowError(f"{step_id}: if/loop/switch are schema gates, not milestones")
         if step_class_hint(step_id) == "tool":
             raise FlowError(
                 f"{step_id}: this name is a toolbox function, not a milestone "
@@ -250,6 +254,25 @@ def _load_flow_v3(skill_dir: Path, path: Path, raw: dict[str, Any]) -> dict[str,
                 inputs = {"request": "user.request"}
             else:
                 inputs = {previous["id"]: f"{previous['id']}.{previous['output_contract']}"}
+        next_edges = item.get("next") or []
+        if next_edges:
+            if not isinstance(next_edges, list):
+                raise FlowError(f"{step_id}: next must be a list of {{when, then}}")
+            for edge in next_edges:
+                if not isinstance(edge, dict) or not edge.get("when") or not edge.get("then"):
+                    raise FlowError(f"{step_id}: each next edge needs when (schema) and then (milestone id)")
+            if not item.get("else"):
+                raise FlowError(f"{step_id}: next requires else (milestone id or BLOCKED)")
+        foreach = item.get("foreach")
+        if foreach is not None:
+            if not isinstance(foreach, dict):
+                raise FlowError(f"{step_id}: foreach must be a mapping")
+            for key in ("path", "item_schema", "tools", "max_items"):
+                if key not in foreach:
+                    raise FlowError(f"{step_id}: foreach.{key} is required")
+        join = item.get("join")
+        if join is not None and (not isinstance(join, list) or not join):
+            raise FlowError(f"{step_id}: join must be a non-empty list of milestone ids")
         step = {
             "id": step_id,
             "kind": "milestone",
@@ -264,6 +287,10 @@ def _load_flow_v3(skill_dir: Path, path: Path, raw: dict[str, Any]) -> dict[str,
             "output_schema": item["output_schema"],
             "test": item.get("test", f"milestones/{step_id}/tests/test_assemble.py"),
             "params": item.get("params") or {},
+            "next": list(next_edges),
+            "else": item.get("else"),
+            "foreach": foreach,
+            "join": list(join) if isinstance(join, list) else None,
         }
         if intel != "none":
             step["draft_schema"] = item["draft_schema"]
@@ -468,6 +495,32 @@ def bind_inputs(run_dir: Path, flow: dict[str, Any], step: dict[str, Any]) -> tu
     by_id = {item["id"]: item for item in flow["steps"]}
     payload: dict[str, Any] = {}
     bindings: list[dict[str, Any]] = []
+    join = step.get("join") or []
+    if join:
+        for source_id in join:
+            if source_id not in by_id:
+                raise FlowError(f"{step['id']} join references unknown milestone {source_id}")
+            source = by_id[source_id]
+            path = expected_artifact_path(run_dir, flow, source)
+            if not path.is_file():
+                continue
+            artifact = read_json(path)
+            if artifact.get("status") != "PASS":
+                continue
+            payload[source_id] = artifact.get("data")
+            bindings.append(
+                {
+                    "input_name": source_id,
+                    "source_step_id": source_id,
+                    "artifact_path": relative_to(run_dir, path),
+                    "artifact_id": artifact.get("artifact_id"),
+                    "artifact_sha256": sha256_file(path),
+                    "contract": source["output_contract"],
+                    "status": "PASS",
+                }
+            )
+            return payload, bindings
+        raise FlowError(f"{step['id']}: join found no PASS branch among {join}")
     for name, reference in step["inputs"].items():
         if reference == "user.request":
             path = run_dir / "request.json"

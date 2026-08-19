@@ -12,6 +12,7 @@ from jsonschema import Draft202012Validator, RefResolver
 
 from flowstep_instruction import sync_statuses_from_errors
 from flowstep_tools import infer_codebase, validate_library_tool
+from schema_gate import is_control_name, schema_property_names, schema_required_names
 from flowstep_runtime import (
     FlowError,
     add_harness_location_args,
@@ -27,6 +28,118 @@ from flowstep_runtime import (
     resolve_harness_dir,
     skill_rel,
 )
+
+
+def _previous_output_schema(skill_dir: Path, flow: dict[str, Any], step: dict[str, Any]) -> dict[str, Any] | None:
+    by_id = {item["id"]: item for item in flow["steps"]}
+    refs: list[str] = []
+    if step.get("join"):
+        refs = list(step["join"])
+    else:
+        for reference in (step.get("inputs") or {}).values():
+            if isinstance(reference, str) and "." in reference and reference != "user.request":
+                refs.append(reference.split(".", 1)[0])
+    names: set[str] = set()
+    schema: dict[str, Any] | None = None
+    for mid in refs:
+        source = by_id.get(mid)
+        if not source:
+            continue
+        path = skill_dir / source["output_schema"]
+        if not path.is_file():
+            continue
+        schema = read_json(path)
+        names |= schema_property_names(schema)
+    if schema is None:
+        return None
+    schema = dict(schema)
+    schema["_names"] = names
+    return schema
+
+
+def _validate_control(
+    skill_dir: Path,
+    flow: dict[str, Any],
+    step: dict[str, Any],
+    index: int,
+    declared: set[str],
+    errors: list[str],
+) -> None:
+    step_id = step["id"]
+    if step.get("next"):
+        if not step.get("else"):
+            errors.append(f"{step_id}: next requires else")
+        elif step["else"] != "BLOCKED" and step["else"] not in declared:
+            errors.append(f"{step_id}: else references unknown milestone {step['else']}")
+        prev = _previous_output_schema(skill_dir, flow, {"inputs": {step_id: f"{step_id}.{step['output_contract']}"}, "id": "_gate"})
+        # gates apply to THIS milestone's output, not previous
+        out_path = skill_dir / step["output_schema"]
+        out_names: set[str] = set()
+        if out_path.is_file():
+            try:
+                out_names = schema_property_names(read_json(out_path))
+            except FlowError as exc:
+                errors.append(str(exc))
+        for edge in step["next"]:
+            extra_keys = set(edge) - {"when", "then"}
+            if extra_keys:
+                errors.append(f"{step_id}: gate edge has extra fields {sorted(extra_keys)}; only when/then")
+            then = str(edge.get("then") or "")
+            if then not in declared:
+                errors.append(f"{step_id}: next.then unknown milestone {then}")
+            when = skill_dir / str(edge.get("when") or "")
+            if not when.is_file():
+                errors.append(f"{step_id}: missing gate schema {edge.get('when')}")
+                continue
+            try:
+                gate = read_json(when)
+            except FlowError as exc:
+                errors.append(str(exc))
+                continue
+            extra = schema_required_names(gate) - out_names
+            if extra and out_names:
+                errors.append(f"{step_id}: gate {when.name} uses fields not on output schema: {sorted(extra)}")
+    if step.get("foreach"):
+        if step.get("intelligence") not in {None, "none"}:
+            errors.append(f"{step_id}: foreach is schema control; intelligence cannot own the loop")
+        fe = step["foreach"]
+        if not isinstance(fe.get("max_items"), int) or fe["max_items"] < 1:
+            errors.append(f"{step_id}: foreach.max_items must be a positive integer")
+        item_schema = skill_dir / str(fe.get("item_schema") or "")
+        if not item_schema.is_file():
+            errors.append(f"{step_id}: missing foreach.item_schema {fe.get('item_schema')}")
+        tools = fe.get("tools") or []
+        if not tools:
+            errors.append(f"{step_id}: foreach.tools must list toolbox ids")
+        # path must exist as array on an input / previous output
+        prev = None
+        for reference in (step.get("inputs") or {}).values():
+            if isinstance(reference, str) and "." in reference and reference != "user.request":
+                source_id = reference.split(".", 1)[0]
+                source = next((item for item in flow["steps"] if item["id"] == source_id), None)
+                if source:
+                    path = skill_dir / source["output_schema"]
+                    if path.is_file():
+                        prev = read_json(path)
+        if prev:
+            props = prev.get("properties") or {}
+            root = str(fe.get("path") or "").split(".", 1)[0]
+            field = props.get(root)
+            if not isinstance(field, dict) or field.get("type") != "array":
+                errors.append(f"{step_id}: foreach.path {fe.get('path')} is not an array on the previous output schema")
+            else:
+                schema_max = field.get("maxItems")
+                if schema_max is None:
+                    errors.append(f"{step_id}: previous output {root} must declare maxItems")
+                elif isinstance(fe.get("max_items"), int) and fe["max_items"] > int(schema_max):
+                    errors.append(f"{step_id}: foreach.max_items {fe['max_items']} exceeds schema maxItems {schema_max}")
+    if step.get("join"):
+        for mid in step["join"]:
+            if mid not in declared:
+                errors.append(f"{step_id}: join references unknown milestone {mid}")
+            source_index = next((i for i, item in enumerate(flow["steps"]) if item["id"] == mid), -1)
+            if source_index >= index:
+                errors.append(f"{step_id}: join {mid} must be an earlier milestone")
 
 
 def validate_harness(
@@ -99,6 +212,9 @@ def validate_harness(
             if schema_key == "output_schema" and is_stub_output_schema(schema):
                 errors.append(f"{step_id}: output schema is still the generated {{ok: boolean}} stub")
             errors.extend(lint_file_payload_schema(schema, label=f"{step_id}.{schema_key}"))
+        if is_control_name(step_id):
+            errors.append(f"{step_id}: if/loop/switch are schema gates, not milestones")
+        _validate_control(skill_dir, flow, step, index, declared, errors)
         contract = step["output_contract"]
         owner = seen_contracts.get(contract)
         if owner and owner != step_id:

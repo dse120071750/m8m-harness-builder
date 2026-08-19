@@ -50,6 +50,7 @@ DRIVER_STEMS = {
     "run",
     "run_flow",
     "run_flow_sequence",
+    "schema_gate",
     "self_test",
     "validate_harness",
     "validate_run",
@@ -186,6 +187,10 @@ def _prop_brief(prop: Any) -> dict[str, Any]:
             brief["pattern"] = prop["pattern"]
         if "items" in prop:
             brief["items"] = _prop_brief(prop["items"])
+        if "minItems" in prop:
+            brief["minItems"] = prop["minItems"]
+        if "maxItems" in prop:
+            brief["maxItems"] = prop["maxItems"]
         return brief
     return {"type": "object"}
 
@@ -501,8 +506,18 @@ def audit_harness(root: Path) -> dict[str, Any]:
             "model": item.get("model"),
             "inputs": inputs,
             "hint": hint,
+            "next": item.get("next"),
+            "else": item.get("else"),
+            "foreach": item.get("foreach"),
             "issues": [],
         }
+        if item.get("next"):
+            row["next"] = item["next"]
+            row["else"] = item.get("else") or "BLOCKED"
+        if item.get("foreach"):
+            row["foreach"] = item["foreach"]
+        if item.get("join"):
+            row["join"] = item["join"]
         if hint == "tool":
             row["issues"].append("name is a toolbox action; this should be a tool, not a milestone/step")
             findings.append({"severity": "P0", "id": step_id, "note": row["issues"][-1]})
@@ -528,6 +543,15 @@ def audit_harness(root: Path) -> dict[str, Any]:
                         findings.append({"severity": "P1", "id": step_id, "note": err})
             if intel not in {None, "none"} and not item.get("model_justification"):
                 row["issues"].append("intelligence requires model_justification")
+                findings.append({"severity": "P0", "id": step_id, "note": row["issues"][-1]})
+            if any(step_id.lower().startswith(prefix) for prefix in ("if_", "loop_", "switch_", "when_", "else_")):
+                row["issues"].append("if/loop/switch are schema gates, not milestones")
+                findings.append({"severity": "P0", "id": step_id, "note": row["issues"][-1]})
+            if item.get("next") and not item.get("else"):
+                row["issues"].append("next requires else (milestone id or BLOCKED)")
+                findings.append({"severity": "P0", "id": step_id, "note": row["issues"][-1]})
+            if item.get("foreach") and intel not in {None, "none"}:
+                row["issues"].append("foreach is schema control; intelligence cannot own the loop")
                 findings.append({"severity": "P0", "id": step_id, "note": row["issues"][-1]})
         if not item.get("output_contract"):
             row["issues"].append("no output_contract")
@@ -662,6 +686,131 @@ def _rechain_milestones(root: Path, milestones: list[dict[str, Any]]) -> list[di
     return milestones
 
 
+def _enum_values(prop: Any) -> list[str]:
+    if not isinstance(prop, dict):
+        return []
+    if "enum" in prop and isinstance(prop["enum"], list):
+        return [str(item) for item in prop["enum"] if item is not None and not isinstance(item, (dict, list))]
+    if "const" in prop and prop["const"] is not None and not isinstance(prop["const"], (dict, list)):
+        return [str(prop["const"])]
+    return []
+
+
+def _match_branch(candidate_ids: list[str], value: str) -> str | None:
+    token = str(value).lower().replace("-", "_")
+    matches = [mid for mid in candidate_ids if token in _tokens(mid)]
+    return matches[0] if matches else None
+
+
+def _schema_properties(schema: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(schema, dict):
+        return {}
+    props = schema.get("properties")
+    return props if isinstance(props, dict) else {}
+
+
+def infer_schema_control(milestones: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Emit next/foreach from JSON Schema only. Never from a model verdict."""
+    ids = [str(item["id"]) for item in milestones]
+    by_id = {item["id"]: item for item in milestones}
+    for index, item in enumerate(milestones):
+        later = ids[index + 1 :]
+        if not item.get("next"):
+            props = _schema_properties(item.get("output_schema"))
+            for field, prop in props.items():
+                values = _enum_values(prop)
+                if len(values) < 2:
+                    continue
+                edges = []
+                for value in values:
+                    then = _match_branch(later, value)
+                    if not then:
+                        edges = []
+                        break
+                    gate_rel = f"schemas/gates/{field}_{value}.schema.json"
+                    edges.append(
+                        {
+                            "when": gate_rel,
+                            "then": then,
+                            "schema": {
+                                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                                "$id": f"{field}_{value}.gate.schema.json",
+                                "type": "object",
+                                "additionalProperties": True,
+                                "required": [field],
+                                "properties": {field: {"const": value}},
+                            },
+                        }
+                    )
+                if len(edges) >= 2 and len({edge["then"] for edge in edges}) == len(edges):
+                    item["next"] = edges
+                    item["else"] = "BLOCKED"
+                    branch_ids = [edge["then"] for edge in edges]
+                    last_branch = max(ids.index(mid) for mid in branch_ids)
+                    for mid in ids[last_branch + 1 :]:
+                        if mid not in branch_ids and not by_id[mid].get("join"):
+                            by_id[mid]["join"] = branch_ids
+                            break
+                    break
+        if item.get("foreach") or item.get("intelligence") not in {None, "none"}:
+            continue
+        if index == 0:
+            continue
+        prev_props = _schema_properties(milestones[index - 1].get("output_schema"))
+        tokens = _tokens(item["id"])
+        for path, prop in prev_props.items():
+            if not isinstance(prop, dict) or prop.get("type") != "array":
+                continue
+            if prop.get("maxItems") is None:
+                continue
+            if path not in tokens and path.rstrip("s") not in tokens:
+                continue
+            items_schema = prop.get("items") if isinstance(prop.get("items"), dict) else {"type": "object"}
+            stem = path.rstrip("s") or path
+            item["foreach"] = {
+                "path": path,
+                "item_schema": f"schemas/{stem}_item_v1.json",
+                "tools": list(item.get("tools") or ["hash_bind"]),
+                "max_items": int(prop["maxItems"]),
+                "collect": path,
+                "item_schema_object": items_schema,
+            }
+            break
+    return milestones
+
+
+def control_table(milestones: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for item in milestones:
+        if item.get("next"):
+            rows.append(
+                {
+                    "milestone": item["id"],
+                    "kind": "gate",
+                    "criterion": "json_schema",
+                    "else": item.get("else") or "BLOCKED",
+                    "edges": [
+                        {"when": edge.get("when"), "then": edge.get("then")}
+                        for edge in item["next"]
+                    ],
+                }
+            )
+        if item.get("foreach"):
+            fe = item["foreach"]
+            rows.append(
+                {
+                    "milestone": item["id"],
+                    "kind": "foreach",
+                    "criterion": "json_schema",
+                    "path": fe.get("path"),
+                    "max_items": fe.get("max_items"),
+                    "item_schema": fe.get("item_schema"),
+                    "tools": list(fe.get("tools") or []),
+                }
+            )
+    return rows
+
+
 def _ensure_intel_toolbox(
     milestones: list[dict[str, Any]],
     python_tools: list[dict[str, str]],
@@ -759,6 +908,13 @@ def propose_from_flow(root: Path, grade: dict[str, Any]) -> tuple[list[dict[str,
             "output_schema_path": step.get("output_schema"),
             "inspects": f"PASS payload `{step.get('output_contract') or milestone_id}`",
         }
+        if step.get("next"):
+            row["next"] = step["next"]
+            row["else"] = step.get("else") or "BLOCKED"
+        if step.get("foreach"):
+            row["foreach"] = step["foreach"]
+        if step.get("join"):
+            row["join"] = step["join"]
         flush_pending(row)
         if previous_id is None:
             row["inputs"] = step.get("inputs") or {"request": "user.request"}
@@ -1001,6 +1157,7 @@ def audit_skill(root: Path) -> dict[str, Any]:
         milestones, python_tools = propose_from_inventory(root, inventory)
     python_tools = _ensure_intel_toolbox(milestones, python_tools)
     milestones = _rechain_milestones(root, milestones)
+    milestones = infer_schema_control(milestones)
 
     current_tools = []
     for script in inventory.get("scripts") or []:
@@ -1082,6 +1239,7 @@ def audit_skill(root: Path) -> dict[str, Any]:
         "goal": goal_text(inventory, grade, milestones),
         "current_tools": current_tools,
         "proposed_milestones": milestones,
+        "control": control_table(milestones),
         "python_standardization": python_tools,
         "tool_vs_intelligence": classification_from_audit(
             {
@@ -1205,6 +1363,39 @@ def render_audit_markdown(report: dict[str, Any]) -> str:
             f"| `{item['current']}` | `{item['tool_id']}` | `{item['destination']}` | "
             f"`{item['action']}` | {item['reason']} |"
         )
+    lines.extend(
+        [
+            "",
+            "## Schema control",
+            "",
+            "If/else and loop are JSON Schema predicates (`schema_validate`), never semantic approval.",
+            "",
+        ]
+    )
+    control = report.get("control") or []
+    if not control:
+        lines.append("None. Linear chain; no enum/array gate on the proposed output schemas.")
+    else:
+        lines.extend(
+            [
+                "| Milestone | Kind | Criterion | Detail |",
+                "| --- | --- | --- | --- |",
+            ]
+        )
+        for item in control:
+            if item.get("kind") == "gate":
+                detail = "; ".join(
+                    f"{edge.get('when')} → `{edge.get('then')}`" for edge in item.get("edges") or []
+                )
+                detail = f"{detail}; else `{item.get('else')}`"
+            else:
+                detail = (
+                    f"path `{item.get('path')}` max_items={item.get('max_items')} "
+                    f"item_schema `{item.get('item_schema')}`"
+                )
+            lines.append(
+                f"| `{item.get('milestone')}` | `{item.get('kind')}` | `{item.get('criterion')}` | {detail} |"
+            )
     lines.extend(["", "## FlowStep input and output schemas", ""])
     for index, item in enumerate(report.get("proposed_milestones") or [], start=1):
         inputs = ", ".join(f"{name}={ref}" for name, ref in (item.get("inputs") or {}).items()) or "request=user.request"

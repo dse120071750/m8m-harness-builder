@@ -5,10 +5,10 @@ This file is the skill instruction. Each section is a milestone.
 A milestone input schema is the previous milestone output schema.
 FlowSteps listed on a milestone run tools. Mark DONE when the output schema PASSes.
 
-- harness: `C:\Users\gasil\.codex\skills\flowstep-harness-builder\examples\text_pipeline`
+- harness: `C:\Users\gasil\.codex\skills\m8m-harness-builder\examples\text_pipeline`
 - flow_id: `text_pipeline_v1`
 - final_payload: `label_v1` from `label`
-- updated_at: 2026-08-19T17:03:16Z
+- updated_at: 2026-08-19T17:39:24Z
 
 ## Run
 

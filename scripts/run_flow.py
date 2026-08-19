@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from schema_gate import ELSE_BLOCKED, resolve_next, run_foreach
 from flowstep_runtime import (
     ACTION_SCHEMA,
     NEED_MODEL,
@@ -202,7 +203,10 @@ def _execute_step(
             return _write_blocked(run_dir, flow, step, bindings, fingerprint, [str(exc)])
         write_json(folder / "draft.json", draft)
     try:
-        result = invoke_tool(skill_dir, step, input_data, draft, task)
+        if step.get("foreach"):
+            result = run_foreach(skill_dir, step, input_data)
+        else:
+            result = invoke_tool(skill_dir, step, input_data, draft, task)
     except Exception as exc:
         return _write_blocked(run_dir, flow, step, bindings, fingerprint, [f"{type(exc).__name__}: {exc}"])
     if not isinstance(result, dict):
@@ -279,10 +283,13 @@ def advance(
     if created and (datetime.now(timezone.utc) - _parse_time(str(created))).total_seconds() > flow["max_run_seconds"]:
         raise FlowError("run exceeded the frozen wall-clock budget; start a fresh run")
     completed = {item["step_id"] for item in record["steps"]}
+    skip: set[str] = set(record.get("skipped") or [])
     pending_draft = read_json(draft_path) if draft_path else None
     if draft_path and not isinstance(pending_draft, dict):
         raise FlowError("--draft must contain one JSON object")
     for step in flow["steps"]:
+        if step["id"] in skip:
+            continue
         artifact_path = expected_artifact_path(run_dir, flow, step)
         materialized_path = run_dir / "materialized" / f"{step['id']}.runtime_step_result.json"
         if step["id"] in completed:
@@ -315,6 +322,25 @@ def advance(
         action = _execute_step(skill_dir, run_dir, flow, step, lock["fingerprint_sha256"], draft)
         if action is not None:
             return action
+        if step.get("next"):
+            artifact = read_json(expected_artifact_path(run_dir, flow, step))
+            chosen, evidence = resolve_next(step, artifact.get("data") or {}, skill_dir)
+            record = read_json(_execution_path(run_dir))
+            record.setdefault("gates", []).append(
+                {"from": step["id"], **(evidence or {}), "chosen": chosen}
+            )
+            if chosen == ELSE_BLOCKED or chosen == "BLOCKED":
+                record["status"] = "BLOCKED"
+                record["skipped"] = sorted(skip)
+                record["blockers"] = [f"{step['id']}: no gate matched (else BLOCKED)"]
+                record["updated_at"] = utc_now()
+                write_json(_execution_path(run_dir), record)
+                return _blocked_action(step["id"], [f"{step['id']}: no gate matched (else BLOCKED)"])
+            for edge in step.get("next") or []:
+                if edge.get("then") != chosen:
+                    skip.add(str(edge["then"]))
+            record["skipped"] = sorted(skip)
+            write_json(_execution_path(run_dir), record)
     record = read_json(_execution_path(run_dir))
     record["status"] = "COMPLETE"
     record["updated_at"] = utc_now()
