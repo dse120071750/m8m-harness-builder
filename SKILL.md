@@ -57,7 +57,7 @@ Deliverables (this is the product):
 | File | What |
 | --- | --- |
 | `planning/flowstep-audit.md` | Proposed milestones, FlowSteps, tools |
-| `planning/m8m-flowchart.md` | One mermaid chart + toolbox table |
+| `planning/m8m-flowchart.md` | Milestone chart (harness) + FlowStep table (guide) |
 | `<repo>/flowsteps/flows/<id>/flow.yaml` | Scaffolded chain |
 | `<repo>/flowsteps/tools/<id>/` | Seeded tools, or stubs marked generate-new |
 | `<repo>/.agents/skills/<name>/SKILL.md` and `.claude/skills/<name>/SKILL.md` | Pointer skill |
@@ -84,4 +84,4 @@ Tools: <repo>/flowsteps/tools/
 Notes: (name hints, generate-new tools — never a refusal to draw)
 ```
 
-Return the flowchart markdown and the toolbox table. Then the audit.
+Return the flowchart markdown and the FlowStep table. Then the audit.
