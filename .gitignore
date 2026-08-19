@@ -9,3 +9,4 @@ venv/
 Thumbs.db
 *.tmp
 planning/flowstep-audit.md
+planning/flowstep-audit.json

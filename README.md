@@ -95,28 +95,25 @@ this skill (F8F)                         doctrine + audit + driver
 
 Do not put product tools in `~/.codex/skills` or `~/.claude/skills`. That is how skills mix.
 
-## Audit, then generate
+## Factory (audit → toolbox → flow → validate → ship)
 
-F8F first writes `planning/flowstep-audit.md` for an existing skill. It does **not** rewrite the target. The audit is how you turn a chat-shaped skill into a milestone skill that can produce an asset:
+Five premade milestones in `flows/f8f_build_v1.yaml`. One driver:
 
-- what the skill is
-- the separation goal
-- current tools
-- proposed milestones
-- which units must become premade Python
-- input and output schema of each milestone
+```powershell
+python scripts/run_f8f.py --target <skill-or-flow-dir> --codebase <repo>
+```
+
+That writes `planning/flowstep-audit.json`, copies seed tools into
+`<repo>/flowsteps/tools/`, generates the milestone flow from the audit
+(last step is an `asset` receipt), validates, and ships
+`<repo>/.agents/skills/<name>/SKILL.md`.
+
+Or step by step:
 
 ```powershell
 python scripts/audit_harness.py --target <skill-or-flow-dir>
-```
-
-Then stock the project toolbox and generate the flow:
-
-```powershell
-python scripts/generate_harness.py --codebase <repo> --tool crop_4x5
-python scripts/generate_harness.py --codebase <repo> --flow-id case_detail_v1 --milestone source_ready --milestone assets_bound --tools hash_bind,crop_4x5 --intelligence assets_bound
-python scripts/validate_harness.py --codebase <repo> --flow-id case_detail_v1
-python scripts/run_flow.py --codebase <repo> --flow-id case_detail_v1 --run-dir <run> --request <request.json>
+python scripts/generate_harness.py --codebase <repo> --from-audit <skill>/planning/flowstep-audit.json
+python scripts/run_flow.py --codebase <repo> --flow-id <flow_id> --run-dir <run> --request <request.json>
 ```
 
 Read [references/milestone.md](references/milestone.md) and [references/tool-vs-intelligence.md](references/tool-vs-intelligence.md).

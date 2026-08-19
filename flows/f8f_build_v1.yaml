@@ -1,0 +1,25 @@
+schema: f8f_factory_v1
+flow_id: f8f_build_v1
+driver: scripts/run_f8f.py
+milestones:
+  - id: audit_complete
+    output_contract: flowstep_skill_audit_v1
+    tools: [audit_skill]
+    intelligence: none
+  - id: toolbox_ready
+    output_contract: toolbox_install_v1
+    tools: [install_toolbox]
+    intelligence: none
+  - id: flow_generated
+    output_contract: flow_generate_v1
+    tools: [generate_from_audit]
+    intelligence: none
+  - id: harness_validated
+    output_contract: harness_validate_v1
+    tools: [validate_harness]
+    intelligence: none
+  - id: skill_shipped
+    output_contract: product_skill_v1
+    tools: [ship_product_skill]
+    intelligence: none
+    last_payload: asset

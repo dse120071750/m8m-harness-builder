@@ -36,33 +36,24 @@ only call tools listed on that milestone.
 
 ## Working method
 
-1. Audit the target skill. The audit worker writes
-   `planning/flowstep-audit.md` (goal, current tools, proposed
-   milestones, Python toolbox, each FlowStep I/O schema). It does not
-   rewrite the target:
+The factory is five milestones (`flows/f8f_build_v1.yaml`). Run them
+with one premade driver. Do not generate crop/fetch/hash in the session.
 
 ```powershell
-python scripts/audit_harness.py --target <skill-or-flow-dir>
+python scripts/run_f8f.py --target <skill-or-flow-dir> --codebase <repo>
 ```
 
-2. Name the final payload (last milestone schema in that audit).
-3. Split into the fewest milestones a human would inspect.
-4. For each milestone, list toolbox functions. If a tool is missing,
-   generate it first:
+That:
 
-```powershell
-python scripts/generate_harness.py --codebase <repo> --tool crop_4x5
-```
+1. Writes `planning/flowstep-audit.json` (and `.md`).
+2. Installs premade tools from `seeds/` into `<repo>/flowsteps/tools/`.
+3. Generates the v3 milestone flow from the audit (per-milestone tools,
+   last milestone `asset` path+sha256).
+4. Validates the harness.
+5. Ships `<repo>/.agents/skills/<name>/SKILL.md`.
 
-5. Generate the flow and instruction MD:
-
-```powershell
-python scripts/generate_harness.py --codebase <repo> --flow-id case_detail_v1 --milestone source_ready --milestone assets_bound --tools hash_bind,crop_4x5 --intelligence assets_bound
-```
-
-6. Implement tools, then each milestone assemble. Mark the instruction
-   after each milestone is DONE. Return
-   `flowsteps/flows/<flow_id>/planning/flowstep-instruction.md`.
+Unknown tools without a seed stay FINDINGS until a real fixture exists.
+Do not use `--step` (v2 action nodes). Use `--from-audit` or `--milestone`.
 
 ## Audit a current harness
 

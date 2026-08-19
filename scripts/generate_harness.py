@@ -1,9 +1,10 @@
-"""Scaffold a skill as a v2 FlowStep tree: flow YAML plus one tool package per step."""
+"""Generate a v3 milestone flow: seed toolbox, audit-driven YAML, product skill."""
 
 from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import sys
 from pathlib import Path
 from typing import Any
@@ -25,6 +26,7 @@ from flowstep_tools import tools_root
 BUILDER_ROOT = Path(__file__).resolve().parents[1]
 TEMPLATE_DIR = BUILDER_ROOT / "templates"
 DEFAULT_BUILDER = BUILDER_ROOT
+SEEDS_DIR = BUILDER_ROOT / "seeds"
 
 
 def _render(template_name: str, mapping: dict[str, str]) -> str:
@@ -137,6 +139,32 @@ def _write_step_package(
     return written
 
 
+def seed_path(tool_id: str) -> Path | None:
+    path = SEEDS_DIR / tool_id
+    if (path / "tool.py").is_file():
+        return path
+    return None
+
+
+def _copy_seed(codebase: Path, tool_id: str, *, overwrite: bool) -> list[str]:
+    src = seed_path(tool_id)
+    if src is None:
+        raise FlowError(f"no seed for {tool_id}")
+    dest = tools_root(codebase) / tool_id
+    dest.mkdir(parents=True, exist_ok=True)
+    written: list[str] = []
+    for path in src.rglob("*"):
+        if path.is_dir() or path.name == "__pycache__" or path.suffix == ".pyc":
+            continue
+        target = dest / path.relative_to(src)
+        if target.exists() and not overwrite:
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(path, target)
+        written.append(str(target))
+    return written
+
+
 def generate_tool(codebase: Path, tool_id: str, *, overwrite: bool = False) -> dict[str, Any]:
     if not STEP_ID_RE.match(tool_id):
         raise FlowError(f"invalid tool id: {tool_id}")
@@ -145,14 +173,62 @@ def generate_tool(codebase: Path, tool_id: str, *, overwrite: bool = False) -> d
         raise FlowError("--codebase must be the repo root, not .codex/skills")
     dest = tools_root(root) / tool_id
     dest.mkdir(parents=True, exist_ok=True)
+    if seed_path(tool_id) is not None:
+        written = _copy_seed(root, tool_id, overwrite=overwrite)
+        return {
+            "schema": "flowstep_tool_generate_v3",
+            "status": "PASS",
+            "tool_id": tool_id,
+            "tool_dir": str(dest),
+            "seeded": True,
+            "written": written,
+        }
     written = _write_step_package(dest, tool_id, previous_id=None, overwrite=overwrite)
     return {
         "schema": "flowstep_tool_generate_v3",
-        "status": "PASS",
+        "status": "FINDINGS",
         "tool_id": tool_id,
         "tool_dir": str(dest),
+        "seeded": False,
+        "note": "no premade seed; tool.py is a stub until a fixture implementation exists",
         "written": written,
     }
+
+
+ASSET_OUTPUT_SCHEMA = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["asset"],
+    "properties": {
+        "asset": {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["path", "sha256"],
+            "properties": {
+                "path": {"type": "string", "minLength": 1},
+                "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+            },
+        }
+    },
+}
+
+PASSTHROUGH_SCHEMA = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "additionalProperties": True,
+}
+
+
+def _write_json(path: Path, value: Any, *, overwrite: bool) -> bool:
+    return _write_text(path, json.dumps(value, indent=2, ensure_ascii=False) + "\n", overwrite=overwrite)
+
+
+def _asset_schema(schema: dict[str, Any] | None) -> bool:
+    if not isinstance(schema, dict):
+        return False
+    props = schema.get("properties") or {}
+    return "asset" in props
 
 
 def generate_v3_flow(
@@ -163,12 +239,15 @@ def generate_v3_flow(
     tools: list[str],
     intelligence: list[str] | None = None,
     overwrite: bool = False,
+    milestone_specs: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     harness = resolve_harness_dir(codebase=codebase, flow_id=flow_id)
     assert_product_harness_location(harness)
+    if milestone_specs:
+        milestones = [str(item["id"]) for item in milestone_specs]
     if not milestones:
         raise FlowError("pass at least one --milestone")
-    if not tools:
+    if not tools and not milestone_specs:
         raise FlowError("a milestone flow requires --tools (the pre-made toolbox)")
     intel = set(intelligence or [])
     unknown = sorted(intel - set(milestones))
@@ -179,20 +258,45 @@ def generate_v3_flow(
             raise FlowError(f"invalid milestone id: {mid}")
         if step_class_hint(mid) == "tool":
             raise FlowError(f"{mid}: use --tool for crop/fetch/hash; milestones are checkpoints")
+    for tool_id in sorted({*(tools or []), *[str(t) for spec in (milestone_specs or []) for t in (spec.get("tools") or [])]}):
+        if tool_id:
+            generate_tool(codebase, tool_id, overwrite=overwrite)
+    spec_by_id = {str(item["id"]): item for item in (milestone_specs or [])}
     items = []
-    for mid in milestones:
+    previous = None
+    for index, mid in enumerate(milestones):
+        spec = spec_by_id.get(mid) or {}
+        step_tools = list(spec.get("tools") or tools)
+        if not step_tools:
+            step_tools = ["hash_bind"]
+        is_last = index == len(milestones) - 1
+        if is_last and "hash_bind" not in step_tools:
+            step_tools.append("hash_bind")
+        intel_value = spec.get("intelligence") or ("completion" if mid in intel else "none")
         item: dict[str, Any] = {
             "id": mid,
-            "output_contract": f"{mid}_v1",
+            "output_contract": spec.get("output_contract") or f"{mid}_v1",
             "output_schema": f"schemas/{mid}_v1.json",
-            "tools": list(tools),
-            "intelligence": "completion" if mid in intel else "none",
+            "input_schema": f"milestones/{mid}/input.schema.json",
+            "tools": step_tools,
+            "intelligence": intel_value,
             "handler": f"milestones/{mid}/assemble.py",
+            "test": f"milestones/{mid}/tests/test_assemble.py",
+            "_output_schema_object": spec.get("output_schema_object"),
+            "_input_schema_object": spec.get("input_schema_object"),
+            "_is_last": is_last,
         }
-        if mid in intel:
-            item["model_justification"] = "judgment that is not a typed transform"
+        if previous is None:
+            item["inputs"] = spec.get("inputs") or {"request": "user.request"}
+        else:
+            item["inputs"] = spec.get("inputs") or {
+                previous["id"]: f"{previous['id']}.{previous['output_contract']}"
+            }
+        if intel_value != "none":
+            item["model_justification"] = spec.get("model_justification") or "judgment that is not a typed transform"
             item["draft_schema"] = f"milestones/{mid}/draft.schema.json"
         items.append(item)
+        previous = item
     flow = {
         "schema": "flowstep_flow_v3",
         "flow_id": flow_id,
@@ -203,20 +307,83 @@ def generate_v3_flow(
     }
     created: list[str] = []
     flow_path = harness / "flow.yaml"
-    if _write_text(flow_path, yaml_dump_v3(flow), overwrite=overwrite or not flow_path.exists()):
+    public_items = []
+    for item in items:
+        public = {key: value for key, value in item.items() if not key.startswith("_")}
+        public_items.append(public)
+    flow_public = dict(flow)
+    flow_public["milestones"] = public_items
+    if _write_text(flow_path, yaml_dump_v3(flow_public), overwrite=overwrite or not flow_path.exists()):
         created.append(str(flow_path))
+    previous_id = None
     for item in items:
         mid = item["id"]
+        if item["_is_last"]:
+            output_obj = ASSET_OUTPUT_SCHEMA
+        elif isinstance(item.get("_output_schema_object"), dict) and not _asset_schema(
+            item["_output_schema_object"]
+        ):
+            output_obj = item["_output_schema_object"]
+            output_obj.setdefault("$id", f"{mid}.output.schema.json")
+        else:
+            output_obj = dict(PASSTHROUGH_SCHEMA)
+            output_obj["$id"] = f"{mid}.output.schema.json"
         schema_path = harness / "schemas" / f"{mid}_v1.json"
-        if _write_text(schema_path, _render("step/output.schema.json", {"STEP_ID": mid}), overwrite=overwrite):
+        if _write_json(schema_path, output_obj, overwrite=overwrite):
             created.append(str(schema_path))
+        if previous_id is None:
+            input_obj = item.get("_input_schema_object") or {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "$id": f"{mid}.input.schema.json",
+                "type": "object",
+                "additionalProperties": True,
+                "required": ["request"],
+                "properties": {"request": {"type": "object"}},
+            }
+        else:
+            input_obj = item.get("_input_schema_object") or {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "$id": f"{mid}.input.schema.json",
+                "type": "object",
+                "additionalProperties": True,
+                "required": [previous_id],
+                "properties": {previous_id: {"type": "object"}},
+            }
+        input_path = harness / "milestones" / mid / "input.schema.json"
+        if _write_json(input_path, input_obj, overwrite=overwrite):
+            created.append(str(input_path))
+        if item["intelligence"] != "none":
+            intel_gate = (
+                "if draft is None:\n"
+                "        return {\n"
+                '            "_flowstep": "NEED_MODEL",\n'
+                f'            "model": {json.dumps(item["intelligence"])},\n'
+                '            "model_request": {\n'
+                f'                "milestone": {json.dumps(mid)},\n'
+                '                "instruction": "Write a draft that the toolbox can admit into the output schema.",\n'
+                "            },\n"
+                "        }\n"
+            )
+        else:
+            intel_gate = "del kwargs\n"
+        mapping = {
+            "STEP_ID": mid,
+            "TOOLS_JSON": json.dumps(item["tools"]),
+            "INTELLIGENCE": item["intelligence"],
+            "IS_LAST": "True" if item["_is_last"] else "False",
+            "INTEL_GATE": intel_gate,
+        }
         assemble = harness / "milestones" / mid / "assemble.py"
-        if _write_text(assemble, _render("milestone/assemble.py", {"STEP_ID": mid}), overwrite=overwrite):
+        if _write_text(assemble, _render("milestone/assemble.py", mapping), overwrite=overwrite):
             created.append(str(assemble))
+        test_path = harness / "milestones" / mid / "tests" / "test_assemble.py"
+        if _write_text(test_path, _render("milestone/test_assemble.py", mapping), overwrite=overwrite):
+            created.append(str(test_path))
         if item["intelligence"] != "none":
             draft = harness / "milestones" / mid / "draft.schema.json"
             if _write_text(draft, _render("step/draft.schema.json", {"STEP_ID": mid}), overwrite=overwrite):
                 created.append(str(draft))
+        previous_id = mid
     loaded = load_flow(harness, flow_path)
     instruction = write_instruction(harness, loaded)
     created.append(str(instruction))
@@ -227,10 +394,101 @@ def generate_v3_flow(
         "codebase": str(Path(codebase).resolve()),
         "flow_id": flow_id,
         "milestones": milestones,
-        "tools": tools,
+        "tools": sorted({tool for item in items for tool in item["tools"]}),
         "instruction_path": str(instruction),
         "written": created,
     }
+
+
+def load_audit_report(path: Path) -> dict[str, Any]:
+    path = path.resolve()
+    if path.suffix.lower() == ".json":
+        return json.loads(path.read_text(encoding="utf-8"))
+    sibling = path.with_name("flowstep-audit.json") if path.name.endswith(".md") else path.with_suffix(".json")
+    if sibling.is_file():
+        return json.loads(sibling.read_text(encoding="utf-8"))
+    raise FlowError(f"audit JSON not found next to {path}; run audit_harness.py first")
+
+
+def write_product_skill(
+    codebase: Path,
+    skill_name: str,
+    flow_id: str,
+    *,
+    overwrite: bool = False,
+) -> str:
+    dest = Path(codebase).resolve() / ".agents" / "skills" / skill_name / "SKILL.md"
+    mapping = {
+        "SKILL_NAME": skill_name,
+        "FLOW_ID": flow_id,
+        "BUILDER_ROOT": str(DEFAULT_BUILDER).replace("\\", "/"),
+    }
+    _write_text(dest, _render("product-SKILL.md", mapping), overwrite=overwrite or not dest.exists())
+    return str(dest)
+
+
+def generate_from_audit(
+    codebase: Path,
+    audit: dict[str, Any],
+    *,
+    flow_id: str | None = None,
+    skill_name: str | None = None,
+    overwrite: bool = False,
+) -> dict[str, Any]:
+    skill = audit.get("audited_skill") if isinstance(audit.get("audited_skill"), dict) else {}
+    name = skill_name or str(skill.get("name") or "product-skill")
+    proposed = audit.get("proposed_milestones") or []
+    if not proposed:
+        raise FlowError("audit has no proposed_milestones")
+    raw_flow_id = flow_id or (audit.get("grade") or {}).get("flow_id") or f"{name.replace('-', '_')}_v1"
+    raw_flow_id = str(raw_flow_id).lower().replace("-", "_")
+    if not FLOW_ID_RE.match(raw_flow_id):
+        raw_flow_id = "product_v1"
+    tool_ids: list[str] = []
+    for row in audit.get("python_standardization") or []:
+        if row.get("tool_id"):
+            tool_ids.append(str(row["tool_id"]))
+    for item in proposed:
+        for tool_id in item.get("tools") or []:
+            tool_ids.append(str(tool_id))
+    if "hash_bind" not in tool_ids:
+        tool_ids.append("hash_bind")
+    unique_tools: list[str] = []
+    for tool_id in tool_ids:
+        if tool_id and tool_id not in unique_tools:
+            unique_tools.append(tool_id)
+    toolbox = [generate_tool(codebase, tool_id, overwrite=overwrite) for tool_id in unique_tools]
+    specs = []
+    for item in proposed:
+        tools = [str(tool_id) for tool_id in (item.get("tools") or []) if tool_id]
+        if not tools:
+            tools = ["hash_bind"]
+        spec = {
+            "id": item["id"],
+            "tools": tools,
+            "intelligence": item.get("intelligence") or "none",
+            "output_contract": item.get("output_contract") or f"{item['id']}_v1",
+            "output_schema_object": item.get("output_schema"),
+            "input_schema_object": item.get("input_schema"),
+            "inputs": item.get("inputs"),
+            "model_justification": item.get("model_justification"),
+        }
+        specs.append(spec)
+    result = generate_v3_flow(
+        codebase,
+        raw_flow_id,
+        [item["id"] for item in specs],
+        tools=unique_tools,
+        overwrite=overwrite,
+        milestone_specs=specs,
+    )
+    product = write_product_skill(codebase, name, raw_flow_id, overwrite=overwrite)
+    result["product_skill"] = product
+    result["toolbox"] = toolbox
+    result["skill_name"] = name
+    if any(item.get("status") != "PASS" for item in toolbox):
+        result["status"] = "FINDINGS"
+    return result
 
 
 def yaml_dump_v3(flow: dict[str, Any]) -> str:
@@ -369,17 +627,23 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--codebase", type=Path, help="Repo root. Writes <codebase>/flowsteps/<flow_id>.")
     parser.add_argument("--skill-dir", type=Path, help="Harness dir for the builder fixture only.")
     parser.add_argument("--flow-id")
-    parser.add_argument("--tool", dest="tool_id", help="Generate one toolbox function under flowsteps/tools/.")
+    parser.add_argument("--from-audit", type=Path, help="flowstep-audit.json (or .md next to that JSON).")
+    parser.add_argument("--tool", dest="tool_id", help="Install one toolbox function under flowsteps/tools/.")
     parser.add_argument("--step", action="append", default=[], dest="steps")
     parser.add_argument("--milestone", action="append", default=[], dest="milestones")
-    parser.add_argument("--tools", help="Comma-separated toolbox ids for every milestone.")
-    parser.add_argument("--intelligence", action="append", default=[], help="Milestone or step ids that may NEED_MODEL.")
+    parser.add_argument("--tools", help="Comma-separated toolbox ids when not using --from-audit.")
+    parser.add_argument("--intelligence", action="append", default=[], help="Milestone ids that may NEED_MODEL.")
     parser.add_argument("--skill-name")
     parser.add_argument("--force", action="store_true")
     parser.add_argument(
+        "--legacy-v2",
+        action="store_true",
+        help="Forbidden default. Only for the text_pipeline fixture tests.",
+    )
+    parser.add_argument(
         "--write-skill-md",
         action="store_true",
-        help="Write product SKILL.md. Use only after validate_harness PASS.",
+        help="Write product SKILL.md under <repo>/.agents/skills/.",
     )
     return parser
 
@@ -387,7 +651,17 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
-        if args.tool_id:
+        if args.from_audit:
+            if not args.codebase:
+                raise FlowError("--from-audit requires --codebase")
+            result = generate_from_audit(
+                args.codebase,
+                load_audit_report(args.from_audit),
+                flow_id=args.flow_id,
+                skill_name=args.skill_name,
+                overwrite=args.force,
+            )
+        elif args.tool_id:
             if not args.codebase:
                 raise FlowError("--tool requires --codebase")
             result = generate_tool(args.codebase, args.tool_id, overwrite=args.force)
@@ -403,7 +677,14 @@ def main(argv: list[str] | None = None) -> int:
                 intelligence=args.intelligence,
                 overwrite=args.force,
             )
-        else:
+            if args.write_skill_md:
+                name = args.skill_name or args.flow_id
+                result["product_skill"] = write_product_skill(
+                    args.codebase, name, args.flow_id, overwrite=args.force
+                )
+        elif args.steps:
+            if not args.legacy_v2:
+                raise FlowError("v2 --step is forbidden; pass --from-audit or --milestone")
             result = generate_harness(
                 args.skill_dir,
                 codebase=args.codebase,
@@ -414,11 +695,13 @@ def main(argv: list[str] | None = None) -> int:
                 write_skill_md=args.write_skill_md,
                 intelligence=args.intelligence,
             )
+        else:
+            raise FlowError("pass --from-audit, --milestone, or --tool")
     except FlowError as exc:
         print(json.dumps({"status": "BLOCKED", "blockers": [str(exc)]}, indent=2), file=sys.stderr)
         return 2
     print(json.dumps(result, indent=2))
-    return 0
+    return 0 if result.get("status") == "PASS" else 3
 
 
 if __name__ == "__main__":

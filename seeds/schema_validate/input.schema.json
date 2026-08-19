@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["instance"],
+  "properties": {
+    "instance": { "type": "object" },
+    "schema": { "type": "object" },
+    "schema_path": { "type": "string", "minLength": 1 }
+  }
+}

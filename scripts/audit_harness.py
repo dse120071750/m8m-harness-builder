@@ -30,6 +30,7 @@ from flowstep_tools import infer_codebase, tools_root, validate_library_tool
 
 AUDIT_SCHEMA = "flowstep_skill_audit_v1"
 DEFAULT_REPORT = Path("planning/flowstep-audit.md")
+DEFAULT_REPORT_JSON = Path("planning/flowstep-audit.json")
 SCRIPT_CALL_RE = re.compile(r"scripts[/\\]([a-z][a-z0-9_]*)\.py")
 FRONTMATTER_RE = re.compile(r"\A---\s*\n(.*?)\n---\s*", re.S)
 LINKED_FLOW_RE = re.compile(
@@ -1260,7 +1261,10 @@ def main(argv: list[str] | None = None) -> int:
     if not args.no_write:
         report_path = (args.write_report or default_report_path(root)).resolve()
         write_audit_markdown(report, report_path)
+        json_path = report_path.with_suffix(".json")
+        json_path.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
         report["report_path"] = str(report_path)
+        report["report_json_path"] = str(json_path)
     print(json.dumps(report, indent=2, ensure_ascii=False))
     return 0 if report["verdict"] == "MILESTONE_TOOLBOX" else 3
 
