@@ -54,7 +54,9 @@ foreach owned by intelligence               = invalid
 ```
 
 Intelligence may exist *on* a milestone (`NEED_MODEL`) and may only call
-the FlowSteps listed on that milestone.
+the FlowSteps listed on that milestone. It is a draft the tools admit
+into the output schema. It is not the PASS bit of a mechanical
+milestone (five files downloaded is `minItems`, not a judge).
 
 ## Working method
 

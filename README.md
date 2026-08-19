@@ -19,6 +19,8 @@ Codex and Claude usually **overuse intelligence**. For every small task they gen
 
 That is the problem. The flow is not controllable. The skill does not ship an asset.
 
+M8M does **not** remove intelligence. It stops the model from doing the mechanical jobs, so the remaining AI work is a typed draft on a milestone — not a session that writes crop/fetch/hash and then judges whether it “looks done.”
+
 ## What M8M is
 
 ```text
@@ -143,6 +145,35 @@ foreach:
 `when` means the previous (or this) payload **validates** against that JSON Schema — the same engine as `schema_validate`. First match wins. `else` is required. `foreach` walks a typed array that already has `maxItems` on the previous output schema. A milestone named `if_*` / `loop_*` is invalid. There is no “loop until the model is happy”.
 
 Audit infers these from **existing** output-schema fields (`enum` / `const` / array `maxItems`). Generate writes `schemas/gates/*.schema.json`. Intelligence may fill a field; it may not pick `then`.
+
+### 5. Intelligence is a draft on a milestone, not the PASS bit
+
+The model kicks in **only** on a milestone with `intelligence: completion|image|judge`. The driver returns `ACTION_REQUIRED`. The session writes one JSON **draft**. Listed FlowSteps then admit that draft into the **output schema**. That is the AI part.
+
+```text
+carousel_captured     intelligence: none
+    tools download and hash 5 images
+    minItems: 5 + path/sha256  →  PASS or BLOCKED
+    (the model does not judge “did we download 5?”)
+
+plan_frozen           intelligence: completion
+    NEED_MODEL  →  draft.json (editorial copy the schema cannot compute)
+    tools: schema_validate, hash_bind
+    out PASSes  →  that object is the next milestone’s input
+```
+
+| The model may | The model may not |
+| --- | --- |
+| Invent a plan, caption, or image the schema cannot compute | Write the crop/fetch/hash in the session |
+| Fill a field (`kind: url`) | Pick `then` / `else` (that is a JSON Schema gate) |
+| Judge teaching quality on a later milestone | Decide that a mechanical milestone secretly PASSed |
+| | Loop until it “looks downloaded” (that is a repair loop) |
+
+“Five Instagram images landed” is a receipt. Write `minItems: 5` and `file_ref_v2`. If the product later needs taste (“these are product shots, not memes”), that is a **later** judge milestone with its own draft schema. It consumes the download receipt. It does not re-run the downloader and it does not override `carousel_captured`.
+
+That is how M8M solves the problem this repo states: Codex and Claude overuse intelligence for tiny tasks, so the flow is not controllable and nothing ships. Tools keep fetch/crop/hash fixture-testable and in the **project** toolbox. Intelligence stays, but only as a draft the tools can admit. The driver still stops at an **asset**, not at a vibe.
+
+Read [references/tool-vs-intelligence.md](references/tool-vs-intelligence.md).
 
 Audit and generate both write **one** chart file, `planning/m8m-flowchart.md`, and a **toolbox plan** on that chart: existing toolbox / promote from a skill script / generate new. Tools are listed on each milestone node.
 
