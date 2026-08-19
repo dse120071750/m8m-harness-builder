@@ -308,6 +308,8 @@ def generate_v3_flow(
             item["draft_schema"] = f"milestones/{mid}/draft.schema.json"
         if spec.get("on_tool_fail"):
             item["on_tool_fail"] = spec["on_tool_fail"]
+        if spec.get("max_model_attempts"):
+            item["max_model_attempts"] = spec["max_model_attempts"]
         if spec.get("next"):
             edges = []
             gate_schemas: dict[str, Any] = dict(spec.get("_gate_schemas") or {})
@@ -583,6 +585,7 @@ def generate_from_audit(
             "else": item.get("else"),
             "foreach": item.get("foreach"),
             "on_tool_fail": item.get("on_tool_fail"),
+            "max_model_attempts": item.get("max_model_attempts"),
             "join": item.get("join"),
             "_gate_schemas": {
                 str(edge["when"]): edge["schema"]
@@ -648,6 +651,8 @@ def yaml_dump_v3(flow: dict[str, Any]) -> str:
         lines.append(f"    intelligence: {item['intelligence']}")
         if item.get("on_tool_fail"):
             lines.append(f"    on_tool_fail: {item['on_tool_fail']}")
+        if item.get("max_model_attempts"):
+            lines.append(f"    max_model_attempts: {item['max_model_attempts']}")
         if item["intelligence"] != "none":
             lines.append(f"    model_justification: {json.dumps(item.get('model_justification') or '', ensure_ascii=False)}")
             lines.append(f"    draft_schema: {item['draft_schema']}")

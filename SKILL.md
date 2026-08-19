@@ -53,12 +53,13 @@ gate field not on this output schema        = invalid
 foreach owned by intelligence               = invalid
 ```
 
-Intelligence may exist *on* a milestone (`NEED_MODEL`) and may only call
-the FlowSteps listed on that milestone. A FlowStep is a small goal; a
-tool is one way to do it. If a listed tool fails, `on_tool_fail:
-need_model` asks for **one** recovery draft — same toolbox, same output
-schema. It does not write a new tool in the session. It is not the PASS
-bit (`minItems: 5` is still five files).
+Intelligence may exist *on* a milestone (`NEED_MODEL`). A FlowStep is a
+small goal; a tool is one way to do it and runs **first**. If a listed
+tool fails, `on_tool_fail: need_model` asks for drafts until the
+**output schema** PASSes or `max_model_attempts` / the run budget is
+exhausted. The next milestone only reads that schema. That is the whole
+goal. It is not “one draft then stop,” and it is not skipping
+`minItems: 5`.
 
 ## Working method
 

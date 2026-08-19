@@ -71,6 +71,9 @@ def _validate_control(
         errors.append(f"{step_id}: on_tool_fail must be BLOCKED or need_model")
     if fail == "need_model" and step.get("intelligence") in {None, "none"}:
         errors.append(f"{step_id}: on_tool_fail need_model requires intelligence")
+    attempts = step.get("max_model_attempts")
+    if attempts is not None and (not isinstance(attempts, int) or attempts < 1):
+        errors.append(f"{step_id}: max_model_attempts must be a positive integer")
     if step.get("next"):
         if not step.get("else"):
             errors.append(f"{step_id}: next requires else")

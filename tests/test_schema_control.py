@@ -555,7 +555,7 @@ class ToolboxPlanTests(unittest.TestCase):
 
 
 class ToolFailRecoveryTests(unittest.TestCase):
-    def test_listed_tool_fail_asks_for_one_draft_then_blocks(self) -> None:
+    def test_listed_tool_fail_keeps_asking_until_schema_or_budget(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             codebase = Path(temp) / "repo"
             generate_tool(codebase, "hash_bind")
@@ -571,6 +571,7 @@ class ToolFailRecoveryTests(unittest.TestCase):
                         "intelligence": "completion",
                         "model_justification": "recover when the listed downloader fails",
                         "on_tool_fail": "need_model",
+                        "max_model_attempts": 2,
                     }
                 ],
             )
@@ -578,8 +579,6 @@ class ToolFailRecoveryTests(unittest.TestCase):
             _write(
                 harness / "milestones" / "source_ready" / "assemble.py",
                 "def run(input_data, draft=None, **_):\n"
-                "    if isinstance(draft, dict) and draft.get('retry'):\n"
-                "        raise RuntimeError('still down')\n"
                 "    raise RuntimeError('download failed')\n",
             )
             _write(
@@ -592,13 +591,18 @@ class ToolFailRecoveryTests(unittest.TestCase):
             )
             request = Path(temp) / "request.json"
             request.write_text(json.dumps({"ok": True}), encoding="utf-8")
-            first = advance(harness, Path(temp) / "run-rec", request_path=request)
+            run = Path(temp) / "run-rec"
+            first = advance(harness, run, request_path=request)
             self.assertEqual(first["state"], "ACTION_REQUIRED")
-            self.assertEqual(first.get("on_tool_fail"), "need_model")
+            self.assertEqual(first["attempt"], 1)
             draft = Path(temp) / "draft.json"
-            draft.write_text(json.dumps({"retry": True}), encoding="utf-8")
-            second = advance(harness, Path(temp) / "run-rec", draft_path=draft)
-            self.assertEqual(second["state"], "BLOCKED")
+            draft.write_text(json.dumps({"retry": 1}), encoding="utf-8")
+            second = advance(harness, run, draft_path=draft)
+            self.assertEqual(second["state"], "ACTION_REQUIRED")
+            self.assertEqual(second["attempt"], 2)
+            draft.write_text(json.dumps({"retry": 2}), encoding="utf-8")
+            third = advance(harness, run, draft_path=draft)
+            self.assertEqual(third["state"], "BLOCKED")
 
     def test_tool_fail_without_recovery_stays_blocked(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

@@ -41,10 +41,11 @@ milestone starts only when this one’s output schema PASSes. That payload
 **is** the next milestone’s input schema.
 
 `intelligence: none` — assemble only calls listed FlowSteps / tools.
-`intelligence: completion|image|judge` — a draft is allowed (invention,
-or **one** recovery after a listed tool fails when `on_tool_fail:
-need_model`). Tools must still produce a schema-valid payload. The model
-does not invent a tool and does not relax the output schema.
+`intelligence: completion|image|judge` — a draft is allowed. Tools run
+**first**. On `on_tool_fail: need_model`, drafts may repeat until the
+output schema PASSes or `max_model_attempts` / the run budget is
+exhausted. The next milestone only reads that schema. That communication
+contract is the rigidity; draft count is not.
 
 ## Toolbox rules
 

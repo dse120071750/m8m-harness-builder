@@ -180,17 +180,35 @@ def _recover_or_block(
 ) -> dict[str, Any]:
     folder = work_dir(run_dir, step["id"])
     folder.mkdir(parents=True, exist_ok=True)
-    already = (folder / "tool_failed.json").is_file()
-    if draft is not None or already or step.get("on_tool_fail") != "need_model" or step.get("model") == "none":
+    if step.get("on_tool_fail") != "need_model" or step.get("model") == "none":
         return _write_blocked(run_dir, flow, step, bindings, fingerprint, blockers)
-    write_json(folder / "tool_failed.json", {"blockers": blockers})
+    fail_path = folder / "tool_failed.json"
+    record = read_json(fail_path) if fail_path.is_file() else {"attempts": 0, "blockers": []}
+    attempts = int(record.get("attempts") or 0) + 1
+    limit = int(step.get("max_model_attempts") or 8)
+    write_json(
+        fail_path,
+        {"attempts": attempts, "blockers": blockers, "max_model_attempts": limit},
+        overwrite=True,
+    )
+    if attempts > limit:
+        return _write_blocked(
+            run_dir,
+            flow,
+            step,
+            bindings,
+            fingerprint,
+            blockers + [f"{step['id']}: max_model_attempts {limit} exhausted"],
+        )
     request = {
         "milestone": step["id"],
         "blockers": blockers,
         "tools": step.get("tools") or [],
+        "attempt": attempts,
+        "max_model_attempts": limit,
         "instruction": (
-            "Listed tools failed this FlowStep. Write a draft the same toolbox can admit. "
-            "Do not invent tools. Do not relax the output schema."
+            "Listed tools ran first and failed this FlowStep. Write a draft those tools can admit "
+            "so the milestone output schema PASSes. Tools stay first. Do not skip the output schema."
         ),
     }
     request_path = folder / "model_request.json"
@@ -201,7 +219,7 @@ def _recover_or_block(
         "action": "run_model_then_advance",
         "execution_mode": "tool",
         "step_id": step["id"],
-        "attempt": 1,
+        "attempt": attempts,
         "model": step.get("model"),
         "task_path": relative_to(run_dir, run_dir / "runtime-tasks" / f"{step['id']}.json"),
         "model_request_path": relative_to(run_dir, request_path),

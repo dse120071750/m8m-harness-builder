@@ -261,6 +261,13 @@ def _load_flow_v3(skill_dir: Path, path: Path, raw: dict[str, Any]) -> dict[str,
             raise FlowError(f"{step_id}.on_tool_fail must be BLOCKED or need_model")
         if on_tool_fail == "need_model" and intel == "none":
             raise FlowError(f"{step_id}: on_tool_fail need_model requires intelligence completion|image|judge")
+        max_model_attempts = item.get("max_model_attempts")
+        if max_model_attempts is None:
+            max_model_attempts = (item.get("params") or {}).get("max_model_attempts")
+        if max_model_attempts is None:
+            max_model_attempts = 8
+        if not isinstance(max_model_attempts, int) or max_model_attempts < 1:
+            raise FlowError(f"{step_id}.max_model_attempts must be a positive integer")
         if intel != "none" and not str(item.get("model_justification") or "").strip():
             raise FlowError(f"{step_id}: intelligence {intel} requires model_justification")
         item.setdefault("output_schema", f"schemas/{item['output_contract']}.json")
@@ -306,6 +313,7 @@ def _load_flow_v3(skill_dir: Path, path: Path, raw: dict[str, Any]) -> dict[str,
             "test": item.get("test", f"milestones/{step_id}/tests/test_assemble.py"),
             "params": item.get("params") or {},
             "on_tool_fail": on_tool_fail,
+            "max_model_attempts": max_model_attempts,
             "next": list(next_edges),
             "else": item.get("else"),
             "foreach": foreach,
