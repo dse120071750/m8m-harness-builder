@@ -16,6 +16,7 @@ from flowstep_runtime import (
     FlowError,
     assert_product_harness_location,
     find_flow_path,
+    is_under_home_skills,
     load_flow,
     resolve_harness_dir,
     step_class_hint,
@@ -175,8 +176,8 @@ def generate_tool(codebase: Path, tool_id: str, *, overwrite: bool = False) -> d
     if not STEP_ID_RE.match(tool_id):
         raise FlowError(f"invalid tool id: {tool_id}")
     root = Path(codebase).resolve()
-    if root.as_posix().lower().find("/.codex/skills") >= 0 or "\\.codex\\skills" in str(root).lower():
-        raise FlowError("--codebase must be the repo root, not .codex/skills")
+    if is_under_home_skills(root):
+        raise FlowError("--codebase must be the repo root, not ~/.codex/skills or ~/.claude/skills")
     dest = tools_root(root) / tool_id
     dest.mkdir(parents=True, exist_ok=True)
     if seed_path(tool_id) is not None:
@@ -481,7 +482,7 @@ def write_product_skill(
     overwrite: bool = False,
     classification: dict[str, Any] | None = None,
 ) -> str:
-    dest = Path(codebase).resolve() / ".agents" / "skills" / skill_name / "SKILL.md"
+    root = Path(codebase).resolve()
     table = render_classification_markdown(classification or {"rows": []})
     mapping = {
         "SKILL_NAME": skill_name,
@@ -489,8 +490,15 @@ def write_product_skill(
         "BUILDER_ROOT": str(DEFAULT_BUILDER).replace("\\", "/"),
         "CLASSIFICATION_TABLE": table,
     }
-    _write_text(dest, _render("product-SKILL.md", mapping), overwrite=overwrite or not dest.exists())
-    return str(dest)
+    text = _render("product-SKILL.md", mapping)
+    dests = [
+        root / ".agents" / "skills" / skill_name / "SKILL.md",
+        root / ".claude" / "skills" / skill_name / "SKILL.md",
+    ]
+    primary = dests[0]
+    for dest in dests:
+        _write_text(dest, text, overwrite=overwrite or not dest.exists())
+    return str(primary)
 
 
 def _copy_missing_control_schemas(harness: Path, audit: dict[str, Any]) -> None:

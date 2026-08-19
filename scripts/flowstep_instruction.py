@@ -141,7 +141,7 @@ def render_instruction(
                 "",
                 "## Teaching contracts",
                 "",
-                "Same rule as tools. These live on the flow, not in `~/.codex/skills`.",
+                "Same rule as tools. These live on the flow, not in `~/.codex/skills` or `~/.claude/skills`.",
                 "",
             ]
         )

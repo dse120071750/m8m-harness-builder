@@ -8,8 +8,8 @@ description: M8M product skill. Milestone to milestone. Each milestone consumes 
 This skill is the instruction surface. M8M is milestone to milestone.
 Each milestone input schema is the previous output schema. FlowSteps
 are tool-heavy units inside the milestone. Tools (premade Python) live
-in the **project** toolbox, not in `~/.codex/skills`. Teaching contracts
-live on the **flow**, not in this skill folder.
+in the **project** toolbox, not in `~/.codex/skills` or `~/.claude/skills`.
+Teaching contracts live on the **flow**, not in this skill folder.
 
 - flow: `<repo>/flowsteps/flows/__FLOW_ID__/`
 - tools: `<repo>/flowsteps/tools/`

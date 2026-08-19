@@ -23,9 +23,9 @@ def _builder_tools() -> Any:
     candidates = []
     if env:
         candidates.append(Path(env) / "scripts" / "flowstep_tools.py")
-    home_skills = Path.home() / ".codex" / "skills"
-    for skill_name in ("m8m-harness-builder", "flowstep-harness-builder"):
-        candidates.append(home_skills / skill_name / "scripts" / "flowstep_tools.py")
+    for home_skills in (Path.home() / ".codex" / "skills", Path.home() / ".claude" / "skills"):
+        for skill_name in ("m8m-harness-builder", "flowstep-harness-builder"):
+            candidates.append(home_skills / skill_name / "scripts" / "flowstep_tools.py")
     here = Path(__file__).resolve()
     for parent in here.parents:
         for skill_name in ("m8m-harness-builder", "flowstep-harness-builder"):

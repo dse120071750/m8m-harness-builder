@@ -113,9 +113,21 @@ def step_class_hint(step_id: str) -> str | None:
     return None
 
 
+HOME_SKILL_MARKERS = ("/.codex/skills/", "/.claude/skills/")
+HOME_SKILL_SUFFIXES = ("/.codex/skills", "/.claude/skills")
+
+
+def is_under_home_skills(path: Path) -> bool:
+    """True for Codex or Claude home/project skill folders. Product tools must not live there."""
+    text = f"/{path.resolve().as_posix().lower()}/"
+    if any(marker in text for marker in HOME_SKILL_MARKERS):
+        return True
+    stripped = path.resolve().as_posix().lower().rstrip("/")
+    return any(stripped.endswith(suffix) for suffix in HOME_SKILL_SUFFIXES)
+
+
 def is_under_codex_skills(path: Path) -> bool:
-    text = path.resolve().as_posix().lower()
-    return "/.codex/skills/" in f"/{text}/" or text.rstrip("/").endswith("/.codex/skills")
+    return is_under_home_skills(path)
 
 
 def is_builder_fixture(path: Path) -> bool:
@@ -128,9 +140,10 @@ def is_builder_fixture(path: Path) -> bool:
 
 def assert_product_harness_location(path: Path) -> None:
     resolved = path.resolve()
-    if is_under_codex_skills(resolved) and not is_builder_fixture(resolved):
+    if is_under_home_skills(resolved) and not is_builder_fixture(resolved):
         raise FlowError(
-            "product tools must live in the codebase at flowsteps/<flow_id>, not under .codex/skills"
+            "product tools must live in the codebase at flowsteps/<flow_id>, "
+            "not under ~/.codex/skills or ~/.claude/skills"
         )
 
 
@@ -149,8 +162,8 @@ def resolve_harness_dir(
         if not FLOW_ID_RE.match(str(flow_id)):
             raise FlowError(f"invalid flow_id: {flow_id}")
         root = Path(codebase).resolve()
-        if is_under_codex_skills(root):
-            raise FlowError("--codebase must be the repo root, not .codex/skills")
+        if is_under_home_skills(root):
+            raise FlowError("--codebase must be the repo root, not ~/.codex/skills or ~/.claude/skills")
         return (root / FLOWSTEPS_DIRNAME / "flows" / flow_id).resolve()
     if skill_dir:
         return Path(skill_dir).resolve()

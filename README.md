@@ -8,7 +8,7 @@ Three words. Do not mix them:
 | --- | --- | --- |
 | **Milestone** | The only canvas node. A human checkpoint. Input schema **is** the previous milestone’s output schema. | Not a crop. Not a fetch. Not a tool. |
 | **FlowStep** | A tool-heavy unit **inside** a milestone. Listed on that milestone. Never drawn on the canvas. | Not a milestone. Not free-form session code. |
-| **Tool** | The premade Python implementation a FlowStep runs: `<repo>/flowsteps/tools/<id>/`. Input schema in, output schema out. | Not stored in `~/.codex/skills`. |
+| **Tool** | The premade Python implementation a FlowStep runs: `<repo>/flowsteps/tools/<id>/`. Input schema in, output schema out. | Not stored in `~/.codex/skills` or `~/.claude/skills`. |
 | **Gate / foreach** | n8n IF and Loop Over Items, as JSON Schema. `when` = instance validates. `foreach` = typed array + `maxItems`. | Not a milestone. Not semantic approval. Not `NEED_MODEL`. |
 
 This is a **skill for making skills** that produce assets or a standardized workflow — not another session transcript.
@@ -50,14 +50,14 @@ request
 
 The driver advances **milestone → milestone**. It does not draw crop then hash then IF. Crop is a FlowStep inside a milestone. The tool is the Python in the project toolbox.
 
-Invoke this Codex skill as **`$m8m-harness-builder`**.
+Invoke as **`$m8m-harness-builder`** in Codex, or load the `m8m-harness-builder` skill in Claude Code.
 
 ## Why M8M, not another agent loop
 
 | n8n | Usual Codex / Claude skill | M8M |
 | --- | --- | --- |
 | Action node | Generate code for the tiny task | **FlowStep** inside a milestone, running a **tool** |
-| Integrations on the canvas | Scripts dumped in `~/.codex/skills` | `<repo>/flowsteps/tools/<id>/` |
+| Integrations on the canvas | Scripts dumped in `~/.codex/skills` or `~/.claude/skills` | `<repo>/flowsteps/tools/<id>/` |
 | Graph of HTTP/IF/crop | Markdown + worker, no toolbox | **Milestone → milestone** |
 | Typed I/O | Chat in, chat out | **This milestone.in = previous milestone.out** |
 | Runs to a side effect | Stops at a draft | Stops at an **asset** |
@@ -249,7 +249,7 @@ Five milestones in `flows/m8m_build_v1.yaml`:
 python scripts/run_m8m.py --target <skill-or-flow-dir> --codebase <repo>
 ```
 
-Writes the audit, writes **one** flowchart (`planning/m8m-flowchart.md`: milestones, schema if/else, foreach), copies seed **tools** into the project, generates the milestone chain (each input schema is the previous output; FlowSteps listed per milestone), rewrites that same flowchart from the flow YAML, validates, and ships `<repo>/.agents/skills/<name>/SKILL.md`.
+Writes the audit, writes **one** flowchart (`planning/m8m-flowchart.md`: milestones, schema if/else, foreach), copies seed **tools** into the project, generates the milestone chain (each input schema is the previous output; FlowSteps listed per milestone), rewrites that same flowchart from the flow YAML, validates, and ships `<repo>/.agents/skills/<name>/SKILL.md` plus `<repo>/.claude/skills/<name>/SKILL.md`.
 
 ```powershell
 python scripts/audit_harness.py --target <skill-or-flow-dir>
@@ -261,14 +261,40 @@ Read [references/milestone.md](references/milestone.md) and [references/tool-vs-
 
 ## Install
 
+Works in **Codex** and **Claude Code**. Product tools and teaching contracts still go in the **repo**, never in a home skill folder.
+
+**Codex**
+
 ```powershell
 git clone https://github.com/dse120071750/m8m-harness-builder.git $env:USERPROFILE\.codex\skills\m8m-harness-builder
 pip install -r $env:USERPROFILE\.codex\skills\m8m-harness-builder\requirements.txt
 ```
 
-Repo-local: `<repo>/.agents/skills/m8m-harness-builder/`.
+```bash
+git clone https://github.com/dse120071750/m8m-harness-builder.git ~/.codex/skills/m8m-harness-builder
+pip install -r ~/.codex/skills/m8m-harness-builder/requirements.txt
+```
 
-Invoke **`$m8m-harness-builder`**.
+**Claude Code**
+
+```powershell
+git clone https://github.com/dse120071750/m8m-harness-builder.git $env:USERPROFILE\.claude\skills\m8m-harness-builder
+pip install -r $env:USERPROFILE\.claude\skills\m8m-harness-builder\requirements.txt
+```
+
+```bash
+git clone https://github.com/dse120071750/m8m-harness-builder.git ~/.claude/skills/m8m-harness-builder
+pip install -r ~/.claude/skills/m8m-harness-builder/requirements.txt
+```
+
+Repo-local (either host):
+
+```text
+<repo>/.agents/skills/m8m-harness-builder/
+<repo>/.claude/skills/m8m-harness-builder/
+```
+
+Invoke **`$m8m-harness-builder`** in Codex, or ask Claude to use the `m8m-harness-builder` skill.
 
 ```powershell
 pip install -r requirements.txt

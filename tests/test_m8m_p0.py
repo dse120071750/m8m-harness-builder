@@ -63,6 +63,7 @@ class AuditDrivesGenerateTests(unittest.TestCase):
             last = json.loads((harness / "schemas" / f"{last_id}_v1.json").read_text(encoding="utf-8"))
             self.assertIn("asset", last["properties"])
             self.assertTrue((codebase / ".agents" / "skills" / "toy-skill" / "SKILL.md").is_file())
+            self.assertTrue((codebase / ".claude" / "skills" / "toy-skill" / "SKILL.md").is_file())
             self.assertEqual(audit["tool_vs_intelligence"]["schema"], "tool_vs_intelligence_table_v1")
             table_path = harness / "planning" / "tool-vs-intelligence.json"
             self.assertTrue(table_path.is_file())
@@ -131,6 +132,7 @@ class FactoryTests(unittest.TestCase):
             self.assertIn(result["status"], {"PASS", "FINDINGS"})
             self.assertTrue(Path(result["audit_json"]).is_file())
             self.assertTrue(Path(result["product_skill"]).is_file())
+            self.assertTrue((codebase / ".claude" / "skills" / "bare-skill" / "SKILL.md").is_file())
             chart = Path(result["milestones"]["flow_generated"]["harness_dir"]) / "planning" / "m8m-flowchart.md"
             self.assertTrue(chart.is_file())
             self.assertIn("```mermaid", chart.read_text(encoding="utf-8"))

@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from support import EXAMPLE
+from support import EXAMPLE, optional_product_repo, optional_sample_skill
 
 from audit_harness import (
     AUDIT_SCHEMA,
@@ -17,7 +17,6 @@ from audit_harness import (
 from flowstep_runtime import validate_against_schema
 
 
-ARTICLE = Path(r"C:\Users\gasil\.codex\skills\article-infographic-maker")
 AUDIT_CONTRACT = Path(__file__).resolve().parents[1] / "contracts" / "flowstep_skill_audit_v1.schema.json"
 REQUIRED_HEADINGS = (
     "## Audited skill",
@@ -35,9 +34,12 @@ REQUIRED_HEADINGS = (
 
 class AuditHarnessTests(unittest.TestCase):
     def test_article_repo_flow_is_milestone_toolbox(self) -> None:
-        repo = Path(r"D:\nisan-n8n\flowsteps\flows\article_infographic_zh_hant_v2")
+        product = optional_product_repo()
+        if product is None:
+            self.skipTest("set M8M_PRODUCT_REPO to audit a live product flow")
+        repo = product / "flowsteps" / "flows" / "article_infographic_zh_hant_v2"
         if not repo.is_dir():
-            self.skipTest("article repo flow not installed")
+            self.skipTest("sample article flow not in M8M_PRODUCT_REPO")
         report = audit_harness(repo)
         self.assertEqual(report["verdict"], "MILESTONE_TOOLBOX")
         self.assertEqual(report["flow_schema"], "flowstep_flow_v3")
@@ -182,19 +184,23 @@ class AuditWorkerTests(unittest.TestCase):
             self.assertIn("text-pipeline", text)
 
     def test_case_io_skill_follows_linked_repo_flow(self) -> None:
-        skill = Path(r"C:\Users\gasil\.codex\skills\nisan-case-io")
-        repo = Path(r"D:\nisan-n8n\flowsteps\flows\nisan_case_io_v1")
-        if not skill.is_dir() or not repo.is_dir():
-            self.skipTest("nisan-case-io flow not installed")
+        skill = optional_sample_skill()
+        product = optional_product_repo()
+        if skill is None or product is None:
+            self.skipTest("set M8M_SAMPLE_SKILL and M8M_PRODUCT_REPO to audit a linked product skill")
+        repo = product / "flowsteps" / "flows" / "nisan_case_io_v1"
+        if not repo.is_dir():
+            self.skipTest("sample case-io flow not in M8M_PRODUCT_REPO")
         report = audit_skill(skill)
         ids = [item["id"] for item in report["proposed_milestones"]]
         self.assertEqual(ids, ["live_case_bound", "package_admitted", "write_verified"])
         self.assertIn("existing-case-patch-worker", {item["id"] for item in report["current_tools"]})
 
     def test_article_skill_keeps_six_milestones(self) -> None:
-        if not ARTICLE.is_dir():
-            self.skipTest("article skill not installed")
-        report = audit_skill(ARTICLE)
+        article = optional_sample_skill()
+        if article is None:
+            self.skipTest("set M8M_SAMPLE_SKILL to audit a live article skill")
+        report = audit_skill(article)
         ids = [item["id"] for item in report["proposed_milestones"]]
         for expected in (
             "source_ready",

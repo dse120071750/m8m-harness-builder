@@ -4,15 +4,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from support import EXAMPLE
+from support import EXAMPLE, optional_product_repo
 
 from flowstep_runtime import FlowError, load_flow, step_class_hint
 from flowstep_tools import run_library_tool, validate_library_tool
 from generate_harness import generate_tool, generate_v3_flow
 from validate_harness import validate_harness
-
-
-REPO = Path("D:/nisan-n8n")
 
 
 class ToolLibraryTests(unittest.TestCase):
@@ -29,9 +26,11 @@ class ToolLibraryTests(unittest.TestCase):
         try:
             tools = importlib.import_module("flowstep_tools")
             with tempfile.TemporaryDirectory() as temp:
+                codebase = Path(temp) / "repo"
+                generate_tool(codebase, "hash_bind")
                 path = Path(temp) / "x.txt"
                 path.write_text("x", encoding="utf-8")
-                result = tools.run_library_tool(REPO, "hash_bind", {"path": str(path)})
+                result = tools.run_library_tool(codebase, "hash_bind", {"path": str(path)})
             self.assertEqual(len(result["sha256"]), 64)
         finally:
             if previous is None:
@@ -40,37 +39,20 @@ class ToolLibraryTests(unittest.TestCase):
                 sys.modules["flowstep_runtime"] = previous
 
     def test_seed_hash_bind(self) -> None:
-        errors = validate_library_tool(REPO, "hash_bind")
-        self.assertEqual(errors, [])
         with tempfile.TemporaryDirectory() as temp:
+            codebase = Path(temp) / "repo"
+            generate_tool(codebase, "hash_bind")
+            errors = validate_library_tool(codebase, "hash_bind")
+            self.assertEqual(errors, [])
             path = Path(temp) / "x.txt"
             path.write_text("x", encoding="utf-8")
-            result = run_library_tool(REPO, "hash_bind", {"path": str(path)})
+            result = run_library_tool(codebase, "hash_bind", {"path": str(path)})
             self.assertEqual(len(result["sha256"]), 64)
-
-    def test_seed_crop_ratio(self) -> None:
-        errors = validate_library_tool(REPO, "crop_4x5")
-        self.assertEqual(errors, [])
 
     def test_two_flows_share_hash_bind(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             codebase = Path(temp) / "repo"
             generate_tool(codebase, "hash_bind", overwrite=True)
-            src = REPO / "flowsteps" / "tools" / "hash_bind" / "tool.py"
-            dest = codebase / "flowsteps" / "tools" / "hash_bind" / "tool.py"
-            dest.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
-            (codebase / "flowsteps" / "tools" / "hash_bind" / "output.schema.json").write_text(
-                (REPO / "flowsteps" / "tools" / "hash_bind" / "output.schema.json").read_text(encoding="utf-8"),
-                encoding="utf-8",
-            )
-            (codebase / "flowsteps" / "tools" / "hash_bind" / "input.schema.json").write_text(
-                (REPO / "flowsteps" / "tools" / "hash_bind" / "input.schema.json").read_text(encoding="utf-8"),
-                encoding="utf-8",
-            )
-            test_src = REPO / "flowsteps" / "tools" / "hash_bind" / "tests" / "test_tool.py"
-            test_dest = codebase / "flowsteps" / "tools" / "hash_bind" / "tests" / "test_tool.py"
-            test_dest.parent.mkdir(parents=True, exist_ok=True)
-            test_dest.write_text(test_src.read_text(encoding="utf-8"), encoding="utf-8")
             first = generate_v3_flow(codebase, "flow_a_v1", ["source_ready"], tools=["hash_bind"])
             second = generate_v3_flow(codebase, "flow_b_v1", ["assets_bound"], tools=["hash_bind"])
             self.assertTrue(Path(first["harness_dir"]).is_dir())
@@ -119,7 +101,12 @@ class MilestoneTests(unittest.TestCase):
             self.assertEqual(flow["steps"][1]["intelligence"], "completion")
 
     def test_article_v3_flow_validates(self) -> None:
-        article = REPO / "flowsteps" / "flows" / "article_infographic_zh_hant_v2"
+        repo = optional_product_repo()
+        if repo is None:
+            self.skipTest("set M8M_PRODUCT_REPO to validate a live product flow")
+        article = repo / "flowsteps" / "flows" / "article_infographic_zh_hant_v2"
+        if not article.is_dir():
+            self.skipTest("sample article flow not in M8M_PRODUCT_REPO")
         result = validate_harness(skill_dir=article)
         self.assertEqual(result["status"], "PASS")
         self.assertEqual(

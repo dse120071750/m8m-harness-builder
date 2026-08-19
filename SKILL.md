@@ -6,7 +6,8 @@ description: >
   tool-heavy units inside the milestone. Tools are premade Python in the
   project toolbox. Use when a Codex/Claude skill overuses intelligence,
   generates session code for tiny tasks, or keeps scripts in
-  ~/.codex/skills instead of the repo. Invoke as $m8m-harness-builder.
+  ~/.codex/skills or ~/.claude/skills instead of the repo. Invoke as
+  $m8m-harness-builder.
 license: MIT
 metadata:
   author: dse120071750
@@ -42,8 +43,8 @@ Read `references/milestone.md` and `references/tool-vs-intelligence.md`.
 ```text
 Milestone named crop_* / fetch_* / hash_*  = invalid (that is a FlowStep / tool)
 FlowStep without a tool                    = invalid
-Tool living under ~/.codex/skills          = invalid
-Teaching contract living only under ~/.codex/skills = invalid
+Tool living under ~/.codex/skills or ~/.claude/skills = invalid
+Teaching contract living only under a home skill folder = invalid
 This milestone.in != previous milestone.out = invalid
 if_* / loop_* milestone names               = invalid (schema gates, not checkpoints)
 foreach without maxItems                    = invalid
@@ -74,7 +75,8 @@ That:
    schema; FlowSteps listed inside each milestone; last milestone
    `asset` path+sha256) and rewrites the same flowchart from the flow YAML.
 4. Validates the harness.
-5. Ships `<repo>/.agents/skills/<name>/SKILL.md`.
+5. Ships `<repo>/.agents/skills/<name>/SKILL.md` and
+   `<repo>/.claude/skills/<name>/SKILL.md`.
 
 Unknown tools without a seed stay FINDINGS until a real fixture exists.
 Do not use `--step` (v2 action nodes). Use `--from-audit` or `--milestone`.
@@ -106,7 +108,7 @@ python scripts/audit_harness.py --codebase <repo> --flow-id <flow_id>
 ## Stop conditions
 
 - a milestone is a single crop/fetch/hash (that is a FlowStep)
-- a product **tool** is written under `.codex/skills`
+- a product **tool** is written under `~/.codex/skills` or `~/.claude/skills`
 - the worker writes SQL/crop/Playwright in the session
 - intelligence with file/hash outputs and no FlowSteps
 - stub tools or `{ok: boolean}` schemas

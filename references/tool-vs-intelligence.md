@@ -133,7 +133,7 @@ path; add a model only when a fixture test cannot express the work.
 
 ## Forbidden (all of the above systems reject this)
 
-- Generating product tools under `.codex/skills`
+- Generating product tools under `~/.codex/skills` or `~/.claude/skills`
 - Marking fetch, crop, hash, render, package, or schema-validate as
   `intelligence`
 - The agent writing a one-off SQL/crop/Playwright script “just for this

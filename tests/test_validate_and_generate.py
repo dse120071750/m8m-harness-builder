@@ -194,7 +194,18 @@ class GenerateHarnessTests(unittest.TestCase):
             fake.mkdir(parents=True)
             with self.assertRaises(FlowError) as ctx:
                 generate_harness(codebase=fake.parent, flow_id="nope_v1", step_ids=["alpha"])
-            self.assertIn(".codex/skills", str(ctx.exception).replace("\\", "/"))
+            message = str(ctx.exception).replace("\\", "/")
+            self.assertIn(".codex/skills", message)
+            self.assertIn(".claude/skills", message)
+
+    def test_rejects_claude_skills_codebase(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fake = Path(temp) / ".claude" / "skills" / "other-skill"
+            fake.mkdir(parents=True)
+            with self.assertRaises(FlowError) as ctx:
+                generate_harness(codebase=fake.parent, flow_id="nope_v1", step_ids=["alpha"])
+            message = str(ctx.exception).replace("\\", "/")
+            self.assertIn(".claude/skills", message)
 
     def test_tool_class_forbids_model(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

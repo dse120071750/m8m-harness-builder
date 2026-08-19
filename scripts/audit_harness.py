@@ -20,6 +20,7 @@ from flowstep_runtime import (
     add_harness_location_args,
     harness_dir_from_args,
     is_stub_output_schema,
+    is_under_home_skills,
     load_yaml,
     read_json,
     step_class_hint,
@@ -424,7 +425,7 @@ def audit_harness(root: Path) -> dict[str, Any]:
             "p0_count": 1,
             "p1_count": 0,
             "milestone_count": 0,
-            "location": "codex_skill" if "/.codex/skills/" in root.as_posix().lower() else "codebase",
+            "location": "home_skill" if is_under_home_skills(root) else "codebase",
         }
 
     raw = load_yaml(flow_path)
@@ -432,7 +433,7 @@ def audit_harness(root: Path) -> dict[str, Any]:
         raise FlowError(f"flow must be a mapping: {flow_path}")
     flow_schema = raw.get("schema")
     steps = _step_rows(raw)
-    location = "codex_skill" if "/.codex/skills/" in root.as_posix().lower() else "codebase"
+    location = "home_skill" if is_under_home_skills(root) else "codebase"
     if infer_codebase(root) is not None:
         location = "flowsteps_flow"
 
@@ -466,12 +467,12 @@ def audit_harness(root: Path) -> dict[str, Any]:
     if int(raw.get("max_run_repair_cycles") or 0) > 0:
         findings.append({"severity": "P1", "id": "repair", "note": "repair loops are forbidden"})
 
-    if location == "codex_skill" and flow_schema == FLOW_SCHEMA_V3:
+    if location == "home_skill" and flow_schema == FLOW_SCHEMA_V3:
         findings.append(
             {
                 "severity": "P0",
                 "id": "location",
-                "note": "v3 product flow must live under <repo>/flowsteps/flows/<id>, not .codex/skills",
+                "note": "v3 product flow must live under <repo>/flowsteps/flows/<id>, not ~/.codex/skills or ~/.claude/skills",
             }
         )
 
