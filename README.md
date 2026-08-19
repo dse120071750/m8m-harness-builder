@@ -1,8 +1,8 @@
-# F8F
+# M8M
 
-**F8F is a semantic n8n.** Heavy tools. Premade scripts. Skills ship by milestone.
+**M8M is milestone-to-milestone.** A semantic n8n. Each milestone consumes the previous milestone’s output schema as its input schema. FlowSteps live *inside* the milestone and are tool-heavy.
 
-This is not a chat skill. It is a **skill for making skills** that actually produce assets or a standardized workflow — cards, packages, IO receipts, a frozen plan — not another session transcript.
+This is not a chat skill. It is a **skill for making skills** that produce assets or a standardized workflow — cards, packages, IO receipts — not another session transcript.
 
 ## The problem
 
@@ -10,61 +10,67 @@ Codex and Claude usually **overuse intelligence**. For every small task they gen
 
 That is the problem. The flow is not controllable. The skill does not ship an asset.
 
-## What F8F is
+## What M8M is
 
-n8n is controllable because every node has a contract. It is the wrong grain for AI: every crop and hash becomes its own node, and the canvas gets stiff.
+n8n is controllable because every node has a contract. It is the wrong grain for AI: every crop and hash becomes its own canvas node.
 
-F8F keeps n8n’s control and inverts the node:
+M8M keeps n8n’s control and changes the grain to **milestone → milestone**:
 
 ```text
 n8n:     node = one action          (HTTP, crop, IF, hash)
-F8F:     node = one semantic milestone a human would inspect
-         tools = premade Python scripts in the *project* toolbox
+M8M:     node = one milestone a human would inspect
+         FlowSteps = premade tools that run *inside* that milestone
+         next.in   = previous.out   (fixed schema)
 ```
-
-You ship a skill as a **sequence of milestones**. Each milestone is schema in / schema out. Intelligence is rare. Tools are the default.
 
 ```text
 request
-  → source_ready      premade tools + schema out
-  → plan_frozen       intelligence only if the schema cannot compute it
-  → assets_bound      premade tools + schema out
-  → cards_rendered    premade tools + schema out
-  → release_packaged  asset + receipt
+  → source_ready.in  = request
+  → source_ready.out
+  → plan_frozen.in   = source_ready.out
+  → plan_frozen.out
+  → assets_bound.in  = plan_frozen.out
+  → assets_bound.out
+  → cards_rendered.in = assets_bound.out
+  → cards_rendered.out
+  → release_packaged.in = cards_rendered.out
+  → release_packaged.out = asset {path, sha256}
 ```
 
-The finished skill produces an **asset or a standardized workflow**, not generated glue code. The F8F skill itself is only doctrine and a driver. Product tools live in `<repo>/flowsteps/tools/`.
+The next milestone cannot start until the previous output schema PASSes. Crop, hash, fetch, render stay **inside** the milestone as tools. The canvas never draws them.
 
-## Why F8F, not another agent loop
+The M8M skill is doctrine and a driver. Product tools live in `<repo>/flowsteps/tools/`.
 
-| n8n | Usual Codex / Claude skill | F8F |
+## Why M8M, not another agent loop
+
+| n8n | Usual Codex / Claude skill | M8M |
 | --- | --- | --- |
-| Action node | Generate code for the tiny task | Premade script in the project toolbox |
+| Action node | Generate code for the tiny task | Premade tool *inside* a milestone |
 | Integrations on the canvas | Scripts dumped in `~/.codex/skills` | `<repo>/flowsteps/tools/<id>/` |
-| Graph of HTTP/IF/crop | Markdown + worker, no toolbox | Skill ships as **milestones** |
-| Typed I/O | Chat in, chat out | **Schema in / schema out** |
-| Runs to a side effect | Stops at a draft | Stops at an **asset** or a verified workflow receipt |
+| Graph of HTTP/IF/crop | Markdown + worker, no toolbox | **Milestone → milestone** |
+| Typed I/O | Chat in, chat out | **Next input schema = previous output schema** |
+| Runs to a side effect | Stops at a draft | Stops at an **asset** or a verified receipt |
 
-A milestone named `crop_4x5` or `fetch_record` is invalid. Those are tools. Use them heavily. Do not regenerate them.
+A milestone named `crop_4x5` or `fetch_record` is invalid. Those are FlowSteps inside a milestone. Use them heavily. Do not regenerate them.
 
 ## Three rules
 
-### 1. Ship the skill by milestone
+### 1. Milestone to milestone
 
 A milestone is something you would stop and inspect, not a mechanical action.
 
 - Valid: `source_ready`, `plan_frozen`, `assets_bound`, `cards_rendered`, `release_decided`
 - Invalid: `crop_4x5`, `fetch_record`, `hash_bind`
 
-How many times a crop runs stays **inside** the milestone. The canvas only sees the outcome. The next milestone starts only when this one’s output schema PASSes.
+How many times a crop runs stays **inside** the milestone. The next milestone starts only when this one’s output schema PASSes. That output **is** the next input schema.
 
-### 2. Heavy tools. Rare intelligence.
+### 2. FlowSteps live inside the milestone (tool-heavy)
 
-| | Tool (default) | Intelligence (exception) |
+| | Tool (default, inside the milestone) | Intelligence (exception, still inside) |
 | --- | --- | --- |
 | What | Premade Python script | Judgment the schema cannot compute |
-| Where | `<repo>/flowsteps/tools/<id>/` | Optional `NEED_MODEL` *on* a milestone |
-| Contract | Same input → same action. Fixture-testable | Draft only. The tool still emits the payload |
+| Where | `<repo>/flowsteps/tools/<id>/` | Optional `NEED_MODEL` *on* that milestone |
+| Contract | Same input → same action. Fixture-testable | Draft only. The tools still emit the payload |
 | Examples | fetch, crop, hash, render, package, validate | plan, caption, choose, release-judge |
 
 The agent **calls** tools. It does not write SQL, crop math, or Playwright in the session. Intelligence must not pick the next milestone.
@@ -91,16 +97,17 @@ into `planning/flowstep-audit.json`. Generate writes
 `planning/tool-vs-intelligence.json` and copies the same table into the
 product skill and the flow instruction.
 
-### 3. Schema in. Schema out.
+### 3. Previous schema in. This schema out.
 
 ```text
-validate input.schema.json
-  → run premade tools (optional draft)
-  → validate output.schema.json
-  → next milestone
+validate this milestone's input.schema.json
+  (= previous milestone's output.schema.json)
+  → run the FlowSteps listed on this milestone (tools)
+  → validate this milestone's output.schema.json
+  → that object is the next milestone's input
 ```
 
-- The next step reads a typed receipt, not a transcript.
+- The next milestone reads a typed receipt, not a transcript.
 - `{ok: boolean}` stubs are invalid.
 - A file is a `file_ref_v2` (`path` + `sha256`).
 - A BLOCKED run stays BLOCKED.
@@ -110,25 +117,25 @@ If the schema is loose, you do not have a workflow. You have a chat.
 ## Ownership
 
 ```text
-this skill (F8F)                         doctrine + audit + driver
-<repo>/flowsteps/tools/<tool_id>/        premade scripts (the real product)
-<repo>/flowsteps/flows/<flow_id>/        milestone flow + instruction
+this skill (M8M)                         doctrine + audit + driver
+<repo>/flowsteps/tools/<tool_id>/        premade FlowSteps (the real product)
+<repo>/flowsteps/flows/<flow_id>/        milestone → milestone + instruction
 ```
 
 Do not put product tools in `~/.codex/skills` or `~/.claude/skills`. That is how skills mix.
 
 ## Factory (audit → toolbox → flow → validate → ship)
 
-Five premade milestones in `flows/f8f_build_v1.yaml`. One driver:
+Five premade milestones in `flows/m8m_build_v1.yaml`. One driver:
 
 ```powershell
-python scripts/run_f8f.py --target <skill-or-flow-dir> --codebase <repo>
+python scripts/run_m8m.py --target <skill-or-flow-dir> --codebase <repo>
 ```
 
 That writes `planning/flowstep-audit.json`, copies seed tools into
-`<repo>/flowsteps/tools/`, generates the milestone flow from the audit
-(last step is an `asset` receipt), validates, and ships
-`<repo>/.agents/skills/<name>/SKILL.md`.
+`<repo>/flowsteps/tools/`, generates the milestone chain from the audit
+(each input schema is the previous output; last step is an `asset`
+receipt), validates, and ships `<repo>/.agents/skills/<name>/SKILL.md`.
 
 Or step by step:
 
@@ -143,7 +150,7 @@ Read [references/milestone.md](references/milestone.md) and [references/tool-vs-
 ## Install
 
 ```powershell
-git clone https://github.com/dse120071750/f8f-harness-builder.git $env:USERPROFILE\.codex\skills\flowstep-harness-builder
+git clone https://github.com/dse120071750/m8m-harness-builder.git $env:USERPROFILE\.codex\skills\flowstep-harness-builder
 pip install -r $env:USERPROFILE\.codex\skills\flowstep-harness-builder\requirements.txt
 ```
 
@@ -159,7 +166,7 @@ python -m unittest discover -s tests -v
 ## Layout
 
 ```text
-SKILL.md                 F8F working method (the skill that makes skills)
+SKILL.md                 M8M working method (the skill that makes skills)
 scripts/                 audit, generate, validate, run
 contracts/               shared JSON schemas
 references/              milestone + tool-vs-intelligence

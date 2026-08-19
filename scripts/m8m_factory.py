@@ -1,8 +1,7 @@
-"""F8F factory: audit → toolbox → generate → validate → ship product skill."""
+"""M8M factory: audit → toolbox → generate → validate → ship product skill."""
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
@@ -58,7 +57,7 @@ def run_factory(
         status = "FINDINGS" if validation.get("status") != "BLOCKED" else "BLOCKED"
 
     return {
-        "schema": "f8f_factory_result_v1",
+        "schema": "m8m_factory_result_v1",
         "status": status,
         "flow_id": fid,
         "skill_name": name,

@@ -1,17 +1,18 @@
 ---
 name: flowstep-harness-builder
-description: F8F — a semantic n8n. Skill for making skills that ship assets or standardized workflows by milestone, with premade Python tools in the project toolbox. Use when a Codex/Claude skill overuses intelligence, generates session code for tiny tasks, or keeps scripts in ~/.codex/skills instead of the repo.
+description: M8M — milestone to milestone. Semantic n8n. Each milestone consumes the previous output schema as input. FlowSteps (tools) run inside the milestone. Use when a Codex/Claude skill overuses intelligence, generates session code for tiny tasks, or keeps scripts in ~/.codex/skills instead of the repo.
 license: MIT
 metadata:
   author: dse120071750
   version: "1.0"
 ---
 
-# F8F
+# M8M
 
-Semantic n8n. Heavy tools. Premade scripts. Ship the skill by milestone.
-This is the skill that makes skills which produce an asset or a
-standardized workflow — not session-generated glue.
+Milestone to milestone. Semantic n8n. Each milestone requires the
+previous output schema as its input schema. FlowSteps live inside the
+milestone and are tool-heavy. This is the skill that makes skills which
+produce an asset or a standardized workflow — not session-generated glue.
 
 Read `references/milestone.md` and `references/tool-vs-intelligence.md`.
 
@@ -36,19 +37,20 @@ only call tools listed on that milestone.
 
 ## Working method
 
-The factory is five milestones (`flows/f8f_build_v1.yaml`). Run them
+The factory is five milestones (`flows/m8m_build_v1.yaml`). Run them
 with one premade driver. Do not generate crop/fetch/hash in the session.
 
 ```powershell
-python scripts/run_f8f.py --target <skill-or-flow-dir> --codebase <repo>
+python scripts/run_m8m.py --target <skill-or-flow-dir> --codebase <repo>
 ```
 
 That:
 
 1. Writes `planning/flowstep-audit.json` (and `.md`).
 2. Installs premade tools from `seeds/` into `<repo>/flowsteps/tools/`.
-3. Generates the v3 milestone flow from the audit (per-milestone tools,
-   last milestone `asset` path+sha256).
+3. Generates the v3 milestone chain from the audit (next input schema =
+   previous output schema; FlowSteps inside each milestone; last
+   milestone `asset` path+sha256).
 4. Validates the harness.
 5. Ships `<repo>/.agents/skills/<name>/SKILL.md`.
 

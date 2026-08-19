@@ -31,13 +31,13 @@ def _builder_tools() -> Any:
             candidates.append(candidate)
     for path in candidates:
         if path.is_file():
-            spec = importlib.util.spec_from_file_location("f8f_flowstep_tools", path)
+            spec = importlib.util.spec_from_file_location("m8m_flowstep_tools", path)
             if spec is None or spec.loader is None:
                 continue
             module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(module)
             return module
-    raise RuntimeError("F8F builder not found; set FLOWSTEP_BUILDER to the skill root")
+    raise RuntimeError("M8M builder not found; set FLOWSTEP_BUILDER to the skill root")
 
 
 def _first_path(value: Any) -> str | None:

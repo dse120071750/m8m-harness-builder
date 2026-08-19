@@ -8,7 +8,7 @@ from pathlib import Path
 import support  # noqa: F401  # puts scripts/ on sys.path
 
 from audit_harness import audit_skill
-from f8f_factory import run_factory
+from m8m_factory import run_factory
 from flowstep_runtime import FlowError
 from flowstep_tools import run_library_tool, validate_library_tool
 from generate_harness import (

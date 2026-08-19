@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "tool_vs_intelligence_table_v1.schema.json",
-  "title": "F8F tool vs intelligence table",
+  "title": "M8M tool vs intelligence table",
   "description": "Required classification before generate. A row is one toolbox function or one milestone intelligence. Columns are fixed: id, class, test, why.",
   "type": "object",
   "additionalProperties": false,

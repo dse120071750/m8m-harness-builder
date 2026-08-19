@@ -1,6 +1,6 @@
-schema: f8f_factory_v1
-flow_id: f8f_build_v1
-driver: scripts/run_f8f.py
+schema: m8m_factory_v1
+flow_id: m8m_build_v1
+driver: scripts/run_m8m.py
 milestones:
   - id: audit_complete
     output_contract: flowstep_skill_audit_v1

@@ -1,4 +1,4 @@
-# Milestone nodes (AI-native n8n)
+# Milestone nodes (M8M — milestone to milestone)
 
 A FlowStep is a **milestone**, not a mechanical action.
 
@@ -8,8 +8,9 @@ reusable pieces, AI does not invent IO) and invert the grain:
 
 ```text
 n8n:     node = one action
-here:    node = one milestone a human would check
-         tools = pre-made functions used *inside* that milestone
+M8M:     node = one milestone a human would check
+         next.in = previous.out
+         FlowSteps = premade tools used *inside* that milestone
 ```
 
 The driver advances milestone → milestone. It does not micro-orchestrate

@@ -111,7 +111,7 @@ def make_table(rows: list[dict[str, Any]], *, flow_id: str | None = None) -> dic
 
 
 def doctrine_table() -> dict[str, Any]:
-    return make_table(DOCTRINE_ROWS, flow_id="f8f_doctrine")
+    return make_table(DOCTRINE_ROWS, flow_id="m8m_doctrine")
 
 
 def from_audit(audit: dict[str, Any]) -> dict[str, Any]:

@@ -1,4 +1,4 @@
-"""Run the F8F factory milestones: audit, toolbox, generate, validate, ship."""
+"""Run the M8M factory milestones: audit, toolbox, generate, validate, ship."""
 
 from __future__ import annotations
 
@@ -7,8 +7,8 @@ import json
 import sys
 from pathlib import Path
 
-from f8f_factory import run_factory
 from flowstep_runtime import FlowError
+from m8m_factory import run_factory
 
 
 def build_parser() -> argparse.ArgumentParser:

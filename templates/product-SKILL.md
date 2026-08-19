@@ -1,11 +1,13 @@
 ---
 name: __SKILL_NAME__
-description: F8F product skill. Ships a standardized milestone workflow that produces a typed asset. Run the project flow; do not generate crop/fetch/hash in the session.
+description: M8M product skill. Milestone to milestone. Each step consumes the previous output schema. FlowSteps (tools) run inside the milestone. Produces a typed asset.
 ---
 
 # __SKILL_NAME__
 
-This skill is the instruction surface. Tools live in the **project** toolbox,
+This skill is the instruction surface. M8M is milestone to milestone.
+Each milestone input schema is the previous output schema. FlowSteps
+(tools) run inside the milestone. Tools live in the **project** toolbox,
 not in `~/.codex/skills`.
 
 - flow: `<repo>/flowsteps/flows/__FLOW_ID__/`
