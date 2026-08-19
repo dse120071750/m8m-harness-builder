@@ -27,6 +27,7 @@ from flowstep_runtime import (
 )
 from flowstep_tools import infer_codebase, tools_root, validate_library_tool
 from m8m_flowchart import write_flowchart
+from toolbox_plan import build_toolbox_plan, render_toolbox_plan_markdown
 from tool_vs_intelligence import from_audit as classification_from_audit
 from tool_vs_intelligence import render_markdown as render_classification_markdown
 
@@ -52,6 +53,7 @@ DRIVER_STEMS = {
     "run_flow",
     "run_flow_sequence",
     "m8m_flowchart",
+    "toolbox_plan",
     "schema_gate",
     "self_test",
     "validate_harness",
@@ -1242,6 +1244,11 @@ def audit_skill(root: Path) -> dict[str, Any]:
         "current_tools": current_tools,
         "proposed_milestones": milestones,
         "control": control_table(milestones),
+        "toolbox_plan": build_toolbox_plan(
+            milestones,
+            python_tools,
+            codebase=infer_codebase(root) or infer_codebase(grade_root),
+        ),
         "python_standardization": python_tools,
         "tool_vs_intelligence": classification_from_audit(
             {
@@ -1333,7 +1340,13 @@ def render_audit_markdown(report: dict[str, Any]) -> str:
             "",
             "## Proposed milestone split",
             "",
-            "The M8M flowchart (gates and foreach) is `planning/m8m-flowchart.md`.",
+            "The M8M flowchart (gates, foreach, toolbox plan) is `planning/m8m-flowchart.md`.",
+            "",
+        ]
+    )
+    lines.extend(render_toolbox_plan_markdown(report.get("toolbox_plan") or []).splitlines())
+    lines.extend(
+        [
             "",
             "| # | Milestone | Intelligence | Python tools | Output contract | Human inspects |",
             "| ---: | --- | --- | --- | --- | --- |",
@@ -1442,6 +1455,7 @@ def write_audit_markdown(report: dict[str, Any], path: Path) -> Path:
         title=str(skill.get("name") or path.parent.parent.name),
         flow_id=str((report.get("grade") or {}).get("flow_id") or ""),
         source="audit",
+        toolbox_plan=report.get("toolbox_plan"),
     )
     return path
 

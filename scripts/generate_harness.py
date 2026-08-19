@@ -22,6 +22,7 @@ from flowstep_runtime import (
 )
 from flowstep_tools import tools_root
 from m8m_flowchart import write_flowchart
+from toolbox_plan import build_toolbox_plan, existing_toolbox_ids
 from tool_vs_intelligence import from_audit as classification_from_audit
 from tool_vs_intelligence import from_flow as classification_from_flow
 from tool_vs_intelligence import render_markdown as render_classification_markdown
@@ -244,9 +245,11 @@ def generate_v3_flow(
     intelligence: list[str] | None = None,
     overwrite: bool = False,
     milestone_specs: list[dict[str, Any]] | None = None,
+    toolbox_plan: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     harness = resolve_harness_dir(codebase=codebase, flow_id=flow_id)
     assert_product_harness_location(harness)
+    prior_toolbox = existing_toolbox_ids(Path(codebase))
     if milestone_specs:
         milestones = [str(item["id"]) for item in milestone_specs]
     if not milestones:
@@ -420,7 +423,14 @@ def generate_v3_flow(
                 created.append(str(item_schema_path))
         previous_id = mid
     loaded = load_flow(harness, flow_path)
-    instruction = write_instruction(harness, loaded)
+    plan = toolbox_plan or build_toolbox_plan(
+        loaded.get("steps") or items,
+        existing_ids=prior_toolbox,
+    )
+    plan_path = harness / "planning" / "toolbox-plan.json"
+    plan_path.parent.mkdir(parents=True, exist_ok=True)
+    plan_path.write_text(json.dumps(plan, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    instruction = write_instruction(harness, loaded, toolbox_plan=plan)
     created.append(str(instruction))
     chart = write_flowchart(
         harness,
@@ -428,6 +438,7 @@ def generate_v3_flow(
         title=flow_id,
         flow_id=flow_id,
         source="generate",
+        toolbox_plan=plan,
     )
     created.append(str(chart))
     table = classification_from_flow(loaded)
@@ -575,6 +586,8 @@ def generate_from_audit(
         tools=unique_tools,
         overwrite=overwrite,
         milestone_specs=specs,
+        toolbox_plan=audit.get("toolbox_plan")
+        or build_toolbox_plan(proposed, audit.get("python_standardization") or []),
     )
     _copy_missing_control_schemas(Path(result["harness_dir"]), audit)
     table = audit.get("tool_vs_intelligence") or classification_from_audit(audit)

@@ -144,6 +144,92 @@ foreach:
 
 Audit infers these from **existing** output-schema fields (`enum` / `const` / array `maxItems`). Generate writes `schemas/gates/*.schema.json`. Intelligence may fill a field; it may not pick `then`.
 
+Audit and generate both write **one** chart file, `planning/m8m-flowchart.md`, and a **toolbox plan** on that chart: existing toolbox / promote from a skill script / generate new. Tools are listed on each milestone node.
+
+## Worked example: case infographic
+
+Real product flow: `case_infographic_zh_hant_v1`. Six milestones. Crop/hash/render stay tools *inside* the milestone. Intelligence is only on the checkpoints that a schema cannot compute.
+
+### Chart (`planning/m8m-flowchart.md`)
+
+```mermaid
+flowchart TD
+    request([request]) --> source_ready
+    source_ready["source_ready<br/>case_io_get_bundle,case_eligible_images,hash_bind"]
+    source_ready --> facts_frozen
+    facts_frozen["facts_frozen<br/>intel:completion<br/>validate_case_facts,renovation_budget,schema_validate,hash_bind"]
+    facts_frozen --> plan_frozen
+    plan_frozen["plan_frozen<br/>intel:completion<br/>compact_editorial_config,schema_validate,hash_bind"]
+    plan_frozen --> assets_bound
+    assets_bound["assets_bound<br/>intel:image<br/>moodboard_preflight,image_size_check,hash_bind"]
+    assets_bound --> cards_rendered
+    cards_rendered[["foreach pages max=3<br/>cards_rendered<br/>render_case_infographic,image_size_check,hash_bind"]]
+    cards_rendered -->|"each pages render_case_infographic,image_size_check,hash_bind"| cards_rendered
+    cards_rendered -->|"collect pages"| release_packaged
+    release_packaged["release_packaged<br/>intel:judge<br/>hash_bind,schema_validate"]
+```
+
+`cards_rendered` is a foreach **once** `pages` on the previous output schema declares `maxItems: 3`. Today the live schema has `page_count: {const: 3}` and a `pages` array; M8M loop requires `maxItems` on that array. The diamond/loop is schema control, not a model saying the cards look good.
+
+### Toolbox plan (same file, and in the audit)
+
+| Milestone | Intelligence | Existing toolbox | Promote from a skill script | Generate new |
+| --- | --- | --- | --- | --- |
+| `source_ready` | `none` | `case_io_get_bundle`<br>`case_eligible_images`<br>`hash_bind` | — | — |
+| `facts_frozen` | `completion` (gallery room and area estimates are not a typed transform) | `validate_case_facts`<br>`renovation_budget`<br>`schema_validate`<br>`hash_bind` | — | — |
+| `plan_frozen` | `completion` (three-page editorial copy invents headline and service bullets) | `compact_editorial_config`<br>`schema_validate`<br>`hash_bind` | — | — |
+| `assets_bound` | `image` (ImageGen produces the square moodboard; size/hash are tools) | `moodboard_preflight`<br>`image_size_check`<br>`hash_bind` | — | — |
+| `cards_rendered` | `none` | `render_case_infographic`<br>`image_size_check`<br>`hash_bind` | — | — |
+| `release_packaged` | `judge` (teaching-quality and visible-copy review is not a pixel measurement) | `hash_bind`<br>`schema_validate` | — | — |
+
+If a skill still has private scripts, that column fills like `fastdl_carousel_download ← scripts/automate_fastdl.py`. If there is no seed and no script, the tool lands in **Generate new** and stays FINDINGS until a fixture exists.
+
+### Schema in, schema out
+
+`source_ready` output **is** `facts_frozen` input (plus later refs). Abbreviated from `schemas/case_infographic_source_v1.json`:
+
+```json
+{
+  "type": "object",
+  "required": ["case_id", "eligible_count", "output_locale"],
+  "properties": {
+    "case_id": { "type": "string", "minLength": 1 },
+    "eligible_count": { "type": "integer", "minimum": 2 },
+    "eligible": { "type": "array" },
+    "output_locale": { "const": "zh-Hant-HK" }
+  }
+}
+```
+
+`cards_rendered` output (typed pages, not a transcript). Loop-ready form:
+
+```json
+{
+  "type": "object",
+  "required": ["page_count", "pages", "width", "height"],
+  "properties": {
+    "page_count": { "const": 3 },
+    "pages": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "items": {
+        "type": "object",
+        "required": ["path", "sha256"],
+        "properties": {
+          "path": { "type": "string", "minLength": 1 },
+          "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+        }
+      }
+    },
+    "width": { "const": 1080 },
+    "height": { "const": 1350 }
+  }
+}
+```
+
+`release_packaged` stops at an asset-shaped package (`path` + `sha256` on the last milestone after generate). The driver never asks a model whether to take the next edge.
+
 ## Ownership
 
 ```text

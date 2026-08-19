@@ -78,6 +78,7 @@
       }
     },
     "python_standardization": { "type": "array" },
+    "toolbox_plan": { "type": "array" },
     "control": {
       "type": "array",
       "items": {

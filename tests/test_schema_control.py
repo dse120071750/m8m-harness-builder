@@ -9,6 +9,7 @@ import support  # noqa: F401
 
 from audit_harness import audit_skill, infer_schema_control, render_audit_markdown, write_audit_markdown
 from m8m_flowchart import render_mermaid, write_flowchart
+from toolbox_plan import build_toolbox_plan, render_toolbox_plan_markdown
 from flowstep_runtime import FlowError, load_flow, read_json, step_class_hint
 from generate_harness import generate_from_audit, generate_tool, generate_v3_flow
 from run_flow import advance
@@ -507,7 +508,50 @@ class FlowchartMarkdownTests(unittest.TestCase):
             self.assertIn("```mermaid", text)
             self.assertIn("## Loops (foreach)", text)
             self.assertIn("## Gates (if / else)", text)
-            self.assertNotIn("```mermaid", (root / "planning" / "flowstep-audit.md").read_text(encoding="utf-8"))
+            self.assertIn("## Toolbox plan", text)
+            audit_md = (root / "planning" / "flowstep-audit.md").read_text(encoding="utf-8")
+            self.assertNotIn("```mermaid", audit_md)
+            self.assertIn("## Toolbox plan", audit_md)
+            self.assertIn("| Milestone | Intelligence | Existing toolbox | Promote from a skill script | Generate new |", audit_md)
+
+
+class ToolboxPlanTests(unittest.TestCase):
+    def test_existing_promote_generate_columns(self) -> None:
+        milestones = [
+            {
+                "id": "carousel_captured",
+                "intelligence": "none",
+                "tools": ["hash_bind", "fastdl_carousel_download", "instagram_url_canonicalize"],
+            },
+            {
+                "id": "board_distilled",
+                "intelligence": "image",
+                "model_justification": "look at frames, write transferable text",
+                "tools": ["hash_bind", "schema_validate", "reference_board_validate"],
+            },
+        ]
+        std = [
+            {
+                "tool_id": "fastdl_carousel_download",
+                "source": "scripts/automate_fastdl.py",
+                "action": "standardize_to_python",
+            },
+            {
+                "tool_id": "reference_board_validate",
+                "source": "distill-automotive-reference-board/scripts/validate_reference_board.py",
+                "action": "standardize_to_python",
+            },
+        ]
+        plan = build_toolbox_plan(milestones, std)
+        first = plan[0]
+        self.assertIn("hash_bind", first["existing"])
+        self.assertEqual(first["promote"][0]["tool_id"], "fastdl_carousel_download")
+        self.assertEqual(first["promote"][0]["source"], "scripts/automate_fastdl.py")
+        self.assertIn("instagram_url_canonicalize", first["generate"])
+        md = render_toolbox_plan_markdown(plan)
+        self.assertIn("`image` (look at frames, write transferable text)", md)
+        self.assertIn("`fastdl_carousel_download` ← `scripts/automate_fastdl.py`", md)
+        self.assertIn("`instagram_url_canonicalize`", md)
 
 
 if __name__ == "__main__":

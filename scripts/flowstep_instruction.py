@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from toolbox_plan import render_toolbox_plan_markdown
 from tool_vs_intelligence import from_flow as classification_from_flow
 from tool_vs_intelligence import render_markdown as render_classification_markdown
 from flowstep_runtime import (
@@ -79,6 +80,7 @@ def render_instruction(
     skill_dir: Path,
     flow: dict[str, Any],
     statuses: dict[str, str] | None = None,
+    toolbox_plan: list[dict[str, Any]] | None = None,
 ) -> str:
     statuses = statuses or {}
     last = flow["steps"][-1]
@@ -117,10 +119,13 @@ def render_instruction(
             [
                 "## Milestones",
                 "",
-                "The M8M flowchart (gates and foreach) is `planning/m8m-flowchart.md`.",
+                "The M8M flowchart (gates, foreach, toolbox plan) is `planning/m8m-flowchart.md`.",
                 "",
             ]
         )
+        if toolbox_plan:
+            lines.extend(render_toolbox_plan_markdown(toolbox_plan).splitlines())
+            lines.append("")
         used = []
         for step in flow["steps"]:
             for tool_id in step.get("tools") or []:
@@ -179,6 +184,7 @@ def write_instruction(
     flow: dict[str, Any] | None = None,
     *,
     statuses: dict[str, str] | None = None,
+    toolbox_plan: list[dict[str, Any]] | None = None,
 ) -> Path:
     skill_dir = skill_dir.resolve()
     flow = flow or load_flow(skill_dir, find_flow_path(skill_dir))
@@ -190,8 +196,21 @@ def write_instruction(
         merged.update(statuses)
     known = {step["id"] for step in flow["steps"]}
     merged = {key: value for key, value in merged.items() if key in known}
+    if toolbox_plan is None:
+        saved = skill_dir / "planning" / "toolbox-plan.json"
+        if saved.is_file():
+            try:
+                loaded_plan = json.loads(saved.read_text(encoding="utf-8"))
+                if isinstance(loaded_plan, list):
+                    toolbox_plan = loaded_plan
+            except (OSError, json.JSONDecodeError, TypeError):
+                toolbox_plan = None
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(render_instruction(skill_dir, flow, merged), encoding="utf-8", newline="\n")
+    path.write_text(
+        render_instruction(skill_dir, flow, merged, toolbox_plan=toolbox_plan),
+        encoding="utf-8",
+        newline="\n",
+    )
     return path
 
 

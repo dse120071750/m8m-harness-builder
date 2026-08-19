@@ -44,6 +44,7 @@ def run_factory(
         title=str(skill.get("name") or name),
         flow_id=fid,
         source="audit",
+        toolbox_plan=audit.get("toolbox_plan"),
     )
     target_planning = target / "planning"
     target_planning.mkdir(parents=True, exist_ok=True)
@@ -57,6 +58,7 @@ def run_factory(
         title=str(skill.get("name") or name),
         flow_id=fid,
         source="audit",
+        toolbox_plan=audit.get("toolbox_plan"),
     )
 
     generated = generate_from_audit(

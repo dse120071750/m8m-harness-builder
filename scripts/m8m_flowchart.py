@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from flowstep_runtime import utc_now
+from toolbox_plan import render_toolbox_plan_markdown
 
 
 FLOWCHART_REL = Path("planning/m8m-flowchart.md")
@@ -79,19 +80,21 @@ def render_mermaid(items: list[dict[str, Any]]) -> str:
     lines = ["flowchart TD", "    request([request])"]
     for item in nodes:
         mid = item["id"]
+        tools = ",".join(item["tools"] or [])
+        tool_line = f"<br/>{tools}" if tools else ""
         fe = item.get("foreach")
         if fe:
-            tools = ",".join(fe.get("tools") or item["tools"] or ["tools"])
+            loop_tools = ",".join(fe.get("tools") or item["tools"] or ["tools"])
             lines.append(
-                f'    {mid}[["foreach {fe.get("path")} max={fe.get("max_items")}<br/>{mid}<br/>{tools}"]]'
+                f'    {mid}[["foreach {fe.get("path")} max={fe.get("max_items")}<br/>{mid}<br/>{loop_tools}"]]'
             )
         elif item["next"]:
-            lines.append(f"    {mid}{{{mid}}}")
+            lines.append(f"    {mid}{{{mid}{tool_line}}}")
         else:
             extra = ""
             if item["intelligence"] not in {None, "none"}:
                 extra = f"<br/>intel:{item['intelligence']}"
-            lines.append(f'    {mid}["{mid}{extra}"]')
+            lines.append(f'    {mid}["{mid}{extra}{tool_line}"]')
         if item["next"] and (item.get("else") or ELSE_BLOCKED) in {None, ELSE_BLOCKED, "BLOCKED"}:
             lines.append(f"    {_blocked_id(mid)}{{{{{ELSE_BLOCKED}}}}}")
     if ids:
@@ -149,6 +152,7 @@ def render_flowchart(
     title: str,
     flow_id: str | None = None,
     source: str = "audit",
+    toolbox_plan: list[dict[str, Any]] | None = None,
 ) -> str:
     nodes = _nodes(items)
     mermaid = render_mermaid(items)
@@ -168,11 +172,18 @@ def render_flowchart(
         mermaid,
         "```",
         "",
-        "## Nodes",
-        "",
-        "| Milestone | Intelligence | Tools | Control |",
-        "| --- | --- | --- | --- |",
     ]
+    if toolbox_plan:
+        lines.extend(render_toolbox_plan_markdown(toolbox_plan).splitlines())
+        lines.append("")
+    lines.extend(
+        [
+            "## Nodes",
+            "",
+            "| Milestone | Intelligence | Tools | Control |",
+            "| --- | --- | --- | --- |",
+        ]
+    )
     if not nodes:
         lines.append("| (none) | | | |")
     for item in nodes:
@@ -243,11 +254,18 @@ def write_flowchart(
     title: str,
     flow_id: str | None = None,
     source: str = "audit",
+    toolbox_plan: list[dict[str, Any]] | None = None,
 ) -> Path:
     path = flowchart_path(root)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
-        render_flowchart(items, title=title, flow_id=flow_id, source=source),
+        render_flowchart(
+            items,
+            title=title,
+            flow_id=flow_id,
+            source=source,
+            toolbox_plan=toolbox_plan,
+        ),
         encoding="utf-8",
         newline="\n",
     )

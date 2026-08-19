@@ -25,6 +25,7 @@ REQUIRED_HEADINGS = (
     "## Tool vs intelligence",
     "## Current tools",
     "## Proposed milestone split",
+    "## Toolbox plan",
     "## Tools to standardize to Python",
     "## Schema control",
     "## FlowStep input and output schemas",

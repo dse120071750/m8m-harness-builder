@@ -65,7 +65,8 @@ python scripts/run_m8m.py --target <skill-or-flow-dir> --codebase <repo>
 That:
 
 1. Writes `planning/flowstep-audit.json` (and `.md`) and **one** chart:
-   `planning/m8m-flowchart.md` (milestones, if/else gates, foreach).
+   `planning/m8m-flowchart.md` (milestones, if/else, foreach, toolbox plan
+   with tools on each milestone).
 2. Installs premade **tools** from `seeds/` into `<repo>/flowsteps/tools/`.
 3. Generates the milestone chain (next input schema = previous output
    schema; FlowSteps listed inside each milestone; last milestone
@@ -92,6 +93,7 @@ The markdown always includes:
 - tool vs intelligence table (`tool_vs_intelligence_table_v1`)
 - schema control (`next.when` / `foreach`) inferred from output JSON Schema, never from a model
 - one flowchart: `planning/m8m-flowchart.md`
+- toolbox plan on that chart: existing toolbox / promote from a skill script / generate new
 
 ```powershell
 python scripts/audit_harness.py --target <skill-or-flow-dir>
