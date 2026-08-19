@@ -7,7 +7,7 @@ from pathlib import Path
 
 import support  # noqa: F401  # puts scripts/ on sys.path
 
-from audit_harness import audit_skill
+from audit_harness import audit_skill, render_audit_markdown
 from m8m_factory import run_factory
 from flowstep_runtime import FlowError
 from flowstep_tools import run_library_tool, validate_library_tool
@@ -73,6 +73,42 @@ class AuditDrivesGenerateTests(unittest.TestCase):
             self.assertIn("Tool vs intelligence", skill_md)
             instruction = (harness / "planning" / "flowstep-instruction.md").read_text(encoding="utf-8")
             self.assertIn("Tool vs intelligence", instruction)
+
+    def test_from_audit_copies_teaching_contracts_onto_the_flow(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            skill = Path(temp) / "case-skill"
+            (skill / "scripts").mkdir(parents=True)
+            (skill / "references").mkdir()
+            (skill / "SKILL.md").write_text(
+                "---\nname: case-skill\ndescription: Case infographic.\n---\n\n# case\n",
+                encoding="utf-8",
+            )
+            (skill / "scripts" / "hash_bind.py").write_text("def run(x):\n    return x\n", encoding="utf-8")
+            (skill / "references" / "fact-contract.md").write_text(
+                "# Fact-resolution contract\n\nUsable area is one integer.\n",
+                encoding="utf-8",
+            )
+            (skill / "references" / "canvas-contract.md").write_text(
+                "# Canvas contract\n\nThree 4:5 pages.\n",
+                encoding="utf-8",
+            )
+            audit = audit_skill(skill)
+            names = {row["name"] for row in audit["teaching_plan"]}
+            self.assertIn("fact-contract.md", names)
+            self.assertTrue(any(row["action"] == "promote" for row in audit["teaching_plan"]))
+            markdown = render_audit_markdown(audit)
+            self.assertIn("## Teaching contracts", markdown)
+            self.assertIn("fact-contract", markdown)
+            codebase = Path(temp) / "repo"
+            result = generate_from_audit(codebase, audit, flow_id="case_v1", skill_name="case-skill")
+            harness = Path(result["harness_dir"])
+            self.assertTrue((harness / "references" / "fact-contract.md").is_file())
+            self.assertTrue((harness / "references" / "canvas-contract.md").is_file())
+            instruction = (harness / "planning" / "flowstep-instruction.md").read_text(encoding="utf-8")
+            self.assertIn("references/fact-contract.md", instruction)
+            self.assertIn("Teaching contracts", instruction)
+            skill_md = (codebase / ".agents" / "skills" / "case-skill" / "SKILL.md").read_text(encoding="utf-8")
+            self.assertIn("references/", skill_md)
 
 
 class DefaultV3Tests(unittest.TestCase):

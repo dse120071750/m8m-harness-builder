@@ -22,6 +22,7 @@ from flowstep_runtime import (
 )
 from flowstep_tools import tools_root
 from m8m_flowchart import write_flowchart
+from teaching_contracts import copy_teaching_contracts
 from toolbox_plan import build_toolbox_plan, existing_toolbox_ids
 from tool_vs_intelligence import from_audit as classification_from_audit
 from tool_vs_intelligence import from_flow as classification_from_flow
@@ -590,6 +591,17 @@ def generate_from_audit(
         or build_toolbox_plan(proposed, audit.get("python_standardization") or []),
     )
     _copy_missing_control_schemas(Path(result["harness_dir"]), audit)
+    copied_teaching = copy_teaching_contracts(
+        Path(result["harness_dir"]), audit, overwrite=overwrite
+    )
+    if copied_teaching:
+        write_instruction(
+            Path(result["harness_dir"]),
+            load_flow(Path(result["harness_dir"])),
+            toolbox_plan=audit.get("toolbox_plan"),
+        )
+        result.setdefault("written", []).extend(copied_teaching)
+        result["teaching_contracts"] = copied_teaching
     table = audit.get("tool_vs_intelligence") or classification_from_audit(audit)
     table["flow_id"] = raw_flow_id
     table_path = Path(result["harness_dir"]) / "planning" / "tool-vs-intelligence.json"

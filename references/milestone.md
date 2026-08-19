@@ -71,5 +71,9 @@ The one chart is `planning/m8m-flowchart.md` (mermaid + gate table +
 foreach table). Audit and generate both write that file. It is not
 embedded in the audit report or the instruction.
 
+Teaching contracts (`references/*.md` on a Codex skill) belong on the
+flow: `<repo>/flowsteps/flows/<id>/references/`. Same ownership as tools.
+The skill folder may point at them. It must not be the only copy.
+
 Forbidden: `if_*` / `loop_*` milestone ids, unbounded while, intelligence
 choosing `then`, “repeat until it looks good”.

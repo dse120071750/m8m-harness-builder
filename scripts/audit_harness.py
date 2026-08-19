@@ -27,6 +27,7 @@ from flowstep_runtime import (
 )
 from flowstep_tools import infer_codebase, tools_root, validate_library_tool
 from m8m_flowchart import write_flowchart
+from teaching_contracts import build_teaching_plan, render_teaching_plan_markdown
 from toolbox_plan import build_toolbox_plan, render_toolbox_plan_markdown
 from tool_vs_intelligence import from_audit as classification_from_audit
 from tool_vs_intelligence import render_markdown as render_classification_markdown
@@ -54,6 +55,7 @@ DRIVER_STEMS = {
     "run_flow_sequence",
     "m8m_flowchart",
     "toolbox_plan",
+    "teaching_contracts",
     "schema_gate",
     "self_test",
     "validate_harness",
@@ -1249,6 +1251,12 @@ def audit_skill(root: Path) -> dict[str, Any]:
             python_tools,
             codebase=infer_codebase(root) or infer_codebase(grade_root),
         ),
+        "teaching_plan": build_teaching_plan(
+            root,
+            Path(inventory["linked_flow"]).resolve()
+            if inventory.get("linked_flow")
+            else (grade_root if grade.get("verdict") != "NO_FLOW" else None),
+        ),
         "python_standardization": python_tools,
         "tool_vs_intelligence": classification_from_audit(
             {
@@ -1345,6 +1353,7 @@ def render_audit_markdown(report: dict[str, Any]) -> str:
         ]
     )
     lines.extend(render_toolbox_plan_markdown(report.get("toolbox_plan") or []).splitlines())
+    lines.extend(render_teaching_plan_markdown(report.get("teaching_plan") or []).splitlines())
     lines.extend(
         [
             "",

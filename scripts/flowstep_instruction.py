@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from teaching_contracts import list_flow_teaching_rel
 from toolbox_plan import render_toolbox_plan_markdown
 from tool_vs_intelligence import from_flow as classification_from_flow
 from tool_vs_intelligence import render_markdown as render_classification_markdown
@@ -134,7 +135,23 @@ def render_instruction(
         lines.extend(["## Toolbox", ""])
         for tool_id in used:
             lines.append(f"- `{tool_id}` — `flowsteps/tools/{tool_id}/tool.py`")
-        lines.extend(["", "## Milestone index", ""])
+        teaching = list_flow_teaching_rel(skill_dir)
+        lines.extend(
+            [
+                "",
+                "## Teaching contracts",
+                "",
+                "Same rule as tools. These live on the flow, not in `~/.codex/skills`.",
+                "",
+            ]
+        )
+        if teaching:
+            for rel in teaching:
+                lines.append(f"- `{rel}`")
+        else:
+            lines.append("None. Promote skill `references/*.md` into this flow.")
+        lines.append("")
+        lines.extend(["## Milestone index", ""])
     else:
         lines.extend(["## Step index", ""])
     table = render_flowstep_table(flow).splitlines()

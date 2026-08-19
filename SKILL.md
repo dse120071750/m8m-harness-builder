@@ -34,6 +34,7 @@ Read `references/milestone.md` and `references/tool-vs-intelligence.md`.
 | --- | --- |
 | Doctrine, generate, validate, run | This skill (`$m8m-harness-builder`) |
 | Tools (premade Python) | `<repo>/flowsteps/tools/<tool_id>/` |
+| Teaching contracts (instruction, context, rubrics) | `<repo>/flowsteps/flows/<flow_id>/references/` |
 | Milestone chain + which FlowSteps each runs | `<repo>/flowsteps/flows/<flow_id>/` |
 
 ## Invariant
@@ -42,6 +43,7 @@ Read `references/milestone.md` and `references/tool-vs-intelligence.md`.
 Milestone named crop_* / fetch_* / hash_*  = invalid (that is a FlowStep / tool)
 FlowStep without a tool                    = invalid
 Tool living under ~/.codex/skills          = invalid
+Teaching contract living only under ~/.codex/skills = invalid
 This milestone.in != previous milestone.out = invalid
 if_* / loop_* milestone names               = invalid (schema gates, not checkpoints)
 foreach without maxItems                    = invalid
@@ -94,6 +96,7 @@ The markdown always includes:
 - schema control (`next.when` / `foreach`) inferred from output JSON Schema, never from a model
 - one flowchart: `planning/m8m-flowchart.md`
 - toolbox plan on that chart: existing toolbox / promote from a skill script / generate new
+- teaching contracts: skill `references/*.md` promoted to `flowsteps/flows/<id>/references/`
 
 ```powershell
 python scripts/audit_harness.py --target <skill-or-flow-dir>

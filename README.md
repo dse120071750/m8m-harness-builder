@@ -236,9 +236,10 @@ If a skill still has private scripts, that column fills like `fastdl_carousel_do
 this skill ($m8m-harness-builder)        doctrine + audit + driver
 <repo>/flowsteps/tools/<tool_id>/        tools (premade Python)
 <repo>/flowsteps/flows/<flow_id>/        milestones + which FlowSteps they run
+<repo>/flowsteps/flows/<flow_id>/references/   teaching contracts (instruction, context, judge rubrics)
 ```
 
-Do not put product tools in `~/.codex/skills` or `~/.claude/skills`.
+Do not put product tools **or teaching contracts** in `~/.codex/skills` or `~/.claude/skills`. Skill `references/*.md` is promoted onto the flow the same way skill scripts are promoted into `flowsteps/tools/`.
 
 ## Factory
 
