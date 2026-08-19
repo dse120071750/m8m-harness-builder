@@ -143,7 +143,7 @@ Read [references/milestone.md](references/milestone.md) and [references/tool-vs-
 ## Install
 
 ```powershell
-git clone https://github.com/dse120071750/flowstep-harness-builder.git $env:USERPROFILE\.codex\skills\flowstep-harness-builder
+git clone https://github.com/dse120071750/f8f-harness-builder.git $env:USERPROFILE\.codex\skills\flowstep-harness-builder
 pip install -r $env:USERPROFILE\.codex\skills\flowstep-harness-builder\requirements.txt
 ```
 
