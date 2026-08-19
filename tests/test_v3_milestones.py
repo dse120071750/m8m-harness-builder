@@ -107,8 +107,12 @@ class MilestoneTests(unittest.TestCase):
                 intelligence=["assets_bound"],
             )
             text = Path(result["instruction_path"]).read_text(encoding="utf-8")
-            self.assertIn("flowchart LR", text)
+            self.assertIn("planning/m8m-flowchart.md", text)
             self.assertIn("`hash_bind`", text)
+            chart = Path(result["flowchart_path"]).read_text(encoding="utf-8")
+            self.assertIn("```mermaid", chart)
+            self.assertIn("flowchart TD", chart)
+            self.assertIn("source_ready", chart)
             self.assertIn("### `source_ready`", text)
             flow = load_flow(Path(result["harness_dir"]))
             self.assertTrue(flow.get("_v3"))

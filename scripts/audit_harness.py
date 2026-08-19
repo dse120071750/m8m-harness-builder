@@ -26,6 +26,7 @@ from flowstep_runtime import (
     utc_now,
 )
 from flowstep_tools import infer_codebase, tools_root, validate_library_tool
+from m8m_flowchart import write_flowchart
 from tool_vs_intelligence import from_audit as classification_from_audit
 from tool_vs_intelligence import render_markdown as render_classification_markdown
 
@@ -50,6 +51,7 @@ DRIVER_STEMS = {
     "run",
     "run_flow",
     "run_flow_sequence",
+    "m8m_flowchart",
     "schema_gate",
     "self_test",
     "validate_harness",
@@ -1326,16 +1328,12 @@ def render_audit_markdown(report: dict[str, Any]) -> str:
         lines.append(
             f"| `{item['id']}` | {item['kind']} | `{item['class']}` | `{item['path']}` |"
         )
-    lines.extend(["", "## Proposed milestone split", ""])
-    ids = [item["id"] for item in report.get("proposed_milestones") or []]
-    lines.extend(["```mermaid", "flowchart LR", "    request[request]"])
-    if ids:
-        lines.append(f"    request --> {ids[0]}")
-    for left, right in zip(ids, ids[1:]):
-        lines.append(f"    {left} --> {right}")
     lines.extend(
         [
-            "```",
+            "",
+            "## Proposed milestone split",
+            "",
+            "The M8M flowchart (gates and foreach) is `planning/m8m-flowchart.md`.",
             "",
             "| # | Milestone | Intelligence | Python tools | Output contract | Human inspects |",
             "| ---: | --- | --- | --- | --- | --- |",
@@ -1437,6 +1435,14 @@ def default_report_path(root: Path) -> Path:
 def write_audit_markdown(report: dict[str, Any], path: Path) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(render_audit_markdown(report), encoding="utf-8", newline="\n")
+    skill = report.get("audited_skill") if isinstance(report.get("audited_skill"), dict) else {}
+    write_flowchart(
+        path.parent.parent,
+        report.get("proposed_milestones") or [],
+        title=str(skill.get("name") or path.parent.parent.name),
+        flow_id=str((report.get("grade") or {}).get("flow_id") or ""),
+        source="audit",
+    )
     return path
 
 

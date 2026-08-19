@@ -21,6 +21,7 @@ from flowstep_runtime import (
     step_class_hint,
 )
 from flowstep_tools import tools_root
+from m8m_flowchart import write_flowchart
 from tool_vs_intelligence import from_audit as classification_from_audit
 from tool_vs_intelligence import from_flow as classification_from_flow
 from tool_vs_intelligence import render_markdown as render_classification_markdown
@@ -421,6 +422,14 @@ def generate_v3_flow(
     loaded = load_flow(harness, flow_path)
     instruction = write_instruction(harness, loaded)
     created.append(str(instruction))
+    chart = write_flowchart(
+        harness,
+        loaded.get("steps") or items,
+        title=flow_id,
+        flow_id=flow_id,
+        source="generate",
+    )
+    created.append(str(chart))
     table = classification_from_flow(loaded)
     table_path = harness / "planning" / "tool-vs-intelligence.json"
     table_path.parent.mkdir(parents=True, exist_ok=True)
@@ -435,6 +444,7 @@ def generate_v3_flow(
         "milestones": milestones,
         "tools": sorted({tool for item in items for tool in item["tools"]}),
         "instruction_path": str(instruction),
+        "flowchart_path": str(chart),
         "tool_vs_intelligence": table,
         "tool_vs_intelligence_path": str(table_path),
         "written": created,

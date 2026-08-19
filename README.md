@@ -162,7 +162,7 @@ Five milestones in `flows/m8m_build_v1.yaml`:
 python scripts/run_m8m.py --target <skill-or-flow-dir> --codebase <repo>
 ```
 
-Writes the audit, copies seed **tools** into the project, generates the milestone chain (each input schema is the previous output; FlowSteps listed per milestone), validates, and ships `<repo>/.agents/skills/<name>/SKILL.md`.
+Writes the audit, writes **one** flowchart (`planning/m8m-flowchart.md`: milestones, schema if/else, foreach), copies seed **tools** into the project, generates the milestone chain (each input schema is the previous output; FlowSteps listed per milestone), rewrites that same flowchart from the flow YAML, validates, and ships `<repo>/.agents/skills/<name>/SKILL.md`.
 
 ```powershell
 python scripts/audit_harness.py --target <skill-or-flow-dir>

@@ -67,5 +67,9 @@ ids, and `foreach` from a previous array that already declares
 `maxItems`. Generate writes the gate schemas. The model does not approve
 the branch.
 
+The one chart is `planning/m8m-flowchart.md` (mermaid + gate table +
+foreach table). Audit and generate both write that file. It is not
+embedded in the audit report or the instruction.
+
 Forbidden: `if_*` / `loop_*` milestone ids, unbounded while, intelligence
 choosing `then`, “repeat until it looks good”.

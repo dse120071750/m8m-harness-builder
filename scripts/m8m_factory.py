@@ -8,6 +8,7 @@ from typing import Any
 from audit_harness import audit_skill, render_audit_markdown
 from flowstep_runtime import FLOW_ID_RE, FlowError, utc_now, write_json
 from generate_harness import generate_from_audit
+from m8m_flowchart import write_flowchart
 from validate_harness import validate_harness
 
 
@@ -36,11 +37,26 @@ def run_factory(
     audit_md = planning / "flowstep-audit.md"
     write_json(audit_json, audit)
     audit_md.write_text(render_audit_markdown(audit), encoding="utf-8", newline="\n")
+    skill = audit.get("audited_skill") if isinstance(audit.get("audited_skill"), dict) else {}
+    write_flowchart(
+        planning.parent,
+        audit.get("proposed_milestones") or [],
+        title=str(skill.get("name") or name),
+        flow_id=fid,
+        source="audit",
+    )
     target_planning = target / "planning"
     target_planning.mkdir(parents=True, exist_ok=True)
     write_json(target_planning / "flowstep-audit.json", audit)
     (target_planning / "flowstep-audit.md").write_text(
         render_audit_markdown(audit), encoding="utf-8", newline="\n"
+    )
+    write_flowchart(
+        target,
+        audit.get("proposed_milestones") or [],
+        title=str(skill.get("name") or name),
+        flow_id=fid,
+        source="audit",
     )
 
     generated = generate_from_audit(

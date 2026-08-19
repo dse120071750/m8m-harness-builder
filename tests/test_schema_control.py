@@ -7,7 +7,8 @@ from pathlib import Path
 
 import support  # noqa: F401
 
-from audit_harness import audit_skill, infer_schema_control, render_audit_markdown
+from audit_harness import audit_skill, infer_schema_control, render_audit_markdown, write_audit_markdown
+from m8m_flowchart import render_mermaid, write_flowchart
 from flowstep_runtime import FlowError, load_flow, read_json, step_class_hint
 from generate_harness import generate_from_audit, generate_tool, generate_v3_flow
 from run_flow import advance
@@ -429,6 +430,84 @@ class SkillWriterControlTests(unittest.TestCase):
             self.assertIn("join:", flow)
             gate = json.loads((harness / "schemas" / "gates" / "kind_url.schema.json").read_text(encoding="utf-8"))
             self.assertEqual(gate["properties"]["kind"]["const"], "url")
+            chart = (harness / "planning" / "m8m-flowchart.md").read_text(encoding="utf-8")
+            self.assertIn("```mermaid", chart)
+            self.assertIn("kind=url", chart)
+            self.assertIn("url_ready", chart)
+            self.assertIn("else BLOCKED", chart)
+            self.assertIn("## Loops (foreach)", chart)
+
+
+class FlowchartMarkdownTests(unittest.TestCase):
+    def test_chart_draws_gate_and_foreach(self) -> None:
+        items = [
+            {
+                "id": "kind_bound",
+                "intelligence": "none",
+                "tools": ["hash_bind"],
+                "next": [
+                    {
+                        "when": "schemas/gates/kind_url.schema.json",
+                        "then": "url_ready",
+                        "schema": {"required": ["kind"], "properties": {"kind": {"const": "url"}}},
+                    },
+                    {
+                        "when": "schemas/gates/kind_file.schema.json",
+                        "then": "file_ready",
+                        "schema": {"required": ["kind"], "properties": {"kind": {"const": "file"}}},
+                    },
+                ],
+                "else": "BLOCKED",
+            },
+            {"id": "url_ready", "intelligence": "none", "tools": ["hash_bind"]},
+            {"id": "file_ready", "intelligence": "none", "tools": ["hash_bind"]},
+            {"id": "source_ready", "intelligence": "none", "tools": ["hash_bind"], "join": ["url_ready", "file_ready"]},
+            {
+                "id": "pages_bound",
+                "intelligence": "none",
+                "tools": ["hash_bind"],
+                "foreach": {
+                    "path": "pages",
+                    "item_schema": "schemas/page_v1.json",
+                    "tools": ["hash_bind"],
+                    "max_items": 7,
+                    "collect": "pages",
+                },
+            },
+            {"id": "release_packaged", "intelligence": "none", "tools": ["hash_bind"]},
+        ]
+        mermaid = render_mermaid(items)
+        self.assertIn("flowchart TD", mermaid)
+        self.assertIn('kind_bound -->|"kind=url"| url_ready', mermaid)
+        self.assertIn('kind_bound -->|"kind=file"| file_ready', mermaid)
+        self.assertIn("else BLOCKED", mermaid)
+        self.assertIn('url_ready -->|"join"| source_ready', mermaid)
+        self.assertIn("foreach pages max=7", mermaid)
+        self.assertIn('pages_bound -->|"each pages hash_bind"| pages_bound', mermaid)
+        self.assertIn("collect pages", mermaid)
+        self.assertNotIn("url_ready --> file_ready", mermaid)
+
+    def test_audit_writes_single_flowchart_md(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "toy"
+            root.mkdir()
+            (root / "SKILL.md").write_text(
+                "---\nname: toy\ndescription: Bind a file.\n---\n\n# toy\n",
+                encoding="utf-8",
+            )
+            (root / "scripts").mkdir()
+            (root / "scripts" / "hash_bind.py").write_text("def run(x):\n    return x\n", encoding="utf-8")
+            report = audit_skill(root)
+            path = write_audit_markdown(report, root / "planning" / "flowstep-audit.md")
+            chart = root / "planning" / "m8m-flowchart.md"
+            self.assertTrue(chart.is_file())
+            self.assertEqual(path.parent, chart.parent)
+            text = chart.read_text(encoding="utf-8")
+            self.assertIn("# M8M flowchart:", text)
+            self.assertIn("```mermaid", text)
+            self.assertIn("## Loops (foreach)", text)
+            self.assertIn("## Gates (if / else)", text)
+            self.assertNotIn("```mermaid", (root / "planning" / "flowstep-audit.md").read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

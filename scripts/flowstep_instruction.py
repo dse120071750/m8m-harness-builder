@@ -113,14 +113,14 @@ def render_instruction(
         "",
     ]
     if flow.get("_v3"):
-        lines.extend(["## Milestones", "", "```mermaid", "flowchart LR"])
-        ids = [step["id"] for step in flow["steps"]]
-        lines.append("    request[request]")
-        if ids:
-            lines.append(f"    request --> {ids[0]}")
-        for left, right in zip(ids, ids[1:]):
-            lines.append(f"    {left} --> {right}")
-        lines.extend(["```", ""])
+        lines.extend(
+            [
+                "## Milestones",
+                "",
+                "The M8M flowchart (gates and foreach) is `planning/m8m-flowchart.md`.",
+                "",
+            ]
+        )
         used = []
         for step in flow["steps"]:
             for tool_id in step.get("tools") or []:

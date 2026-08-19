@@ -95,6 +95,9 @@ class FactoryTests(unittest.TestCase):
             self.assertIn(result["status"], {"PASS", "FINDINGS"})
             self.assertTrue(Path(result["audit_json"]).is_file())
             self.assertTrue(Path(result["product_skill"]).is_file())
+            chart = Path(result["milestones"]["flow_generated"]["harness_dir"]) / "planning" / "m8m-flowchart.md"
+            self.assertTrue(chart.is_file())
+            self.assertIn("```mermaid", chart.read_text(encoding="utf-8"))
             skill_md = Path(result["product_skill"]).read_text(encoding="utf-8")
             self.assertIn("flowsteps/tools", skill_md)
             self.assertIn("asset", skill_md)

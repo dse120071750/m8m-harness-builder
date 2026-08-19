@@ -64,11 +64,12 @@ python scripts/run_m8m.py --target <skill-or-flow-dir> --codebase <repo>
 
 That:
 
-1. Writes `planning/flowstep-audit.json` (and `.md`).
+1. Writes `planning/flowstep-audit.json` (and `.md`) and **one** chart:
+   `planning/m8m-flowchart.md` (milestones, if/else gates, foreach).
 2. Installs premade **tools** from `seeds/` into `<repo>/flowsteps/tools/`.
 3. Generates the milestone chain (next input schema = previous output
    schema; FlowSteps listed inside each milestone; last milestone
-   `asset` path+sha256).
+   `asset` path+sha256) and rewrites the same flowchart from the flow YAML.
 4. Validates the harness.
 5. Ships `<repo>/.agents/skills/<name>/SKILL.md`.
 
@@ -90,6 +91,7 @@ The markdown always includes:
 - input and output schema of each **milestone** (next.in = previous.out)
 - tool vs intelligence table (`tool_vs_intelligence_table_v1`)
 - schema control (`next.when` / `foreach`) inferred from output JSON Schema, never from a model
+- one flowchart: `planning/m8m-flowchart.md`
 
 ```powershell
 python scripts/audit_harness.py --target <skill-or-flow-dir>
@@ -111,6 +113,7 @@ python scripts/audit_harness.py --codebase <repo> --flow-id <flow_id>
 ```text
 Outcome:
 Audit: planning/flowstep-audit.md
+Chart: planning/m8m-flowchart.md
 Tools: <repo>/flowsteps/tools/
 Flow: <repo>/flowsteps/flows/<flow_id>
 Instruction: planning/flowstep-instruction.md
@@ -118,5 +121,6 @@ Milestones:
   - <id>: intelligence|none | FlowSteps (tools) | PENDING|DONE
 ```
 
-After an audit, return the audit markdown. After generate, return the
-instruction markdown.
+After an audit, return the flowchart markdown (`planning/m8m-flowchart.md`)
+and the audit. After generate, return the same flowchart path (rewritten
+from the flow) and the instruction markdown.
