@@ -111,8 +111,8 @@ def run_foreach(
         raise FlowError(f"{step['id']}: foreach.item_schema is required")
     item_schema_path = skill_dir / str(item_schema_rel)
     tools = spec.get("tools") or []
-    if not isinstance(tools, list) or not tools:
-        raise FlowError(f"{step['id']}: foreach.tools must be a non-empty tool list")
+    if not isinstance(tools, list):
+        tools = []
     collect = str(spec.get("collect") or path)
     source = input_data
     if isinstance(input_data, dict) and len(input_data) == 1:
@@ -125,7 +125,7 @@ def run_foreach(
     if len(items) > max_items:
         raise FlowError(f"{step['id']}: foreach {path} length {len(items)} exceeds max_items {max_items}")
     codebase = infer_codebase(skill_dir)
-    if codebase is None:
+    if tools and codebase is None:
         raise FlowError(f"{step['id']}: foreach requires a project toolbox at flowsteps/tools")
     collected: list[Any] = []
     for index, item in enumerate(items):

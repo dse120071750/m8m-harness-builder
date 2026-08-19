@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from flowstep_runtime import utc_now
+from flowstep_runtime import normalize_flowsteps, utc_now
 from toolbox_plan import render_toolbox_plan_markdown
 
 
@@ -40,6 +40,10 @@ def _nodes(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "join": [str(src) for src in join] if isinstance(join, list) else None,
                 "output_contract": str(item.get("output_contract") or ""),
                 "asset_kind": str(((item.get("asset") or {}).get("kind") if isinstance(item.get("asset"), dict) else "") or ""),
+                "flowsteps": normalize_flowsteps(
+                    flowsteps=item.get("flowsteps"),
+                    tools=item.get("tools"),
+                )[0],
             }
         )
     return nodes
@@ -164,6 +168,7 @@ def render_flowchart(
         "",
         "One chart. Milestone to milestone. Each node is a required asset",
         "(file, image, json proof, or data). Missing it is BLOCKED.",
+        "FlowSteps inside a node are a guide (one preferred tool each), not a compulsory path.",
         "If/else and foreach are JSON Schema, not semantic approval.",
         "",
         f"- flow_id: `{flow_id or title}`",
@@ -205,6 +210,28 @@ def render_flowchart(
         lines.append(
             f"| `{item['id']}` | `{asset}` | `{item['intelligence']}` | {tools} | {control} |"
         )
+    lines.extend(
+        [
+            "",
+            "## FlowSteps (guide)",
+            "",
+            "Sequence inside each milestone. Prefer the named tool. Optional.",
+            "If it fails, recover like a normal agent. The milestone asset is still compulsory.",
+            "",
+            "| Milestone | # | FlowStep | Preferred tool |",
+            "| --- | ---: | --- | --- |",
+        ]
+    )
+    guide_rows = 0
+    for item in nodes:
+        for index, fs in enumerate(item.get("flowsteps") or [], start=1):
+            guide_rows += 1
+            lines.append(
+                f"| `{item['id']}` | {index} | `{fs.get('id') or fs.get('tool')}` | "
+                f"`{fs.get('tool') or '—'}` |"
+            )
+    if not guide_rows:
+        lines.append("| (none) | | | |")
     lines.extend(["", "## Gates (if / else)", ""])
     gate_rows = [item for item in nodes if item["next"]]
     if not gate_rows:

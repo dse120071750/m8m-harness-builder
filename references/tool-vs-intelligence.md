@@ -20,13 +20,14 @@ This split is the one used by the highest-star agent/workflow systems:
 | [OpenAI Agents SDK](https://github.com/openai/openai-agents-python) | ~19–27k | **Function tools** (Pydantic-validated Python) vs **agents-as-tools** (intelligence callable without handing off the flow) |
 | [Anthropic, Building effective agents](https://www.anthropic.com/engineering/building-effective-agents) | — | **Workflow** = predefined code path; **agent** = model directs the path. Tools are an agent-computer interface (ACI), designed like HCI |
 
-They agree on three rules we adopt:
+They agree on three rules we adopt at the **milestone** grain:
 
-1. Prefer a **workflow** (our driver) over an open agent loop.
-2. A **tool** is a prewritten, schema-bound function. The model does not
-   invent it at runtime.
-3. **Intelligence** is still wrapped as a tool so I/O stays typed
-   (OpenAI “agents as tools”; Anthropic evaluator-optimizer).
+1. Prefer a **workflow of checkpoints** (our driver) over an open agent
+   loop *between* milestones.
+2. A **tool** is a prewritten, schema-bound function the FlowStep prefers.
+   The builder should develop it (fetch, MCP, crop). It is not compulsory.
+3. If that tool fails, recover **like a normal agent** still aimed at the
+   milestone asset. Intelligence does not pick the next **milestone**.
 
 Read this file once per new flow. Do not restate the catalog in `SKILL.md`.
 
@@ -47,7 +48,8 @@ If any of 1–4 fail, it is **intelligence**. It still gets
 It must not `return draft`.
 
 A third thing is **not a step class**: **orchestration**. The driver already
-owns order. Intelligence must not pick the next FlowStep.
+owns **milestone** order. Intelligence must not pick the next milestone.
+Inside a milestone, FlowStep order is a table guide.
 
 ## What a tool is
 
@@ -61,8 +63,9 @@ A tool is a **function with a contract** (LangChain `@tool`, OpenAI
 - documented like a junior-dev API (Anthropic ACI / poka-yoke: obvious
   parameters, absolute paths, hard-to-misuse enums)
 
-The agent **calls** the tool. The agent does **not** write SQL, crop math,
-or a Playwright script in the session.
+The FlowStep **prefers** the tool. If the tool fails, the session may
+find a way (like a normal skill). Prefer fixing or adding
+`flowsteps/tools/<id>/` rather than inventing a one-off every run.
 
 ### Tool catalog (expand here, not in chat)
 
@@ -131,17 +134,16 @@ when a judge later reads them.
 When unsure, ship a **tool** first. Anthropic: start with the simplest
 path; add a model only when a fixture test cannot express the work.
 
-## Forbidden (all of the above systems reject this)
+## Forbidden (milestone harness)
 
 - Generating product tools under `~/.codex/skills` or `~/.claude/skills`
-- Marking fetch, crop, hash, render, package, or schema-validate as
-  `intelligence`
-- The agent writing a one-off SQL/crop/Playwright script “just for this
-  run” (that is inventing a tool at runtime)
-- `class: tool` with `model != none`
-- Intelligence that `return draft`s without validation
-- Letting intelligence choose the next FlowStep (that is an open agent;
-  we run a workflow)
+- Skipping the milestone asset because a tool failed or a model “approved”
+- Marking fetch, crop, hash, render, package, or schema-validate as the
+  *first* move of a FlowStep when a repo tool exists
+- Intelligence choosing the next **milestone** (schema gates own that)
+
+Not forbidden: recovering like a normal agent **inside** a milestone after
+the preferred tool failed, as long as the asset schema still PASSes.
 
 ## How the highest-star systems strengthen us
 

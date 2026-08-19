@@ -45,6 +45,18 @@
           "id": { "type": "string", "minLength": 1 },
           "intelligence": { "enum": ["none", "completion", "image", "judge"] },
           "tools": { "type": "array", "items": { "type": "string" } },
+          "flowsteps": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["id"],
+              "properties": {
+                "id": { "type": "string", "minLength": 1 },
+                "tool": { "type": "string" }
+              }
+            }
+          },
+          "asset": { "type": "object" },
           "output_contract": { "type": "string", "minLength": 1 },
           "inputs": { "type": "object" },
           "input_schema": { "type": "object" },

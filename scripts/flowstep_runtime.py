@@ -48,6 +48,48 @@ MILESTONE_SUFFIXES = (
     "_checked",
 )
 STEP_ID_RE = re.compile(r"^[a-z][a-z0-9_]*$")
+
+
+def normalize_flowsteps(
+    *,
+    flowsteps: Any = None,
+    tools: Any = None,
+) -> tuple[list[dict[str, str]], list[str]]:
+    """Guide sequence inside a milestone. Each FlowStep prefers at most one tool."""
+    steps: list[dict[str, str]] = []
+    if isinstance(flowsteps, list) and flowsteps:
+        for index, raw in enumerate(flowsteps):
+            if isinstance(raw, str) and raw.strip():
+                fid = raw.strip()
+                tool = fid
+            elif isinstance(raw, dict):
+                tool = str(raw.get("tool") or "").strip()
+                fid = str(raw.get("id") or tool or f"step_{index + 1}").strip()
+            else:
+                continue
+            if not fid:
+                continue
+            entry = {"id": fid}
+            if tool:
+                entry["tool"] = tool
+            steps.append(entry)
+    elif isinstance(tools, list):
+        for tool in tools:
+            if isinstance(tool, str) and tool.strip():
+                steps.append({"id": tool.strip(), "tool": tool.strip()})
+    tool_ids: list[str] = []
+    for item in steps:
+        tool = item.get("tool") or ""
+        if tool and tool not in tool_ids:
+            tool_ids.append(tool)
+    return steps, tool_ids
+
+
+def recovery_model(step: dict[str, Any]) -> str:
+    model = str(step.get("model") or step.get("intelligence") or "none")
+    if model in {None, "", "none"}:
+        return "completion"
+    return model
 FLOW_ID_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 FLOWSTEPS_DIRNAME = "flowsteps"
 NEED_MODEL = "NEED_MODEL"
@@ -246,14 +288,10 @@ def _load_flow_v3(skill_dir: Path, path: Path, raw: dict[str, Any]) -> dict[str,
         intel = item.get("intelligence") or "none"
         if intel not in ("none", *MODELS[1:]):
             raise FlowError(f"{step_id}.intelligence must be none|completion|image|judge")
-        tools = item.get("tools")
-        if not isinstance(tools, list) or not tools or not all(isinstance(t, str) and t for t in tools):
-            raise FlowError(f"{step_id}: tools must be a non-empty list of toolbox ids")
-        on_tool_fail = str(item.get("on_tool_fail") or "BLOCKED")
+        flowsteps, tools = normalize_flowsteps(flowsteps=item.get("flowsteps"), tools=item.get("tools"))
+        on_tool_fail = str(item.get("on_tool_fail") or "need_model")
         if on_tool_fail not in {"BLOCKED", "need_model"}:
             raise FlowError(f"{step_id}.on_tool_fail must be BLOCKED or need_model")
-        if on_tool_fail == "need_model" and intel == "none":
-            raise FlowError(f"{step_id}: on_tool_fail need_model requires intelligence completion|image|judge")
         max_model_attempts = item.get("max_model_attempts")
         if max_model_attempts is None:
             max_model_attempts = (item.get("params") or {}).get("max_model_attempts")
@@ -289,6 +327,8 @@ def _load_flow_v3(skill_dir: Path, path: Path, raw: dict[str, Any]) -> dict[str,
             foreach.setdefault("item_schema", f"schemas/{step_id}_item_v1.json")
             foreach.setdefault("tools", list(tools))
             foreach.setdefault("max_items", 8)
+            if not isinstance(foreach.get("tools"), list):
+                foreach["tools"] = []
         join = item.get("join")
         if join is not None and (not isinstance(join, list) or not join):
             raise FlowError(f"{step_id}: join must be a non-empty list of milestone ids")
@@ -304,6 +344,7 @@ def _load_flow_v3(skill_dir: Path, path: Path, raw: dict[str, Any]) -> dict[str,
             "model": "none" if intel == "none" else intel,
             "intelligence": intel,
             "tools": list(tools),
+            "flowsteps": flowsteps,
             "inputs": inputs,
             "output_contract": item["output_contract"],
             "input_schema": item.get("input_schema", f"milestones/{step_id}/input.schema.json"),
@@ -318,8 +359,9 @@ def _load_flow_v3(skill_dir: Path, path: Path, raw: dict[str, Any]) -> dict[str,
             "join": list(join) if isinstance(join, list) else None,
             "asset": {"kind": asset_kind} if asset_kind else dict(asset),
         }
+        if intel != "none" or on_tool_fail == "need_model":
+            step["draft_schema"] = item.get("draft_schema") or f"milestones/{step_id}/draft.schema.json"
         if intel != "none":
-            step["draft_schema"] = item["draft_schema"]
             step["model_justification"] = item.get("model_justification")
         steps.append(step)
         previous = step

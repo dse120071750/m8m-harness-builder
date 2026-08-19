@@ -9,30 +9,33 @@ description: >
 license: MIT
 metadata:
   author: dse120071750
-  version: "1.3"
+  version: "1.4"
 ---
 
 # M8M harness builder
 
-This skill **writes** a split. FlowSteps and tools may be sketches.
-**Milestones are the harness.**
+This skill **writes** a split. **Milestones are the harness.**
+FlowSteps are a guide, like a normal skill.
 
 ```text
 identify milestones
-  → list FlowSteps (small goals) inside each
-  → list tools (existing / promote from a script / generate new)
-  → write one table + one flowchart
+  → list FlowSteps inside each (atomic; prefer ONE tool)
+  → develop that tool (existing / promote / generate-new stub)
+  → write one FlowStep table + one milestone flowchart
   → scaffold flow YAML and tool stubs
 ```
 
 Three words:
 
 ```text
-Milestone  = harness checkpoint. previous.out is this.in.
-             Must produce a declared asset (file, image, json proof, data).
-             If it is not produced: BLOCK. Next milestone does not start.
-FlowStep   = small goal inside that checkpoint. May be a stub.
-Tool       = Python that does the goal, at <repo>/flowsteps/tools/<id>/.
+Milestone  = compulsory harness. previous.out is this.in.
+             Required asset (file, image, json proof, data) or BLOCK.
+FlowStep   = atomic goal inside that checkpoint.
+             Prefers one tool. Tool is optional.
+             Table order is the guide. If the tool fails, recover like
+             a normal agent. Still must produce the milestone asset.
+Tool       = Python at <repo>/flowsteps/tools/<id>/.
+             Builder should develop it (fetch, MCP, crop, hash, …).
              Generate-new is a successful sketch.
 ```
 
@@ -63,8 +66,12 @@ A stub tool or a generate-new row is a successful sketch, not a failed
 build. The **milestone output schema is not a sketch**: it names the
 asset that must exist. Runtime BLOCKs if that schema does not PASS.
 
-`validate_harness.py` is an optional follow-up for filling in tools.
-`run_flow.py` is the harness: no asset → BLOCK.
+Inside a milestone, follow the FlowStep table as a **guide**: try the
+preferred tool first. If it fails, find a way like a normal agent.
+The flowchart is only the milestone canvas.
+
+`validate_harness.py` is optional. `run_flow.py` is the harness:
+tool fail → agent recovery; no asset → BLOCK.
 
 ## Response
 

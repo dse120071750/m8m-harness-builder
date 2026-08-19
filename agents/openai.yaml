@@ -1,6 +1,6 @@
 interface:
   display_name: "M8M"
   short_description: "Write milestones, FlowSteps, tools, one table, one flowchart."
-  default_prompt: "Use $m8m-harness-builder as a writer. Identify milestones, FlowSteps, and tools. Each milestone is a harness checkpoint with a required asset (file, image, json proof, data); missing it is BLOCKED. FlowSteps/tools may be generate-new stubs. Run scripts/audit_harness.py --target <skill> and return planning/m8m-flowchart.md plus the toolbox table. Scaffold stubs if asked. Factory PASS is the chart/table/stubs, not validate."
+  default_prompt: "Use $m8m-harness-builder as a writer. Identify milestones (compulsory harness + required asset), then FlowSteps inside each (atomic, prefer ONE tool, table order is a guide). Tools are optional; if a tool fails, recover like a normal agent. Missing the milestone asset is BLOCKED. Return planning/m8m-flowchart.md plus the FlowStep table. Generate-new stubs are a successful sketch."
 policy:
   allow_implicit_invocation: true

@@ -93,7 +93,8 @@ def render_instruction(
         "A milestone input schema is the previous milestone output schema.",
         "Each milestone is a harness checkpoint: a required asset (file, image, json proof, or data).",
         "Mark DONE when that asset is produced (output schema PASS). Missing it is BLOCKED.",
-        "FlowSteps listed on a milestone run tools. Tools may be stubs until filled in.",
+        "FlowSteps inside a milestone are a guide: prefer one tool each, in table order.",
+        "The tool is optional. If it fails, recover like a normal agent. Do not skip the asset.",
         "",
         f"- harness: `{skill_dir}`",
         f"- flow_id: `{flow['flow_id']}`",
@@ -177,6 +178,14 @@ def render_instruction(
             f"- intelligence: `{step.get('intelligence', step.get('model', 'none'))}`",
             f"- assemble: `{step['handler']}`",
             f"- toolbox: {', '.join(f'`{t}`' for t in (step.get('tools') or [])) or 'none'}",
+            f"- flowsteps (guide): "
+            + (
+                ", ".join(
+                    f"`{fs.get('id')}`→`{fs.get('tool') or '—'}`"
+                    for fs in (step.get("flowsteps") or [])
+                )
+                or "none"
+            ),
             f"- test: `{step.get('test', f'steps/{step['id']}/tests/test_tool.py')}`",
             f"- model: `{step['model']}`",
             f"- model_justification: {step.get('model_justification') or 'none'}",

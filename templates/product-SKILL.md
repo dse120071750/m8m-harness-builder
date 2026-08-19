@@ -7,7 +7,8 @@ description: Product skill scaffolded by M8M. Milestones, FlowSteps, and tools l
 
 Written by `$m8m-harness-builder`. Each milestone is a harness checkpoint
 with a required asset (file, image, json proof, or data). Missing it is
-BLOCKED.
+BLOCKED. FlowSteps inside are a guide: prefer one tool, recover like a
+normal agent if it fails.
 
 - flow: `<repo>/flowsteps/flows/__FLOW_ID__/`
 - chart: `<repo>/flowsteps/flows/__FLOW_ID__/planning/m8m-flowchart.md`

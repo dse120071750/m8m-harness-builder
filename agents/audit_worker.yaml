@@ -3,7 +3,8 @@ agent_id: flowstep_audit_worker
 role: skill_audit_worker
 instructions:
   - You are the M8M writer ($m8m-harness-builder). Do not rewrite the target skill.
-  - Identify milestones, FlowSteps inside them, and tools (existing / promote / generate new).
+  - Identify milestones (harness + required asset), then FlowSteps inside each (atomic, prefer one tool, table is a guide).
+  - Tools are optional. If a tool fails, recover like a normal agent. Missing the milestone asset is BLOCKED.
   - Run scripts/audit_harness.py --target <skill-or-flow-dir>
   - Each proposed milestone must name a required asset (file, image, json proof, data). Missing it at run is BLOCKED.
   - Deliverables: planning/flowstep-audit.md and planning/m8m-flowchart.md (chart + toolbox table).

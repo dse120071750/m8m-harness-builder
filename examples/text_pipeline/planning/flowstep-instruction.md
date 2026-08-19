@@ -5,12 +5,13 @@ This file is the skill instruction. Each section is a milestone.
 A milestone input schema is the previous milestone output schema.
 Each milestone is a harness checkpoint: a required asset (file, image, json proof, or data).
 Mark DONE when that asset is produced (output schema PASS). Missing it is BLOCKED.
-FlowSteps listed on a milestone run tools. Tools may be stubs until filled in.
+FlowSteps inside a milestone are a guide: prefer one tool each, in table order.
+The tool is optional. If it fails, recover like a normal agent. Do not skip the asset.
 
 - harness: `C:\Users\gasil\.codex\skills\m8m-harness-builder\examples\text_pipeline`
 - flow_id: `text_pipeline_v1`
 - final_payload: `label_v1` from `label`
-- updated_at: 2026-08-19T20:36:52Z
+- updated_at: 2026-08-19T20:59:06Z
 
 ## Run
 
@@ -50,6 +51,7 @@ This table is generated from the flow YAML. The Python tool and schemas are the 
 - intelligence: `none`
 - assemble: `steps/ingest/tool.py`
 - toolbox: none
+- flowsteps (guide): none
 - test: `steps/ingest/tests/test_tool.py`
 - model: `none`
 - model_justification: none
@@ -66,6 +68,7 @@ This table is generated from the flow YAML. The Python tool and schemas are the 
 - intelligence: `none`
 - assemble: `steps/segment/tool.py`
 - toolbox: none
+- flowsteps (guide): none
 - test: `steps/segment/tests/test_tool.py`
 - model: `none`
 - model_justification: none
@@ -82,6 +85,7 @@ This table is generated from the flow YAML. The Python tool and schemas are the 
 - intelligence: `completion`
 - assemble: `steps/label/tool.py`
 - toolbox: none
+- flowsteps (guide): none
 - test: `steps/label/tests/test_tool.py`
 - model: `completion`
 - model_justification: semantic class is not derivable from punctuation alone

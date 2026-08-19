@@ -4,7 +4,7 @@ A **skill that writes a split**: milestones, FlowSteps, tools, one table, one fl
 
 **Milestones are the harness.** Each one is a person-shaped checkpoint: it must produce a declared asset (file, image, json proof, data). If that asset is not produced, the run **BLOCKs**. The next milestone does not start.
 
-FlowSteps and tools inside a milestone may be sketches (`generate-new` stubs). That is not a factory failure. Do not put the same rigidity on tools that the harness puts on the milestone asset.
+**FlowSteps are a guide**, like a normal skill. Each FlowStep is atomic and prefers **one** tool (the builder should develop it: fetch a table, call MCP, crop, hash). The tool is optional. Follow the table order. If the tool fails, recover like a normal agent. How you get the milestone asset is not a compulsory path.
 
 ```text
 identify milestones
@@ -17,8 +17,8 @@ identify milestones
 | Word | Meaning |
 | --- | --- |
 | **Milestone** | Harness checkpoint. `this.in` is `previous.out`. Required asset, or BLOCK. |
-| **FlowStep** | Small goal inside that checkpoint. May be a stub. |
-| **Tool** | Python at `<repo>/flowsteps/tools/<id>/`. Generate-new is a sketch. |
+| **FlowStep** | Atomic goal inside a milestone. One preferred tool. Table order is a guide. Tool fail → agent. |
+| **Tool** | Python at `<repo>/flowsteps/tools/<id>/`. Optional. Generate-new is a sketch. |
 
 ## Run
 
@@ -60,6 +60,8 @@ flowchart TD
 ```
 
 `asset:file` / `asset:image` / `asset:json` / `asset:data` is the harness policy on that node. No asset → BLOCK.
+
+The **FlowSteps (guide)** table on the same markdown is the sequence inside the node. Prefer that tool. If it fails, find a way. Do not skip the asset.
 
 If/else and foreach are optional YAML on a milestone (`next.when` / `foreach`). They show up on the same chart when the split has them.
 

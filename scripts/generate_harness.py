@@ -19,6 +19,7 @@ from flowstep_runtime import (
     harness_output_schema,
     is_under_home_skills,
     load_flow,
+    normalize_flowsteps,
     resolve_harness_dir,
     step_class_hint,
 )
@@ -249,8 +250,6 @@ def generate_v3_flow(
         milestones = [str(item["id"]) for item in milestone_specs]
     if not milestones:
         raise FlowError("pass at least one --milestone")
-    if not tools and not milestone_specs:
-        raise FlowError("a milestone flow requires --tools (the pre-made toolbox)")
     intel = set(intelligence or [])
     unknown = sorted(intel - set(milestones))
     if unknown:
@@ -263,9 +262,17 @@ def generate_v3_flow(
             notes.append(f"{mid}: name looks like control (if/loop); still drawn as a checkpoint")
         if step_class_hint(mid) == "tool":
             notes.append(f"{mid}: name looks like a tool; still drawn — consider it a FlowStep under a checkpoint")
-    for tool_id in sorted({*(tools or []), *[str(t) for spec in (milestone_specs or []) for t in (spec.get("tools") or [])]}):
-        if not tool_id:
-            continue
+    listed_tools: set[str] = set(tools or [])
+    for spec in milestone_specs or []:
+        for tool_id in spec.get("tools") or []:
+            if tool_id:
+                listed_tools.add(str(tool_id))
+        for raw in spec.get("flowsteps") or []:
+            if isinstance(raw, dict) and raw.get("tool"):
+                listed_tools.add(str(raw["tool"]))
+            elif isinstance(raw, str) and raw:
+                listed_tools.add(raw)
+    for tool_id in sorted(listed_tools):
         tool_result = generate_tool(codebase, tool_id, overwrite=overwrite)
         if not tool_result.get("seeded"):
             notes.append(f"{tool_id}: generate-new stub")
@@ -274,9 +281,10 @@ def generate_v3_flow(
     previous = None
     for index, mid in enumerate(milestones):
         spec = spec_by_id.get(mid) or {}
-        step_tools = list(spec.get("tools") or tools)
-        if not step_tools:
-            step_tools = ["hash_bind"]
+        flowsteps, step_tools = normalize_flowsteps(
+            flowsteps=spec.get("flowsteps"),
+            tools=spec.get("tools") or tools,
+        )
         is_last = index == len(milestones) - 1
         spec_asset = spec.get("asset") if isinstance(spec.get("asset"), dict) else {}
         output_obj, asset_kind = harness_output_schema(
@@ -285,18 +293,22 @@ def generate_v3_flow(
             kind=str(spec_asset.get("kind") or "") or None,
         )
         if asset_kind in {"file", "image"} and "hash_bind" not in step_tools:
-            step_tools.append("hash_bind")
+            notes.append(f"{mid}: file/image asset; table may list hash_bind as a preferred FlowStep")
         intel_value = spec.get("intelligence") or ("completion" if mid in intel else "none")
+        on_tool_fail = spec.get("on_tool_fail") or "need_model"
         item: dict[str, Any] = {
             "id": mid,
             "output_contract": spec.get("output_contract") or f"{mid}_v1",
             "output_schema": f"schemas/{mid}_v1.json",
             "input_schema": f"milestones/{mid}/input.schema.json",
+            "flowsteps": flowsteps,
             "tools": step_tools,
             "intelligence": intel_value,
+            "on_tool_fail": on_tool_fail,
             "handler": f"milestones/{mid}/assemble.py",
             "test": f"milestones/{mid}/tests/test_assemble.py",
             "asset": {"kind": asset_kind},
+            "draft_schema": f"milestones/{mid}/draft.schema.json",
             "_output_schema_object": output_obj,
             "_input_schema_object": spec.get("input_schema_object"),
             "_is_last": is_last,
@@ -311,8 +323,6 @@ def generate_v3_flow(
         if intel_value != "none":
             item["model_justification"] = spec.get("model_justification") or "judgment that is not a typed transform"
             item["draft_schema"] = f"milestones/{mid}/draft.schema.json"
-        if spec.get("on_tool_fail"):
-            item["on_tool_fail"] = spec["on_tool_fail"]
         if spec.get("max_model_attempts"):
             item["max_model_attempts"] = spec["max_model_attempts"]
         if spec.get("next"):
@@ -386,27 +396,13 @@ def generate_v3_flow(
         input_path = harness / "milestones" / mid / "input.schema.json"
         if _write_json(input_path, input_obj, overwrite=overwrite):
             created.append(str(input_path))
-        if item["intelligence"] != "none" and item.get("on_tool_fail") != "need_model":
-            intel_gate = (
-                "if draft is None:\n"
-                "        return {\n"
-                '            "_flowstep": "NEED_MODEL",\n'
-                f'            "model": {json.dumps(item["intelligence"])},\n'
-                '            "model_request": {\n'
-                f'                "milestone": {json.dumps(mid)},\n'
-                '                "instruction": "Write a draft that the toolbox can admit into the output schema.",\n'
-                "            },\n"
-                "        }\n"
-            )
-        else:
-            intel_gate = "del kwargs\n"
         mapping = {
             "STEP_ID": mid,
             "TOOLS_JSON": json.dumps(item["tools"]),
+            "FLOWSTEPS_JSON": json.dumps(item.get("flowsteps") or []),
             "INTELLIGENCE": item["intelligence"],
             "IS_LAST": "True" if item["_is_last"] else "False",
             "ASSET_KIND": item.get("_asset_kind") or "file",
-            "INTEL_GATE": intel_gate,
         }
         assemble = harness / "milestones" / mid / "assemble.py"
         if _write_text(assemble, _render("milestone/assemble.py", mapping), overwrite=overwrite):
@@ -414,10 +410,15 @@ def generate_v3_flow(
         test_path = harness / "milestones" / mid / "tests" / "test_assemble.py"
         if _write_text(test_path, _render("milestone/test_assemble.py", mapping), overwrite=overwrite):
             created.append(str(test_path))
-        if item["intelligence"] != "none":
-            draft = harness / "milestones" / mid / "draft.schema.json"
-            if _write_text(draft, _render("step/draft.schema.json", {"STEP_ID": mid}), overwrite=overwrite):
-                created.append(str(draft))
+        draft = harness / "milestones" / mid / "draft.schema.json"
+        open_draft = {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "$id": f"{mid}.draft.schema.json",
+            "type": "object",
+            "additionalProperties": True,
+        }
+        if _write_json(draft, open_draft, overwrite=overwrite):
+            created.append(str(draft))
         for rel, schema_obj in (item.get("_gate_schemas") or {}).items():
             if isinstance(schema_obj, dict) and _write_json(harness / rel, schema_obj, overwrite=overwrite):
                 created.append(str(harness / rel))
@@ -559,8 +560,6 @@ def generate_from_audit(
     for item in proposed:
         for tool_id in item.get("tools") or []:
             tool_ids.append(str(tool_id))
-    if "hash_bind" not in tool_ids:
-        tool_ids.append("hash_bind")
     unique_tools: list[str] = []
     for tool_id in tool_ids:
         if tool_id and tool_id not in unique_tools:
@@ -569,10 +568,9 @@ def generate_from_audit(
     specs = []
     for item in proposed:
         tools = [str(tool_id) for tool_id in (item.get("tools") or []) if tool_id]
-        if not tools:
-            tools = ["hash_bind"]
         spec = {
             "id": item["id"],
+            "flowsteps": item.get("flowsteps"),
             "tools": tools,
             "intelligence": item.get("intelligence") or "none",
             "output_contract": item.get("output_contract") or f"{item['id']}_v1",
@@ -654,7 +652,16 @@ def yaml_dump_v3(flow: dict[str, Any]) -> str:
         if asset_kind:
             lines.append("    asset:")
             lines.append(f"      kind: {asset_kind}")
-        lines.append(f"    tools: [{', '.join(item['tools'])}]")
+        flowsteps = item.get("flowsteps") or []
+        if flowsteps:
+            lines.append("    flowsteps:")
+            for fs in flowsteps:
+                fid = fs.get("id") or fs.get("tool") or "step"
+                lines.append(f"      - id: {fid}")
+                if fs.get("tool"):
+                    lines.append(f"        tool: {fs['tool']}")
+        if item.get("tools"):
+            lines.append(f"    tools: [{', '.join(item['tools'])}]")
         lines.append(f"    intelligence: {item['intelligence']}")
         if item.get("on_tool_fail"):
             lines.append(f"    on_tool_fail: {item['on_tool_fail']}")
@@ -662,6 +669,7 @@ def yaml_dump_v3(flow: dict[str, Any]) -> str:
             lines.append(f"    max_model_attempts: {item['max_model_attempts']}")
         if item["intelligence"] != "none":
             lines.append(f"    model_justification: {json.dumps(item.get('model_justification') or '', ensure_ascii=False)}")
+        if item.get("draft_schema"):
             lines.append(f"    draft_schema: {item['draft_schema']}")
         lines.append(f"    handler: {item['handler']}")
         if item.get("next"):
@@ -675,7 +683,8 @@ def yaml_dump_v3(flow: dict[str, Any]) -> str:
             lines.append("    foreach:")
             lines.append(f"      path: {fe['path']}")
             lines.append(f"      item_schema: {fe['item_schema']}")
-            lines.append(f"      tools: [{', '.join(fe['tools'])}]")
+            if fe.get("tools"):
+                lines.append(f"      tools: [{', '.join(fe['tools'])}]")
             lines.append(f"      max_items: {fe['max_items']}")
             if fe.get("collect"):
                 lines.append(f"      collect: {fe['collect']}")

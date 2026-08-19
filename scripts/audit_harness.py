@@ -21,6 +21,7 @@ from flowstep_runtime import (
     harness_dir_from_args,
     infer_asset_kind,
     is_stub_output_schema,
+    normalize_flowsteps,
     is_under_home_skills,
     load_yaml,
     read_json,
@@ -636,6 +637,12 @@ def _attach_schemas(root: Path, milestone: dict[str, Any]) -> dict[str, Any]:
         summary=output_summary,
     )
     milestone["asset"] = {"kind": infer_asset_kind(milestone["output_schema"])}
+    flowsteps, tools = normalize_flowsteps(
+        flowsteps=milestone.get("flowsteps"),
+        tools=milestone.get("tools"),
+    )
+    milestone["flowsteps"] = flowsteps
+    milestone["tools"] = tools
     return milestone
 
 
@@ -821,20 +828,12 @@ def _ensure_intel_toolbox(
     python_tools: list[dict[str, str]],
 ) -> list[dict[str, str]]:
     for item in milestones:
-        if item.get("intelligence") in {None, "none"}:
-            continue
-        if item.get("tools"):
-            continue
-        item["tools"] = list(DEFAULT_INTEL_TOOLS)
-        for tool_id in DEFAULT_INTEL_TOOLS:
-            python_tools.append(
-                _python_tool_row(
-                    current=tool_id,
-                    tool_id=tool_id,
-                    source=f"suggested:{item['id']}",
-                    reason="intelligence milestone still needs a typed toolbox (hash/schema), not a free-form worker",
-                )
-            )
+        flowsteps, tools = normalize_flowsteps(
+            flowsteps=item.get("flowsteps"),
+            tools=item.get("tools"),
+        )
+        item["flowsteps"] = flowsteps
+        item["tools"] = tools
     return _unique_tools(python_tools)
 
 
@@ -1425,6 +1424,14 @@ def render_audit_markdown(report: dict[str, Any]) -> str:
                 "",
                 f"- intelligence: `{item.get('intelligence') or 'none'}`",
                 f"- toolbox: {', '.join(f'`{tool}`' for tool in item.get('tools') or []) or 'none'}",
+                f"- flowsteps (guide): "
+                + (
+                    ", ".join(
+                        f"`{fs.get('id')}`→`{fs.get('tool') or '—'}`"
+                        for fs in (item.get("flowsteps") or [])
+                    )
+                    or "none"
+                ),
                 f"- inputs: {inputs}",
                 f"- output_contract: `{item['output_contract']}`",
                 "",

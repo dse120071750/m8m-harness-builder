@@ -24,10 +24,12 @@ driver
   -> wrap flowstep_output_v2
   -> next step
 
-if tool returns NEED_MODEL
+if preferred FlowStep tool fails
+  -> NEED_MODEL (agent recovery, like a normal skill)
   -> write work/<id>/model_request.json
   -> agent writes work/<id>/draft.json
-  -> same tool run(input, draft)
+  -> assemble runs again with draft
+  -> milestone asset schema still must PASS or BLOCK
 ```
 
 There is one execution mode: `tool`. `class` is `tool` or `intelligence`

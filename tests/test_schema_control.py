@@ -265,7 +265,14 @@ class ValidateControlTests(unittest.TestCase):
             harness = codebase / "flowsteps" / "flows" / "badloop_v1"
             _write(
                 harness / "schemas" / "source_ready_v1.json",
-                json.dumps({"type": "object", "properties": {"pages": {"type": "array"}}}),
+                json.dumps(
+                    {
+                        "type": "object",
+                        "required": ["pages"],
+                        "additionalProperties": False,
+                        "properties": {"pages": {"type": "array"}},
+                    }
+                ),
             )
             _write(harness / "schemas" / "page_v1.json", json.dumps({"type": "object"}))
             text = (harness / "flow.yaml").read_text(encoding="utf-8")
@@ -609,7 +616,19 @@ class ToolFailRecoveryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             codebase = Path(temp) / "repo"
             generate_tool(codebase, "hash_bind")
-            generate_v3_flow(codebase, "rigid_v1", ["source_ready"], tools=["hash_bind"])
+            generate_v3_flow(
+                codebase,
+                "rigid_v1",
+                ["source_ready"],
+                tools=["hash_bind"],
+                milestone_specs=[
+                    {
+                        "id": "source_ready",
+                        "tools": ["hash_bind"],
+                        "on_tool_fail": "BLOCKED",
+                    }
+                ],
+            )
             harness = codebase / "flowsteps" / "flows" / "rigid_v1"
             _write(
                 harness / "milestones" / "source_ready" / "assemble.py",

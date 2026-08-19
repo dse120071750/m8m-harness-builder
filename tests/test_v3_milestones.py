@@ -101,6 +101,54 @@ class MilestoneTests(unittest.TestCase):
             self.assertIn("asset:file", chart)
             loaded = load_flow(harness)
             self.assertEqual(loaded["steps"][0]["asset"]["kind"], "file")
+            self.assertTrue(loaded["steps"][0].get("flowsteps"))
+            self.assertEqual(loaded["steps"][0]["flowsteps"][0]["tool"], "hash_bind")
+            self.assertIn("## FlowSteps (guide)", chart)
+
+    def test_empty_tools_still_draws(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            codebase = Path(temp) / "repo"
+            result = generate_v3_flow(codebase, "empty_v1", ["source_ready"], tools=[])
+            self.assertEqual(result["status"], "PASS")
+            harness = Path(result["harness_dir"])
+            loaded = load_flow(harness)
+            self.assertEqual(loaded["steps"][0]["tools"], [])
+            self.assertEqual(loaded["steps"][0]["flowsteps"], [])
+            schema = json.loads((harness / "schemas" / "source_ready_v1.json").read_text(encoding="utf-8"))
+            self.assertFalse(is_passthrough_schema(schema))
+
+    def test_default_tool_fail_recovers_like_agent(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            codebase = Path(temp) / "repo"
+            generate_tool(codebase, "hash_bind")
+            result = generate_v3_flow(codebase, "agent_v1", ["source_ready"], tools=["hash_bind"])
+            harness = Path(result["harness_dir"])
+            assemble = harness / "milestones" / "source_ready" / "assemble.py"
+            assemble.write_text(
+                "def run(input_data, draft=None, **_):\n    raise RuntimeError('download failed')\n",
+                encoding="utf-8",
+            )
+            request = Path(temp) / "request.json"
+            request.write_text(json.dumps({"ok": True}), encoding="utf-8")
+            first = advance(harness, Path(temp) / "run-agent", request_path=request)
+            self.assertEqual(first["state"], "ACTION_REQUIRED")
+
+    def test_intelligence_tries_tool_first(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            codebase = Path(temp) / "repo"
+            generate_tool(codebase, "hash_bind")
+            result = generate_v3_flow(
+                codebase,
+                "intel_v1",
+                ["plan_frozen"],
+                tools=["hash_bind"],
+                intelligence=["plan_frozen"],
+            )
+            assemble = Path(result["harness_dir"]) / "milestones" / "plan_frozen" / "assemble.py"
+            source = assemble.read_text(encoding="utf-8")
+            self.assertIn("FLOWSTEPS", source)
+            self.assertNotIn("Write a draft that the toolbox can admit", source)
+            self.assertIn("Preferred tool", source)
 
     def test_missing_milestone_asset_blocks(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

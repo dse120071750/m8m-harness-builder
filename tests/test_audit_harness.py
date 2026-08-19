@@ -63,6 +63,7 @@ class AuditWorkerTests(unittest.TestCase):
         source = next(item for item in report["proposed_milestones"] if item["id"] == "source_ready")
         self.assertIn("ingest", source["tools"])
         self.assertIn("segment", source["tools"])
+        self.assertEqual(source["flowsteps"][0]["tool"], "ingest")
         labeled = next(item for item in report["proposed_milestones"] if "label" in item["id"])
         self.assertEqual(labeled["intelligence"], "completion")
         self.assertIn("tool_vs_intelligence", report)
@@ -71,7 +72,7 @@ class AuditWorkerTests(unittest.TestCase):
         self.assertIn("sentences", source["output_schema"]["properties"])
         self.assertIn("label", labeled["output_schema"]["properties"])
         self.assertIn("source_ready", labeled["inputs"])
-        self.assertTrue(labeled["tools"])
+        self.assertIn("flowsteps", labeled)
         markdown = render_audit_markdown(report)
         for heading in REQUIRED_HEADINGS:
             self.assertIn(heading, markdown)

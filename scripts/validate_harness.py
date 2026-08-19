@@ -11,7 +11,7 @@ from typing import Any
 from jsonschema import Draft202012Validator, RefResolver
 
 from flowstep_instruction import sync_statuses_from_errors
-from flowstep_tools import infer_codebase, validate_library_tool
+from flowstep_tools import infer_codebase
 from schema_gate import is_control_name, schema_property_names, schema_required_names
 from flowstep_runtime import (
     FlowError,
@@ -20,6 +20,7 @@ from flowstep_runtime import (
     harness_dir_from_args,
     inspect_step_test,
     inspect_tool_source,
+    is_passthrough_schema,
     is_stub_output_schema,
     lint_file_payload_schema,
     load_flow,
@@ -66,11 +67,9 @@ def _validate_control(
     errors: list[str],
 ) -> None:
     step_id = step["id"]
-    fail = step.get("on_tool_fail") or "BLOCKED"
+    fail = step.get("on_tool_fail") or "need_model"
     if fail not in {"BLOCKED", "need_model"}:
         errors.append(f"{step_id}: on_tool_fail must be BLOCKED or need_model")
-    if fail == "need_model" and step.get("intelligence") in {None, "none"}:
-        errors.append(f"{step_id}: on_tool_fail need_model requires intelligence")
     attempts = step.get("max_model_attempts")
     if attempts is not None and (not isinstance(attempts, int) or attempts < 1):
         errors.append(f"{step_id}: max_model_attempts must be a positive integer")
@@ -108,17 +107,12 @@ def _validate_control(
             if extra and out_names:
                 errors.append(f"{step_id}: gate {when.name} uses fields not on output schema: {sorted(extra)}")
     if step.get("foreach"):
-        if step.get("intelligence") not in {None, "none"}:
-            errors.append(f"{step_id}: foreach is schema control; intelligence cannot own the loop")
         fe = step["foreach"]
         if not isinstance(fe.get("max_items"), int) or fe["max_items"] < 1:
             errors.append(f"{step_id}: foreach.max_items must be a positive integer")
         item_schema = skill_dir / str(fe.get("item_schema") or "")
         if not item_schema.is_file():
             errors.append(f"{step_id}: missing foreach.item_schema {fe.get('item_schema')}")
-        tools = fe.get("tools") or []
-        if not tools:
-            errors.append(f"{step_id}: foreach.tools must list toolbox ids")
         # path must exist as array on an input / previous output
         prev = None
         for reference in (step.get("inputs") or {}).values():
@@ -165,8 +159,9 @@ def validate_harness(
     for index, step in enumerate(flow["steps"]):
         step_id = step["id"]
         required_files = ["handler", "input_schema", "output_schema", "test"]
-        if step["model"] != "none":
-            required_files.append("draft_schema")
+        if step["model"] != "none" or step.get("on_tool_fail") == "need_model":
+            if (skill_dir / step.get("draft_schema", "")).is_file() or step.get("draft_schema"):
+                required_files.append("draft_schema")
         for key in required_files:
             try:
                 path = skill_rel(skill_dir, step[key])
@@ -180,7 +175,11 @@ def validate_harness(
         except FlowError as exc:
             errors.append(f"{step_id}: {exc}")
         handler_path = skill_dir / step["handler"]
-        if handler_path.is_file():
+        if flow.get("_v3"):
+            codebase = infer_codebase(skill_dir)
+            if codebase is None:
+                errors.append(f"{step_id}: v3 flow must live at flowsteps/flows/<flow_id>")
+        elif handler_path.is_file():
             errors.extend(
                 inspect_tool_source(
                     handler_path.read_text(encoding="utf-8"),
@@ -188,18 +187,11 @@ def validate_harness(
                     model=step["model"],
                 )
             )
-        if flow.get("_v3"):
-            codebase = infer_codebase(skill_dir)
-            if codebase is None:
-                errors.append(f"{step_id}: v3 flow must live at flowsteps/flows/<flow_id>")
-            else:
-                for tool_id in step.get("tools") or []:
-                    errors.extend(validate_library_tool(codebase, tool_id))
         test_path = skill_dir / step["test"]
-        if test_path.is_file():
+        if test_path.is_file() and not flow.get("_v3"):
             errors.extend(inspect_step_test(test_path.read_text(encoding="utf-8"), step_id=step_id))
         for schema_key in ("input_schema", "output_schema", "draft_schema"):
-            if schema_key == "draft_schema" and step["model"] == "none":
+            if schema_key == "draft_schema" and not step.get("draft_schema"):
                 continue
             path = skill_dir / step[schema_key]
             if not path.is_file():
@@ -219,8 +211,10 @@ def validate_harness(
                 errors.append(f"{step_id}: {schema_key} is not a usable JSON Schema: {exc}")
             if schema_key == "output_schema" and is_stub_output_schema(schema):
                 errors.append(f"{step_id}: output schema is still the generated {{ok: boolean}} stub")
+            if schema_key == "output_schema" and flow.get("_v3") and is_passthrough_schema(schema):
+                errors.append(f"{step_id}: milestone output is not a required asset (closed schema with required fields)")
             errors.extend(lint_file_payload_schema(schema, label=f"{step_id}.{schema_key}"))
-        if is_control_name(step_id):
+        if is_control_name(step_id) and not flow.get("_v3"):
             errors.append(f"{step_id}: if/loop/switch are schema gates, not milestones")
         _validate_control(skill_dir, flow, step, index, declared, errors)
         contract = step["output_contract"]
