@@ -1,16 +1,17 @@
 ---
 name: flowstep-harness-builder
-description: Engineering authority for AI-native milestone workflows. A FlowStep is a milestone node, not an n8n action. Pre-made tools live in the repo toolbox and are used between milestones. Use when designing a skill flow, auditing a skill into milestones and Python tools, adding crop/fetch/hash tools, or when n8n-style prewired graphs are too stiff.
+description: F8F — a semantic n8n. Skill for making skills that ship assets or standardized workflows by milestone, with premade Python tools in the project toolbox. Use when a Codex/Claude skill overuses intelligence, generates session code for tiny tasks, or keeps scripts in ~/.codex/skills instead of the repo.
 license: MIT
 metadata:
   author: dse120071750
   version: "1.0"
 ---
 
-# FlowStep Harness Engineer
+# F8F
 
-Design **milestone → milestone** workflows. Stock a **toolbox**. Do not
-draw every crop as its own node (that is why n8n fails this work).
+Semantic n8n. Heavy tools. Premade scripts. Ship the skill by milestone.
+This is the skill that makes skills which produce an asset or a
+standardized workflow — not session-generated glue.
 
 Read `references/milestone.md` and `references/tool-vs-intelligence.md`.
 

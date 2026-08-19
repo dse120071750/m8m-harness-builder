@@ -1,118 +1,116 @@
-# FlowStep Harness
+# F8F
+
+**F8F is a semantic n8n.** Heavy tools. Premade scripts. Skills ship by milestone.
+
+This is not a chat skill. It is a **skill for making skills** that actually produce assets or a standardized workflow — cards, packages, IO receipts, a frozen plan — not another session transcript.
+
+## The problem
 
 Codex and Claude usually **overuse intelligence**. For every small task they generate fresh code in the session: a crop, a hash, a fetch, a one-off Playwright script. A skill is developed as markdown and a worker. It does **not** come with a toolbox. The scripts that do exist land in `~/.codex/skills` or `~/.claude/skills`, not in the project `src`. Different products share one skill folder, so tools mix, drift, and cannot be reused as project code.
 
-That is the problem. The flow is not controllable.
+That is the problem. The flow is not controllable. The skill does not ship an asset.
 
-**An AI-native n8n** is the fix. Same controllability. Different grain.
+## What F8F is
 
-n8n works because every node has a contract: known inputs, known outputs, reusable tools, no improvisation. It fails AI work because every crop, fetch, and hash becomes its own node. The canvas gets stiff. One product change means rewiring the graph.
+n8n is controllable because every node has a contract. It is the wrong grain for AI: every crop and hash becomes its own node, and the canvas gets stiff.
 
-This skill keeps n8n’s control and inverts the node:
+F8F keeps n8n’s control and inverts the node:
 
 ```text
 n8n:     node = one action          (HTTP, crop, IF, hash)
-here:    node = one semantic milestone a human would inspect
-         tools = pre-made Python functions in the *project* toolbox
+F8F:     node = one semantic milestone a human would inspect
+         tools = premade Python scripts in the *project* toolbox
 ```
 
-The model may invent *inside* a milestone. It may not invent the path, the I/O, or the toolbox. Product tools live in `<repo>/flowsteps/tools/`, never in the skill folder. The skill is doctrine and a driver. The project owns the code.
+You ship a skill as a **sequence of milestones**. Each milestone is schema in / schema out. Intelligence is rare. Tools are the default.
 
 ```text
 request
-  → source_ready      schema in / schema out
-  → plan_frozen       schema in / schema out
-  → assets_bound      schema in / schema out
-  → cards_rendered    schema in / schema out
-  → release_packaged  schema in / schema out
+  → source_ready      premade tools + schema out
+  → plan_frozen       intelligence only if the schema cannot compute it
+  → assets_bound      premade tools + schema out
+  → cards_rendered    premade tools + schema out
+  → release_packaged  asset + receipt
 ```
 
-The driver advances **milestone → milestone**. It does not micro-orchestrate crop then hash then IF. The next milestone starts only when this one’s output schema PASSes.
+The finished skill produces an **asset or a standardized workflow**, not generated glue code. The F8F skill itself is only doctrine and a driver. Product tools live in `<repo>/flowsteps/tools/`.
 
-## Why n8n, but semantic
+## Why F8F, not another agent loop
 
-| n8n keeps | n8n drops | FlowStep does instead |
+| n8n | Usual Codex / Claude skill | F8F |
 | --- | --- | --- |
-| Typed units | Action-sized nodes | A node is a **checkpoint**: `source_ready`, `plan_frozen`, `release_packaged` |
-| Reusable integrations | Graph rewires for every crop | Reuse lives in `flowsteps/tools/` and is called *inside* the milestone |
-| AI does not invent I/O | Open agent loops | **Schema in, schema out.** Intelligence may only fill a draft the tool admits |
-| Fail-closed execution | Prompt-shaped business logic | Crop, hash, fetch, render stay Python. Judgment stays intelligence |
+| Action node | Generate code for the tiny task | Premade script in the project toolbox |
+| Integrations on the canvas | Scripts dumped in `~/.codex/skills` | `<repo>/flowsteps/tools/<id>/` |
+| Graph of HTTP/IF/crop | Markdown + worker, no toolbox | Skill ships as **milestones** |
+| Typed I/O | Chat in, chat out | **Schema in / schema out** |
+| Runs to a side effect | Stops at a draft | Stops at an **asset** or a verified workflow receipt |
 
-A milestone named `crop_4x5` or `fetch_record` is invalid. Those are tools.
+A milestone named `crop_4x5` or `fetch_record` is invalid. Those are tools. Use them heavily. Do not regenerate them.
 
 ## Three rules
 
-### 1. A FlowStep is a semantic milestone
+### 1. Ship the skill by milestone
 
 A milestone is something you would stop and inspect, not a mechanical action.
 
 - Valid: `source_ready`, `plan_frozen`, `assets_bound`, `cards_rendered`, `release_decided`
 - Invalid: `crop_4x5`, `fetch_record`, `hash_bind`
 
-How many times a crop runs, on which pages, in what order — that stays **inside** the milestone. The canvas only sees the outcome.
+How many times a crop runs stays **inside** the milestone. The canvas only sees the outcome. The next milestone starts only when this one’s output schema PASSes.
 
-### 2. Separate tool from intelligence
+### 2. Heavy tools. Rare intelligence.
 
-| | Tool | Intelligence |
+| | Tool (default) | Intelligence (exception) |
 | --- | --- | --- |
-| What it is | Pre-made Python function | Judgment or invention the schema cannot compute |
-| Where it lives | `<repo>/flowsteps/tools/<id>/` | Optional `NEED_MODEL` *on* a milestone |
-| Contract | Same input → same action. Fixture-testable | Draft only. The tool still validates and emits the payload |
-| Examples | fetch, crop, hash, render, package, schema-validate | plan, caption, choose, release-judge |
+| What | Premade Python script | Judgment the schema cannot compute |
+| Where | `<repo>/flowsteps/tools/<id>/` | Optional `NEED_MODEL` *on* a milestone |
+| Contract | Same input → same action. Fixture-testable | Draft only. The tool still emits the payload |
+| Examples | fetch, crop, hash, render, package, validate | plan, caption, choose, release-judge |
 
-The agent **calls** tools. The agent does **not** write SQL, crop math, or Playwright in the session. Intelligence must not pick the next FlowStep. That is an open agent. This is a workflow.
+The agent **calls** tools. It does not write SQL, crop math, or Playwright in the session. Intelligence must not pick the next milestone.
 
-### 3. Fix schema in and schema out
-
-Every milestone and every tool has an input schema and an output schema. That is the control plane.
+### 3. Schema in. Schema out.
 
 ```text
 validate input.schema.json
-  → run tool / assemble (optional draft)
+  → run premade tools (optional draft)
   → validate output.schema.json
   → next milestone
 ```
 
-- The next step reads a typed receipt, not a chat transcript.
+- The next step reads a typed receipt, not a transcript.
 - `{ok: boolean}` stubs are invalid.
-- A file is a `file_ref_v2` (`path` + `sha256`), not a bare string.
-- A BLOCKED run stays BLOCKED. No silent repair loop.
+- A file is a `file_ref_v2` (`path` + `sha256`).
+- A BLOCKED run stays BLOCKED.
 
-Controllability is the schema. If the schema is loose, the flow is not a flow.
+If the schema is loose, you do not have a workflow. You have a chat.
 
-## Units
-
-| Unit | Meaning |
-| --- | --- |
-| **Milestone** | Named outcome + output schema. The only canvas node. |
-| **Tool** | Deterministic Python function. Reused across flows. Never a node. |
-| **Intelligence** | Optional draft / judge / image *inside* a milestone. Still schema-bound. |
-| **Driver** | Order of milestones. `scripts/run_flow.py`. |
-
-Product tools belong in the **project**, not in this skill. That is how skills stay unmixed:
+## Ownership
 
 ```text
-~/.codex/skills/flowstep-harness-builder/   # doctrine + driver only
-<repo>/flowsteps/tools/<tool_id>/           # reusable Python toolbox
-<repo>/flowsteps/flows/<flow_id>/           # milestone flow + instruction
+this skill (F8F)                         doctrine + audit + driver
+<repo>/flowsteps/tools/<tool_id>/        premade scripts (the real product)
+<repo>/flowsteps/flows/<flow_id>/        milestone flow + instruction
 ```
+
+Do not put product tools in `~/.codex/skills` or `~/.claude/skills`. That is how skills mix.
 
 ## Audit, then generate
 
-The audit worker writes `planning/flowstep-audit.md` and does **not** rewrite the target:
+F8F first writes `planning/flowstep-audit.md` for an existing skill. It does **not** rewrite the target. The audit is how you turn a chat-shaped skill into a milestone skill that can produce an asset:
 
 - what the skill is
 - the separation goal
 - current tools
 - proposed milestones
-- which units must become standardized Python
-- input and output schema of each FlowStep
+- which units must become premade Python
+- input and output schema of each milestone
 
 ```powershell
 python scripts/audit_harness.py --target <skill-or-flow-dir>
 ```
 
-Then stock the toolbox and generate the flow:
+Then stock the project toolbox and generate the flow:
 
 ```powershell
 python scripts/generate_harness.py --codebase <repo> --tool crop_4x5
@@ -125,31 +123,27 @@ Read [references/milestone.md](references/milestone.md) and [references/tool-vs-
 
 ## Install
 
-**Codex (user skill):**
-
 ```powershell
 git clone https://github.com/dse120071750/flowstep-harness-builder.git $env:USERPROFILE\.codex\skills\flowstep-harness-builder
 pip install -r $env:USERPROFILE\.codex\skills\flowstep-harness-builder\requirements.txt
 ```
 
-**Repo-local skill** (share with a product repo): copy this folder to `<repo>/.agents/skills/flowstep-harness-builder/`.
+Repo-local: copy this folder to `<repo>/.agents/skills/flowstep-harness-builder/`.
 
-Then invoke `$flowstep-harness-builder`.
+Invoke `$flowstep-harness-builder`.
 
 ```powershell
 pip install -r requirements.txt
 python -m unittest discover -s tests -v
 ```
 
-Live product-flow tests skip when those repos are not present.
-
 ## Layout
 
 ```text
-SKILL.md                 agent entry (the working method)
+SKILL.md                 F8F working method (the skill that makes skills)
 scripts/                 audit, generate, validate, run
-contracts/               shared JSON schemas (the control plane)
-references/              milestone + tool-vs-intelligence doctrine
+contracts/               shared JSON schemas
+references/              milestone + tool-vs-intelligence
 examples/text_pipeline   fixture
 templates/               generated tool / milestone stubs
 ```
