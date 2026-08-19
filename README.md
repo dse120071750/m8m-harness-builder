@@ -190,24 +190,24 @@ references/              milestone + tool-vs-intelligence
 
 # English
 
-A Codex / Claude **skill that writes a split**: milestones, FlowSteps, tools, one table, one flowchart.
+A Codex / Claude skill that splits another skill into milestones, FlowSteps, and tools, then writes one table and one flowchart.
 
-M8M = **milestone to milestone**. It is a lightweight skill writer, not a production OS.
+M8M means milestone to milestone. It is a small skill writer, not a production OS.
 
 ## The problem
 
-Skills that ship assets (infographics, packages, fetches, renders) keep failing the same way:
+Skills that ship assets (infographics, packages, fetches, renders) keep hitting the same bugs.
 
-1. **Intelligence eats the job.** The model writes SQL, crop math, Playwright, or a one-off downloader in the session. Tiny typed work becomes a prompt.
-2. **Tools live in the skill folder.** Scripts sit in `~/.codex/skills` / `~/.claude/skills` instead of the product repo. The next run invents them again.
-3. **n8n is too stiff.** Every HTTP call and crop is its own canvas node. A human checkpoint (“source is bound”, “plan is frozen”) disappears under action nodes.
-4. **The opposite rigidity is also wrong.** Forbidding the agent from recovering when a tool fails, or treating FlowSteps as a production guardrail, makes a dead pipeline. Inside a checkpoint, work is still a normal skill.
+1. The model does the whole job. In the session it writes SQL, crop math, Playwright, or a one-off downloader. Work that should be typed becomes a prompt.
+2. Tools live in the skill folder. Scripts sit in `~/.codex/skills` or `~/.claude/skills` instead of the product repo. The next run invents them again.
+3. n8n is too stiff. Each HTTP call and crop is its own canvas node. The checkpoint a person would inspect ("source is bound", "plan is frozen") disappears under action nodes.
+4. The other extreme is a dead pipeline. If a tool fails and the agent cannot recover, or if FlowSteps act like a production guardrail, the run stops for the wrong reason. Inside a checkpoint, the work is still a normal skill.
 
-The overuse is not “AI exists.” It is AI used as the first move, with no harness for the thing that must exist, and no preferred repo tool for the thing that should be Python.
+The problem is not that AI exists. The problem is using the model first, with no check on the thing that must exist, and no preferred repo tool for the thing that should be Python.
 
 ## The solution
 
-Invert n8n’s grain. Keep typed I/O. Move the canvas up to **milestones**. Put **FlowSteps** inside. Prefer **one repo tool** per FlowStep. The builder develops that tool (fetch a table, call MCP, crop, hash). If the tool is missing or fails, recover like a normal agent. The **milestone asset** is still non-negotiable.
+Keep n8n's typed I/O. Raise the canvas to milestones. Put FlowSteps inside each one. Each FlowStep prefers one repo tool. The builder should write that tool (fetch a table, call MCP, crop, hash). If the tool is missing or fails, recover the way a normal agent would. The milestone asset still has to exist.
 
 ```text
 n8n:   node = one action
@@ -219,11 +219,11 @@ M8M:   node = one milestone (harness)
 
 | Word | Compulsory? | Meaning |
 | --- | --- | --- |
-| **Milestone** | **Yes — the harness** | A person-shaped checkpoint. Input is the previous output. It must produce a declared **asset** (file, image, json proof, or data). If that asset is not produced: **BLOCK**. The next milestone does not start. |
-| **FlowStep** | **Guide** | An atomic goal *inside* a milestone (bind five images, fetch a record). Prefers **one** tool. Sequence comes from the table. How it gets there is a normal skill. |
-| **Tool** | **Preferred, optional** | Python at `<repo>/flowsteps/tools/<id>/`. The builder should develop it. Existing, promote from a skill script, or generate-new stub. If it fails: find a way, still aimed at the milestone asset. |
+| Milestone | Yes. This is the harness. | A checkpoint a person would inspect. Input is the previous output. It must produce a declared asset: file, image, json proof, or data. If that asset is missing, BLOCK. The next milestone does not start. |
+| FlowStep | Guide | An atomic goal inside a milestone (bind five images, fetch a record). Prefers one tool. Follow the table order. How you get there is a normal skill. |
+| Tool | Preferred, optional | Python at `<repo>/flowsteps/tools/<id>/`. The builder should write it: existing, promote from a skill script, or a generate-new stub. If it fails, find another way. The target is still the milestone asset. |
 
-This is the whole skill:
+The skill does this:
 
 ```text
 identify milestones
@@ -233,13 +233,13 @@ identify milestones
   → scaffold flow.yaml and tool stubs
 ```
 
-`$m8m-harness-builder` **writes** that split. It does not refuse to draw because a name looks like `crop_*`. A stub tool is a successful sketch. The milestone output schema is not a sketch.
+`$m8m-harness-builder` writes that split. A name like `crop_*` is not a reason to refuse the chart. A stub tool is a usable sketch. The milestone output schema is not a sketch.
 
 ## Table (guide)
 
-Two tables land on `planning/m8m-flowchart.md`.
+`planning/m8m-flowchart.md` gets two tables.
 
-**FlowSteps — the sequence inside each checkpoint.** Prefer the named tool, in this order. Optional. If it fails, recover like a normal agent. The milestone asset is still compulsory.
+The FlowStep table is the order inside each checkpoint. Prefer the named tool, in this order. The tool is optional. If it fails, recover like a normal agent. The milestone asset is still required.
 
 | Milestone | # | FlowStep | Preferred tool |
 | --- | ---: | --- | --- |
@@ -248,7 +248,7 @@ Two tables land on `planning/m8m-flowchart.md`.
 | `plan_frozen` | 1 | `compact_plan` | `compact_editorial_config` |
 | `release_packaged` | 1 | `materialize_package` | `materialize_package` |
 
-**Origin — where that Python comes from.** Existing toolbox, promote a skill script into the repo, or generate-new (the builder should develop it; a stub is a sketch).
+The origin table says where the Python comes from: existing toolbox, promote a skill script into the repo, or generate-new. Generate-new is a tool the builder should write. A stub counts as a sketch.
 
 | Milestone | Asset | Existing toolbox | Promote from a skill script | Generate new |
 | --- | --- | --- | --- | --- |
@@ -256,11 +256,11 @@ Two tables land on `planning/m8m-flowchart.md`.
 | `plan_frozen` | `json` | — | — | `compact_editorial_config` |
 | `release_packaged` | `file` | — | `materialize_package` ← `scripts/package.py` | — |
 
-Proceed FlowSteps in table order. Do not treat that path as a production lock. Do not skip the asset.
+Follow the FlowStep order. Do not treat that path as a production lock. Do not skip the asset.
 
 ## Chart (harness)
 
-One mermaid canvas. **Nodes are milestones, not crops.** Each node names the required asset. Missing it is BLOCKED. FlowSteps are not extra nodes; they live in the table above.
+One mermaid canvas. Nodes are milestones, not crops. Each node names the required asset. If it is missing, the run is BLOCKED. FlowSteps are not extra nodes. They live in the table above.
 
 ```mermaid
 flowchart TD
@@ -277,17 +277,17 @@ flowchart TD
 | `json` | closed object with required fields |
 | `data` | same: typed required fields |
 
-If/else and foreach are optional **schema gates** on a milestone (`next.when` / `foreach`). They appear on the same chart. The model does not approve the branch.
+if/else and foreach are optional JSON Schema gates on a milestone (`next.when` / `foreach`). They show up on the same chart. The model does not approve the branch.
 
-A name like `crop_4x5` on `--milestone` is a **note** (“looks like a tool”), not a refusal to draw.
+A name like `crop_4x5` on `--milestone` is a note that it looks like a tool. It is not a refusal to draw.
 
-## What is rigid vs what is not
+## What is rigid, and what is not
 
 | Event | Result |
 | --- | --- |
 | Preferred FlowStep tool fails | Recover like a normal agent (`on_tool_fail: need_model`). Try the tool first. |
-| Milestone asset missing or invalid | **BLOCK.** Next milestone does not start. |
-| Generate-new / stub `tool.py` | Writer **PASS**. Fill in later. |
+| Milestone asset missing or invalid | BLOCK. The next milestone does not start. |
+| Generate-new / stub `tool.py` | Writer PASS. Fill it in later. |
 | Intelligence on a milestone | Optional judgment for producing the asset. Must not skip the preferred tool. Must not pick the next milestone. |
 
 ```yaml
@@ -306,7 +306,7 @@ Tools belong in `<repo>/flowsteps/tools/`, not in `~/.codex/skills` or `~/.claud
 
 ## Run
 
-Works in **Codex** (`$m8m-harness-builder`) and **Claude Code**.
+Works in Codex (`$m8m-harness-builder`) and Claude Code.
 
 ```powershell
 python scripts/run_m8m.py --target <skill-or-flow-dir> --codebase <repo>
@@ -317,19 +317,19 @@ python scripts/audit_harness.py --target <skill-or-flow-dir>
 python scripts/generate_harness.py --codebase <repo> --from-audit <skill>/planning/flowstep-audit.json
 ```
 
-Deliverables:
+This writes:
 
 - `planning/flowstep-audit.md`
-- `planning/m8m-flowchart.md` — mermaid (harness) + FlowStep table (guide) + origin table
+- `planning/m8m-flowchart.md`: mermaid (harness), FlowStep table (guide), origin table
 - `<repo>/flowsteps/flows/<flow_id>/`
 - `<repo>/flowsteps/tools/<id>/` (seed or stub)
 - `<repo>/.agents/skills/<name>/SKILL.md` and `<repo>/.claude/skills/<name>/SKILL.md`
 
-The factory **PASSes** when the chart, tables, stubs, and per-milestone asset schemas exist. `validate_harness.py` is optional (filling in tools). `run_flow.py` is the harness: tool fail → agent; no asset → BLOCK.
+The factory PASSes when the chart, tables, stubs, and each milestone's asset schema exist. `validate_harness.py` is optional. Use it when you fill in tools. `run_flow.py` is the harness: a failed tool goes to the agent; a missing asset BLOCKs.
 
 ## Install
 
-**Codex**
+Codex:
 
 ```powershell
 git clone https://github.com/dse120071750/m8m-harness-builder.git $env:USERPROFILE\.codex\skills\m8m-harness-builder
@@ -341,7 +341,7 @@ git clone https://github.com/dse120071750/m8m-harness-builder.git ~/.codex/skill
 pip install -r ~/.codex/skills/m8m-harness-builder/requirements.txt
 ```
 
-**Claude Code**
+Claude Code:
 
 ```powershell
 git clone https://github.com/dse120071750/m8m-harness-builder.git $env:USERPROFILE\.claude\skills\m8m-harness-builder
