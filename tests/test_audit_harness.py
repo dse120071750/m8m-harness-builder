@@ -22,6 +22,7 @@ AUDIT_CONTRACT = Path(__file__).resolve().parents[1] / "contracts" / "flowstep_s
 REQUIRED_HEADINGS = (
     "## Audited skill",
     "## Goal",
+    "## Tool vs intelligence",
     "## Current tools",
     "## Proposed milestone split",
     "## Tools to standardize to Python",
@@ -59,6 +60,9 @@ class AuditWorkerTests(unittest.TestCase):
         self.assertIn("segment", source["tools"])
         labeled = next(item for item in report["proposed_milestones"] if "label" in item["id"])
         self.assertEqual(labeled["intelligence"], "completion")
+        self.assertIn("tool_vs_intelligence", report)
+        self.assertEqual(report["tool_vs_intelligence"]["schema"], "tool_vs_intelligence_table_v1")
+        self.assertTrue(report["tool_vs_intelligence"]["rows"])
         self.assertIn("sentences", source["output_schema"]["properties"])
         self.assertIn("label", labeled["output_schema"]["properties"])
         self.assertIn("source_ready", labeled["inputs"])

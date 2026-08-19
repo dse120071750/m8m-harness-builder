@@ -160,12 +160,9 @@ Apply these as engineering gates, not extra classes:
 
 ## Classification table (required before generate)
 
-```text
-| Step | Class | Test (1–4) | Why |
-| fetch_case | tool | same id → same record | MCP/DB read |
-| crop_4x5 | tool | fixture PNG | 4:3 → 4:5 |
-| choose_lesson | intelligence | no fixture without a model | judgment |
-```
+Fixed schema: `contracts/tool_vs_intelligence_table_v1.schema.json`.
+Columns are `id`, `class`, `test`, `why`. Audit and generate must emit
+this object. See the doctrine rows in the GitHub README.
 
 If a step name contains `fetch`, `crop`, `hash`, `render`, `package`,
 `resize`, `normalize`, `query`, `upload`, or `parse`, it is a tool unless

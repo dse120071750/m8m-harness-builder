@@ -12,7 +12,8 @@
     "goal",
     "current_tools",
     "proposed_milestones",
-    "python_standardization"
+    "python_standardization",
+    "tool_vs_intelligence"
   ],
   "properties": {
     "schema": { "const": "flowstep_skill_audit_v1" },
@@ -52,6 +53,7 @@
       }
     },
     "python_standardization": { "type": "array" },
+    "tool_vs_intelligence": { "$ref": "tool_vs_intelligence_table_v1.schema.json" },
     "grade": { "type": "object" },
     "contracts": { "type": "array" },
     "agents": { "type": "array" },

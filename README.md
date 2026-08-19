@@ -69,6 +69,28 @@ How many times a crop runs stays **inside** the milestone. The canvas only sees 
 
 The agent **calls** tools. It does not write SQL, crop math, or Playwright in the session. Intelligence must not pick the next milestone.
 
+Every audit and every generated skill must emit this table. The contract is
+[`contracts/tool_vs_intelligence_table_v1.schema.json`](contracts/tool_vs_intelligence_table_v1.schema.json).
+
+| id | class | test | why |
+| --- | --- | --- | --- |
+| `fetch_record` | `tool` | same id → same record | structured read; MCP/DB/HTTP GET |
+| `crop_4x5` | `tool` | fixture PNG in, PNG+hash out | pixel math; not a milestone |
+| `hash_bind` | `tool` | same bytes → same sha256 | pure bind; `file_ref_v2` receipt |
+| `schema_validate` | `tool` | pass/fail from rules | JSON Schema gate |
+| `render_html_shell` | `tool` | fixture HTML → screenshot hash | fixed viewport generator |
+| `materialize_package` | `tool` | typed inputs → zip/manifest | assembly of already-valid receipts |
+| `plan_frozen` | `intelligence` | no fixture without a model | editorial plan is not a typed transform |
+| `choose_lesson` | `intelligence` | no fixture without a model | judgment among plausible alternatives |
+| `image_generate` | `intelligence` | model produces bytes | invention; `hash_bind` still sizes and binds |
+| `release_judge` | `intelligence` | not a pixel measurement | taste / teaching quality; footer geometry stays a tool |
+
+A row is one toolbox function or one milestone intelligence. Columns are
+fixed: **id**, **class**, **test**, **why**. Audit writes the instance table
+into `planning/flowstep-audit.json`. Generate writes
+`planning/tool-vs-intelligence.json` and copies the same table into the
+product skill and the flow instruction.
+
 ### 3. Schema in. Schema out.
 
 ```text

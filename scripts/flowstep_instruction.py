@@ -9,6 +9,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from tool_vs_intelligence import from_flow as classification_from_flow
+from tool_vs_intelligence import render_markdown as render_classification_markdown
 from flowstep_runtime import (
     FlowError,
     add_harness_location_args,
@@ -102,6 +104,12 @@ def render_instruction(
         "```",
         "",
         "If a milestone returns ACTION_REQUIRED, write only the frozen draft and advance.",
+        "",
+        "## Tool vs intelligence",
+        "",
+        "Schema: `tool_vs_intelligence_table_v1`.",
+        "",
+        render_classification_markdown(classification_from_flow(flow)),
         "",
     ]
     if flow.get("_v3"):

@@ -69,6 +69,7 @@ The markdown always includes:
 - proposed milestone split
 - tools to standardize to Python (`flowsteps/tools/<id>/`)
 - input and output schema of each FlowStep
+- tool vs intelligence table (`tool_vs_intelligence_table_v1`)
 
 ```powershell
 python scripts/audit_harness.py --target <skill-or-flow-dir>

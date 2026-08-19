@@ -11,6 +11,13 @@ not in `~/.codex/skills`.
 - flow: `<repo>/flowsteps/flows/__FLOW_ID__/`
 - tools: `<repo>/flowsteps/tools/`
 - last milestone emits `asset` (`path` + `sha256`)
+- classification: `<repo>/flowsteps/flows/__FLOW_ID__/planning/tool-vs-intelligence.json`
+
+## Tool vs intelligence
+
+Schema: `tool_vs_intelligence_table_v1`.
+
+__CLASSIFICATION_TABLE__
 
 ```powershell
 python __BUILDER_ROOT__/scripts/run_flow.py --codebase <repo> --flow-id __FLOW_ID__ --run-dir <run-dir> --request <request.json>

@@ -26,6 +26,8 @@ from flowstep_runtime import (
     utc_now,
 )
 from flowstep_tools import infer_codebase, tools_root, validate_library_tool
+from tool_vs_intelligence import from_audit as classification_from_audit
+from tool_vs_intelligence import render_markdown as render_classification_markdown
 
 
 AUDIT_SCHEMA = "flowstep_skill_audit_v1"
@@ -1081,6 +1083,14 @@ def audit_skill(root: Path) -> dict[str, Any]:
         "current_tools": current_tools,
         "proposed_milestones": milestones,
         "python_standardization": python_tools,
+        "tool_vs_intelligence": classification_from_audit(
+            {
+                "audited_skill": {"name": inventory["name"]},
+                "grade": grade,
+                "proposed_milestones": milestones,
+                "python_standardization": python_tools,
+            }
+        ),
         "contracts": inventory.get("contracts") or [],
         "agents": inventory.get("agents") or [],
         "scripts": inventory.get("scripts") or [],
@@ -1140,6 +1150,12 @@ def render_audit_markdown(report: dict[str, Any]) -> str:
         "## Goal",
         "",
         report["goal"],
+        "",
+        "## Tool vs intelligence",
+        "",
+        "Schema: `tool_vs_intelligence_table_v1`. Classify before generate.",
+        "",
+        render_classification_markdown(report.get("tool_vs_intelligence") or {"rows": []}),
         "",
         "## Current tools",
         "",

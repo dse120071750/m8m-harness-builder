@@ -21,6 +21,9 @@ from flowstep_runtime import (
     step_class_hint,
 )
 from flowstep_tools import tools_root
+from tool_vs_intelligence import from_audit as classification_from_audit
+from tool_vs_intelligence import from_flow as classification_from_flow
+from tool_vs_intelligence import render_markdown as render_classification_markdown
 
 
 BUILDER_ROOT = Path(__file__).resolve().parents[1]
@@ -387,6 +390,11 @@ def generate_v3_flow(
     loaded = load_flow(harness, flow_path)
     instruction = write_instruction(harness, loaded)
     created.append(str(instruction))
+    table = classification_from_flow(loaded)
+    table_path = harness / "planning" / "tool-vs-intelligence.json"
+    table_path.parent.mkdir(parents=True, exist_ok=True)
+    table_path.write_text(json.dumps(table, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    created.append(str(table_path))
     return {
         "schema": "flowstep_harness_generate_v3",
         "status": "PASS",
@@ -396,6 +404,8 @@ def generate_v3_flow(
         "milestones": milestones,
         "tools": sorted({tool for item in items for tool in item["tools"]}),
         "instruction_path": str(instruction),
+        "tool_vs_intelligence": table,
+        "tool_vs_intelligence_path": str(table_path),
         "written": created,
     }
 
@@ -416,12 +426,15 @@ def write_product_skill(
     flow_id: str,
     *,
     overwrite: bool = False,
+    classification: dict[str, Any] | None = None,
 ) -> str:
     dest = Path(codebase).resolve() / ".agents" / "skills" / skill_name / "SKILL.md"
+    table = render_classification_markdown(classification or {"rows": []})
     mapping = {
         "SKILL_NAME": skill_name,
         "FLOW_ID": flow_id,
         "BUILDER_ROOT": str(DEFAULT_BUILDER).replace("\\", "/"),
+        "CLASSIFICATION_TABLE": table,
     }
     _write_text(dest, _render("product-SKILL.md", mapping), overwrite=overwrite or not dest.exists())
     return str(dest)
@@ -482,10 +495,19 @@ def generate_from_audit(
         overwrite=overwrite,
         milestone_specs=specs,
     )
-    product = write_product_skill(codebase, name, raw_flow_id, overwrite=overwrite)
+    table = audit.get("tool_vs_intelligence") or classification_from_audit(audit)
+    table["flow_id"] = raw_flow_id
+    table_path = Path(result["harness_dir"]) / "planning" / "tool-vs-intelligence.json"
+    table_path.parent.mkdir(parents=True, exist_ok=True)
+    table_path.write_text(json.dumps(table, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    product = write_product_skill(
+        codebase, name, raw_flow_id, overwrite=overwrite, classification=table
+    )
     result["product_skill"] = product
     result["toolbox"] = toolbox
     result["skill_name"] = name
+    result["tool_vs_intelligence"] = table
+    result["tool_vs_intelligence_path"] = str(table_path)
     if any(item.get("status") != "PASS" for item in toolbox):
         result["status"] = "FINDINGS"
     return result

@@ -63,6 +63,16 @@ class AuditDrivesGenerateTests(unittest.TestCase):
             last = json.loads((harness / "schemas" / f"{last_id}_v1.json").read_text(encoding="utf-8"))
             self.assertIn("asset", last["properties"])
             self.assertTrue((codebase / ".agents" / "skills" / "toy-skill" / "SKILL.md").is_file())
+            self.assertEqual(audit["tool_vs_intelligence"]["schema"], "tool_vs_intelligence_table_v1")
+            table_path = harness / "planning" / "tool-vs-intelligence.json"
+            self.assertTrue(table_path.is_file())
+            table = json.loads(table_path.read_text(encoding="utf-8"))
+            self.assertTrue(table["rows"])
+            self.assertTrue(all({"id", "class", "test", "why"} <= set(row) for row in table["rows"]))
+            skill_md = (codebase / ".agents" / "skills" / "toy-skill" / "SKILL.md").read_text(encoding="utf-8")
+            self.assertIn("Tool vs intelligence", skill_md)
+            instruction = (harness / "planning" / "flowstep-instruction.md").read_text(encoding="utf-8")
+            self.assertIn("Tool vs intelligence", instruction)
 
 
 class DefaultV3Tests(unittest.TestCase):

@@ -8,7 +8,7 @@ Mark a milestone DONE when its output schema PASSes.
 - harness: `C:\Users\gasil\.codex\skills\flowstep-harness-builder\examples\text_pipeline`
 - flow_id: `text_pipeline_v1`
 - final_payload: `label_v1` from `label`
-- updated_at: 2026-08-19T14:33:12Z
+- updated_at: 2026-08-19T14:39:12Z
 
 ## Run
 
@@ -17,6 +17,16 @@ python <builder>/scripts/run_flow.py --codebase <repo> --flow-id text_pipeline_v
 ```
 
 If a milestone returns ACTION_REQUIRED, write only the frozen draft and advance.
+
+## Tool vs intelligence
+
+Schema: `tool_vs_intelligence_table_v1`.
+
+| id | class | test | why |
+| --- | --- | --- | --- |
+| `ingest` | `tool` | same input → same action; fixture-testable; receipt not opinion; junior can implement from schema | steps/ingest/tool.py |
+| `segment` | `tool` | same input → same action; fixture-testable; receipt not opinion; junior can implement from schema | steps/segment/tool.py |
+| `label` | `intelligence` | fails at least one of the four tests; no fixture without a model | semantic class is not derivable from punctuation alone |
 
 ## Step index
 
