@@ -40,14 +40,15 @@ def _ok_test(path: Path) -> None:
 
 
 class ControlNameTests(unittest.TestCase):
-    def test_if_loop_names_are_not_milestones(self) -> None:
+    def test_if_loop_names_still_draw(self) -> None:
         self.assertTrue(is_control_name("if_ready"))
         with tempfile.TemporaryDirectory() as temp:
             codebase = Path(temp) / "repo"
             generate_tool(codebase, "hash_bind")
-            with self.assertRaises(FlowError) as ctx:
-                generate_v3_flow(codebase, "bad_v1", ["if_ready"], tools=["hash_bind"])
-            self.assertIn("schema gates", str(ctx.exception))
+            result = generate_v3_flow(codebase, "bad_v1", ["if_ready"], tools=["hash_bind"])
+            self.assertEqual(result["status"], "PASS")
+            self.assertTrue(any("if_ready" in note for note in result.get("notes") or []))
+            self.assertTrue(Path(result["flowchart_path"]).is_file())
 
 
 class GateTests(unittest.TestCase):

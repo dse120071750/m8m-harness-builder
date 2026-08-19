@@ -162,10 +162,9 @@ Apply these as engineering gates, not extra classes:
 ## Classification table (required before generate)
 
 Fixed schema: `contracts/tool_vs_intelligence_table_v1.schema.json`.
-Columns are `id`, `class`, `test`, `why`. Audit and generate must emit
-this object. See the doctrine rows in the GitHub README.
+Columns are `id`, `class`, `test`, `why`. Audit and generate emit this
+object. See the sample rows in the GitHub README.
 
-If a step name contains `fetch`, `crop`, `hash`, `render`, `package`,
-`resize`, `normalize`, `query`, `upload`, or `parse`, it is a tool unless
-the engineer writes a justification that beats the four tests. The
-harness rejects the obvious mismatches.
+If a name contains `fetch`, `crop`, `hash`, `render`, `package`,
+`resize`, `normalize`, `query`, `upload`, or `parse`, write it as a
+**tool** on the table. That is a hint, not a refusal to draw.

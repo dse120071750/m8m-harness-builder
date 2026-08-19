@@ -8,7 +8,7 @@ FlowSteps listed on a milestone run tools. Mark DONE when the output schema PASS
 - harness: `C:\Users\gasil\.codex\skills\m8m-harness-builder\examples\text_pipeline`
 - flow_id: `text_pipeline_v1`
 - final_payload: `label_v1` from `label`
-- updated_at: 2026-08-19T19:29:10Z
+- updated_at: 2026-08-19T20:26:09Z
 
 ## Run
 

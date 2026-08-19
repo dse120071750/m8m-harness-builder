@@ -1,4 +1,4 @@
-"""Fixed tool-vs-intelligence table: schema, doctrine rows, and markdown."""
+"""Tool-vs-intelligence table: schema, sample rows, and markdown."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ TABLE_SCHEMA = "tool_vs_intelligence_table_v1"
 TOOL_TEST = "same input → same action; fixture-testable; receipt not opinion; junior can implement from schema"
 INTEL_TEST = "fails at least one of the four tests; no fixture without a model"
 
-DOCTRINE_ROWS: list[dict[str, str]] = [
+EXAMPLE_ROWS: list[dict[str, str]] = [
     {
         "id": "fetch_record",
         "class": "tool",
@@ -110,8 +110,12 @@ def make_table(rows: list[dict[str, Any]], *, flow_id: str | None = None) -> dic
     return table
 
 
+def example_table() -> dict[str, Any]:
+    return make_table(EXAMPLE_ROWS, flow_id="m8m_examples")
+
+
 def doctrine_table() -> dict[str, Any]:
-    return make_table(DOCTRINE_ROWS, flow_id="m8m_doctrine")
+    return example_table()
 
 
 def from_audit(audit: dict[str, Any]) -> dict[str, Any]:

@@ -32,15 +32,14 @@ if tool returns NEED_MODEL
 
 There is one execution mode: `tool`. `class` is `tool` or `intelligence`
 (see `tool-vs-intelligence.md`). `model` is only set on intelligence.
-A step named `crop_*` / `fetch_*` cannot be intelligence; `judge_*` /
-`choose_*` cannot be a tool.
+A name like `crop_*` / `fetch_*` is a **note** (looks like a tool);
+`judge_*` / `choose_*` looks like intelligence. The writer still draws.
 
-A generated stub (`NotImplementedError`, `{ok: boolean}` schema, stub
-`tests/test_tool.py`) is invalid. `validate_harness.py` must fail until each
-step computes a real payload.
+A generated stub is a successful sketch. Fill in `tool.py` later.
+`validate_harness.py` and `run_flow.py` are optional follow-ups.
 
-Repair loops are forbidden. Do not set `max_run_repair_cycles`. A BLOCKED
-run stays BLOCKED; start a new run after changing tools.
+Do not set `max_run_repair_cycles`. A BLOCKED run stays BLOCKED; start a
+new run after changing tools.
 
 ## Flow YAML
 

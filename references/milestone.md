@@ -1,5 +1,8 @@
 # Milestone nodes (M8M — milestone to milestone)
 
+The builder **writes** this split (chart + table + stubs). It is not a
+production guardrail.
+
 Three words. Do not mix them.
 
 | Word | Meaning | Path |
@@ -78,5 +81,5 @@ Teaching contracts (`references/*.md` on a Codex or Claude skill) belong
 on the flow: `<repo>/flowsteps/flows/<id>/references/`. Same ownership as
 tools. The skill folder may point at them. It must not be the only copy.
 
-Forbidden: `if_*` / `loop_*` milestone ids, unbounded while, intelligence
-choosing `then`, “repeat until it looks good”.
+A name like `crop_4x5` or `if_ready` is a **note** on the chart, not a
+reason to refuse to draw.

@@ -1,4 +1,4 @@
-"""M8M factory: audit → toolbox → generate → validate → ship product skill."""
+"""M8M factory: audit → chart/table → scaffold stubs. Validate/run are optional."""
 
 from __future__ import annotations
 
@@ -64,15 +64,15 @@ def run_factory(
     generated = generate_from_audit(
         codebase, audit, flow_id=fid, skill_name=name, overwrite=overwrite
     )
+    harness = Path(generated.get("harness_dir") or (codebase / "flowsteps" / "flows" / fid))
+    chart = harness / "planning" / "m8m-flowchart.md"
     validation: dict[str, Any]
     try:
         validation = validate_harness(codebase=codebase, flow_id=fid)
     except FlowError as exc:
-        validation = {"status": "BLOCKED", "blockers": [str(exc)]}
-
-    status = "PASS"
-    if generated.get("status") != "PASS" or validation.get("status") != "PASS":
-        status = "FINDINGS" if validation.get("status") != "BLOCKED" else "BLOCKED"
+        validation = {"status": "OPTIONAL", "blockers": [str(exc)]}
+    wrote = bool(generated.get("product_skill")) and chart.is_file()
+    status = "PASS" if wrote else "FINDINGS"
 
     return {
         "schema": "m8m_factory_result_v1",
@@ -96,12 +96,14 @@ def run_factory(
                 "harness_dir": generated.get("harness_dir"),
                 "instruction_path": generated.get("instruction_path"),
             },
-            "harness_validated": validation,
+            "harness_validated": {**validation, "optional": True},
             "skill_shipped": {
-                "status": "PASS" if generated.get("product_skill") else "BLOCKED",
+                "status": "PASS" if generated.get("product_skill") else "FINDINGS",
                 "skill_md": generated.get("product_skill"),
             },
         },
         "product_skill": generated.get("product_skill"),
         "audit_json": str(audit_json),
+        "notes": list(generated.get("notes") or []),
+        "flowchart_path": str(chart),
     }

@@ -526,8 +526,9 @@ def audit_harness(root: Path) -> dict[str, Any]:
         if item.get("join"):
             row["join"] = item["join"]
         if hint == "tool":
-            row["issues"].append("name is a toolbox action; this should be a tool, not a milestone/step")
-            findings.append({"severity": "P0", "id": step_id, "note": row["issues"][-1]})
+            row["issues"].append(
+                "name looks like a tool; still drawn — consider it a FlowStep under a checkpoint"
+            )
         if mode == "in_process":
             row["issues"].append("in_process worker step — intelligence without a declared toolbox")
             findings.append({"severity": "P0", "id": step_id, "note": row["issues"][-1]})
@@ -538,31 +539,24 @@ def audit_harness(root: Path) -> dict[str, Any]:
                 findings.append({"severity": "P1", "id": step_id, "note": row["issues"][-1]})
         if flow_schema == FLOW_SCHEMA_V3:
             if not tools:
-                row["issues"].append("milestone has no toolbox")
-                findings.append({"severity": "P0", "id": step_id, "note": row["issues"][-1]})
+                row["issues"].append("no toolbox listed; writer will add hash_bind or generate-new")
             for tool_id in tools:
                 if tool_id not in known_tools:
-                    row["issues"].append(f"missing toolbox tool: {tool_id}")
-                    findings.append({"severity": "P0", "id": step_id, "note": row["issues"][-1]})
+                    row["issues"].append(f"generate-new: {tool_id}")
                 elif codebase is not None:
                     for err in validate_library_tool(codebase, str(tool_id)):
                         row["issues"].append(err)
                         findings.append({"severity": "P1", "id": step_id, "note": err})
             if intel not in {None, "none"} and not item.get("model_justification"):
-                row["issues"].append("intelligence requires model_justification")
-                findings.append({"severity": "P0", "id": step_id, "note": row["issues"][-1]})
+                row["issues"].append("intelligence has no model_justification; writer fills a default")
             if any(step_id.lower().startswith(prefix) for prefix in ("if_", "loop_", "switch_", "when_", "else_")):
-                row["issues"].append("if/loop/switch are schema gates, not milestones")
-                findings.append({"severity": "P0", "id": step_id, "note": row["issues"][-1]})
+                row["issues"].append("name looks like control (if/loop); still drawn as a checkpoint")
             if item.get("next") and not item.get("else"):
-                row["issues"].append("next requires else (milestone id or BLOCKED)")
-                findings.append({"severity": "P0", "id": step_id, "note": row["issues"][-1]})
+                row["issues"].append("next without else; writer defaults BLOCKED")
             if item.get("foreach") and intel not in {None, "none"}:
-                row["issues"].append("foreach is schema control; intelligence cannot own the loop")
-                findings.append({"severity": "P0", "id": step_id, "note": row["issues"][-1]})
+                row["issues"].append("foreach on an intelligence milestone; still drawn")
         if not item.get("output_contract"):
-            row["issues"].append("no output_contract")
-            findings.append({"severity": "P0", "id": step_id, "note": row["issues"][-1]})
+            row["issues"].append(f"no output_contract; writer will invent {step_id or 'step'}_v1")
         step_reports.append(row)
 
     p0 = [item for item in findings if item["severity"] == "P0"]
@@ -1293,7 +1287,7 @@ def render_audit_markdown(report: dict[str, Any]) -> str:
             "",
         ]
         if not report.get("findings"):
-            lines.append("None. This harness matches milestone + toolbox doctrine.")
+            lines.append("None.")
         for item in report.get("findings") or []:
             lines.append(f"- **{item['severity']}** `{item['id']}`: {item['note']}")
         lines.extend(["", "## Units", ""])
@@ -1442,7 +1436,7 @@ def render_audit_markdown(report: dict[str, Any]) -> str:
     lines.extend(["## Current harness grade", ""])
     findings = grade.get("findings") or []
     if not findings:
-        lines.append("None. Existing flow already matches milestone + toolbox doctrine.")
+        lines.append("None.")
     for item in findings:
         lines.append(f"- **{item['severity']}** `{item['id']}`: {item['note']}")
     lines.append("")

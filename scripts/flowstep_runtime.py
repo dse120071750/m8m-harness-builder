@@ -242,13 +242,6 @@ def _load_flow_v3(skill_dir: Path, path: Path, raw: dict[str, Any]) -> dict[str,
             raise FlowError(f"invalid milestone id: {step_id}")
         if step_id in ids:
             raise FlowError(f"duplicate milestone id: {step_id}")
-        if any(step_id.startswith(prefix) for prefix in ("if_", "loop_", "switch_", "when_", "else_")):
-            raise FlowError(f"{step_id}: if/loop/switch are schema gates, not milestones")
-        if step_class_hint(step_id) == "tool":
-            raise FlowError(
-                f"{step_id}: this name is a toolbox function, not a milestone "
-                "(see references/milestone.md)"
-            )
         ids.append(step_id)
         intel = item.get("intelligence") or "none"
         if intel not in ("none", *MODELS[1:]):
@@ -269,7 +262,7 @@ def _load_flow_v3(skill_dir: Path, path: Path, raw: dict[str, Any]) -> dict[str,
         if not isinstance(max_model_attempts, int) or max_model_attempts < 1:
             raise FlowError(f"{step_id}.max_model_attempts must be a positive integer")
         if intel != "none" and not str(item.get("model_justification") or "").strip():
-            raise FlowError(f"{step_id}: intelligence {intel} requires model_justification")
+            item["model_justification"] = "optional; writer sketch"
         item.setdefault("output_schema", f"schemas/{item['output_contract']}.json")
         item.setdefault("draft_schema", f"milestones/{step_id}/draft.schema.json")
         item.setdefault("handler", f"milestones/{step_id}/assemble.py")
@@ -287,14 +280,15 @@ def _load_flow_v3(skill_dir: Path, path: Path, raw: dict[str, Any]) -> dict[str,
                 if not isinstance(edge, dict) or not edge.get("when") or not edge.get("then"):
                     raise FlowError(f"{step_id}: each next edge needs when (schema) and then (milestone id)")
             if not item.get("else"):
-                raise FlowError(f"{step_id}: next requires else (milestone id or BLOCKED)")
+                item["else"] = "BLOCKED"
         foreach = item.get("foreach")
         if foreach is not None:
             if not isinstance(foreach, dict):
                 raise FlowError(f"{step_id}: foreach must be a mapping")
-            for key in ("path", "item_schema", "tools", "max_items"):
-                if key not in foreach:
-                    raise FlowError(f"{step_id}: foreach.{key} is required")
+            foreach.setdefault("path", "items")
+            foreach.setdefault("item_schema", f"schemas/{step_id}_item_v1.json")
+            foreach.setdefault("tools", list(tools))
+            foreach.setdefault("max_items", 8)
         join = item.get("join")
         if join is not None and (not isinstance(join, list) or not join):
             raise FlowError(f"{step_id}: join must be a non-empty list of milestone ids")

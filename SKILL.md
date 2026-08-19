@@ -1,138 +1,72 @@
 ---
 name: m8m-harness-builder
 description: >
-  M8M — milestone to milestone. Semantic n8n. A milestone is the canvas
-  node; its input schema is the previous milestone output. FlowSteps are
-  tool-heavy units inside the milestone. Tools are premade Python in the
-  project toolbox. Use when a Codex/Claude skill overuses intelligence,
-  generates session code for tiny tasks, or keeps scripts in
-  ~/.codex/skills or ~/.claude/skills instead of the repo. Invoke as
-  $m8m-harness-builder.
+  M8M writer. Split a Codex or Claude skill into milestones, FlowSteps,
+  and tools, then write one toolbox table and one flowchart. Use when
+  the user wants to identify checkpoints, list tools per checkpoint, or
+  scaffold a flow. Invoke as $m8m-harness-builder.
 license: MIT
 metadata:
   author: dse120071750
-  version: "1.1"
+  version: "1.2"
 ---
 
-# M8M
+# M8M harness builder
 
-Milestone to milestone. Three words:
-
-```text
-Milestone  = canvas node. previous.out is this.in. Human inspects this.out.
-FlowStep   = tool-heavy unit *inside* a milestone. Never a canvas node.
-Tool       = premade Python at <repo>/flowsteps/tools/<id>/. A FlowStep runs it.
-```
-
-This is the skill that makes skills which produce an asset or a
-standardized workflow — not session-generated glue.
-
-Read `references/milestone.md` and `references/tool-vs-intelligence.md`.
-
-## Ownership
-
-| Need | Owner |
-| --- | --- |
-| Doctrine, generate, validate, run | This skill (`$m8m-harness-builder`) |
-| Tools (premade Python) | `<repo>/flowsteps/tools/<tool_id>/` |
-| Teaching contracts (instruction, context, rubrics) | `<repo>/flowsteps/flows/<flow_id>/references/` |
-| Milestone chain + which FlowSteps each runs | `<repo>/flowsteps/flows/<flow_id>/` |
-
-## Invariant
+This skill **writes** a split. It is not a production runtime and not a
+guardrail.
 
 ```text
-Milestone named crop_* / fetch_* / hash_*  = invalid (that is a FlowStep / tool)
-FlowStep without a tool                    = invalid
-Tool living under ~/.codex/skills or ~/.claude/skills = invalid
-Teaching contract living only under a home skill folder = invalid
-This milestone.in != previous milestone.out = invalid
-if_* / loop_* milestone names               = invalid (schema gates, not checkpoints)
-foreach without maxItems                    = invalid
-next without else                           = invalid
-gate field not on this output schema        = invalid
-foreach owned by intelligence               = invalid
+identify milestones
+  → list FlowSteps (small goals) inside each
+  → list tools (existing / promote from a script / generate new)
+  → write one table + one flowchart
+  → scaffold flow YAML and tool stubs
 ```
 
-Intelligence may exist *on* a milestone (`NEED_MODEL`). A FlowStep is a
-small goal; a tool is one way to do it and runs **first**. If a listed
-tool fails, `on_tool_fail: need_model` asks for drafts until the
-**output schema** PASSes or `max_model_attempts` / the run budget is
-exhausted. The next milestone only reads that schema. That is the whole
-goal. It is not “one draft then stop,” and it is not skipping
-`minItems: 5`.
+Three words:
 
-## Working method
+```text
+Milestone  = checkpoint you would inspect. previous.out is this.in.
+FlowStep   = small goal inside that checkpoint.
+Tool       = Python that does the goal, at <repo>/flowsteps/tools/<id>/.
+```
 
-The factory is five milestones (`flows/m8m_build_v1.yaml`). Run them
-with one premade driver. Do not generate crop/fetch/hash in the session.
+## Do this
 
 ```powershell
 python scripts/run_m8m.py --target <skill-or-flow-dir> --codebase <repo>
 ```
 
-That:
-
-1. Writes `planning/flowstep-audit.json` (and `.md`) and **one** chart:
-   `planning/m8m-flowchart.md` (milestones, if/else, foreach, toolbox plan
-   with tools on each milestone).
-2. Installs premade **tools** from `seeds/` into `<repo>/flowsteps/tools/`.
-3. Generates the milestone chain (next input schema = previous output
-   schema; FlowSteps listed inside each milestone; last milestone
-   `asset` path+sha256) and rewrites the same flowchart from the flow YAML.
-4. Validates the harness.
-5. Ships `<repo>/.agents/skills/<name>/SKILL.md` and
-   `<repo>/.claude/skills/<name>/SKILL.md`.
-
-Unknown tools without a seed stay FINDINGS until a real fixture exists.
-Do not use `--step` (v2 action nodes). Use `--from-audit` or `--milestone`.
-
-## Audit a current harness
-
-Identity: `agents/audit_worker.yaml`. Writes `planning/flowstep-audit.md`.
-It does **not** rewrite the target.
-
-The markdown always includes:
-
-- audited skill
-- goal (functionality separation)
-- current tools
-- proposed **milestones**
-- FlowSteps / tools to standardize to Python (`flowsteps/tools/<id>/`)
-- input and output schema of each **milestone** (next.in = previous.out)
-- tool vs intelligence table (`tool_vs_intelligence_table_v1`)
-- schema control (`next.when` / `foreach`) inferred from output JSON Schema, never from a model
-- one flowchart: `planning/m8m-flowchart.md`
-- toolbox plan on that chart: existing toolbox / promote from a skill script / generate new
-- teaching contracts: skill `references/*.md` promoted to `flowsteps/flows/<id>/references/`
+Or piecemeal:
 
 ```powershell
 python scripts/audit_harness.py --target <skill-or-flow-dir>
-python scripts/audit_harness.py --codebase <repo> --flow-id <flow_id>
+python scripts/generate_harness.py --codebase <repo> --from-audit <skill>/planning/flowstep-audit.json
 ```
 
-## Stop conditions
+Deliverables (this is the product):
 
-- a milestone is a single crop/fetch/hash (that is a FlowStep)
-- a product **tool** is written under `~/.codex/skills` or `~/.claude/skills`
-- the worker writes SQL/crop/Playwright in the session
-- intelligence with file/hash outputs and no FlowSteps
-- stub tools or `{ok: boolean}` schemas
-- a milestone input schema that is not the previous output schema
-- if/else or loop decided by intelligence instead of JSON Schema
+| File | What |
+| --- | --- |
+| `planning/flowstep-audit.md` | Proposed milestones, FlowSteps, tools |
+| `planning/m8m-flowchart.md` | One mermaid chart + toolbox table |
+| `<repo>/flowsteps/flows/<id>/flow.yaml` | Scaffolded chain |
+| `<repo>/flowsteps/tools/<id>/` | Seeded tools, or stubs marked generate-new |
+| `<repo>/.agents/skills/<name>/SKILL.md` and `.claude/skills/<name>/SKILL.md` | Pointer skill |
+
+A stub tool or a generate-new row is a successful sketch, not a failed
+build. `validate_harness.py` and `run_flow.py` are optional follow-ups.
 
 ## Response
 
 ```text
-Outcome:
+Outcome: writer
 Audit: planning/flowstep-audit.md
 Chart: planning/m8m-flowchart.md
-Tools: <repo>/flowsteps/tools/
 Flow: <repo>/flowsteps/flows/<flow_id>
-Instruction: planning/flowstep-instruction.md
-Milestones:
-  - <id>: intelligence|none | FlowSteps (tools) | PENDING|DONE
+Tools: <repo>/flowsteps/tools/
+Notes: (name hints, generate-new tools — never a refusal to draw)
 ```
 
-After an audit, return the flowchart markdown (`planning/m8m-flowchart.md`)
-and the audit. After generate, return the same flowchart path (rewritten
-from the flow) and the instruction markdown.
+Return the flowchart markdown and the toolbox table. Then the audit.

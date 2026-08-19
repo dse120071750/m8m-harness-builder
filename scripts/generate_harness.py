@@ -125,8 +125,8 @@ def _input_schema(step_id: str, previous_id: str | None) -> str:
     ) + "\n"
 
 
-def _write_step_package(
-    skill_dir: Path,
+def _write_package(
+    dest: Path,
     step_id: str,
     *,
     previous_id: str | None,
@@ -135,15 +135,30 @@ def _write_step_package(
     written: list[str] = []
     mapping = {"STEP_ID": step_id, "OUTPUT_CONTRACT": f"{step_id}_v1"}
     targets = {
-        skill_dir / "steps" / step_id / "tool.py": _render("step/tool.py", mapping),
-        skill_dir / "steps" / step_id / "input.schema.json": _input_schema(step_id, previous_id),
-        skill_dir / "steps" / step_id / "output.schema.json": _render("step/output.schema.json", mapping),
-        skill_dir / "steps" / step_id / "tests" / "test_tool.py": _render("step/test_tool.py", mapping),
+        dest / "tool.py": _render("step/tool.py", mapping),
+        dest / "input.schema.json": _input_schema(step_id, previous_id),
+        dest / "output.schema.json": _render("step/output.schema.json", mapping),
+        dest / "tests" / "test_tool.py": _render("step/test_tool.py", mapping),
     }
     for path, content in targets.items():
         if _write_text(path, content, overwrite=overwrite):
             written.append(str(path))
     return written
+
+
+def _write_step_package(
+    skill_dir: Path,
+    step_id: str,
+    *,
+    previous_id: str | None,
+    overwrite: bool,
+) -> list[str]:
+    return _write_package(
+        skill_dir / "steps" / step_id,
+        step_id,
+        previous_id=previous_id,
+        overwrite=overwrite,
+    )
 
 
 def seed_path(tool_id: str) -> Path | None:
@@ -188,16 +203,18 @@ def generate_tool(codebase: Path, tool_id: str, *, overwrite: bool = False) -> d
             "tool_id": tool_id,
             "tool_dir": str(dest),
             "seeded": True,
+            "origin": "existing",
             "written": written,
         }
-    written = _write_step_package(dest, tool_id, previous_id=None, overwrite=overwrite)
+    written = _write_package(dest, tool_id, previous_id=None, overwrite=overwrite)
     return {
         "schema": "flowstep_tool_generate_v3",
-        "status": "FINDINGS",
+        "status": "PASS",
         "tool_id": tool_id,
         "tool_dir": str(dest),
         "seeded": False,
-        "note": "no premade seed; tool.py is a stub until a fixture implementation exists",
+        "origin": "generate-new",
+        "note": "generate-new stub; fill in tool.py later",
         "written": written,
     }
 
@@ -262,16 +279,20 @@ def generate_v3_flow(
     unknown = sorted(intel - set(milestones))
     if unknown:
         raise FlowError(f"--intelligence names unknown milestones: {unknown}")
+    notes: list[str] = []
     for mid in milestones:
         if not STEP_ID_RE.match(mid):
             raise FlowError(f"invalid milestone id: {mid}")
         if any(mid.startswith(prefix) for prefix in ("if_", "loop_", "switch_", "when_", "else_")):
-            raise FlowError(f"{mid}: if/loop/switch are schema gates, not milestones")
+            notes.append(f"{mid}: name looks like control (if/loop); still drawn as a checkpoint")
         if step_class_hint(mid) == "tool":
-            raise FlowError(f"{mid}: use --tool for crop/fetch/hash; milestones are checkpoints")
+            notes.append(f"{mid}: name looks like a tool; still drawn — consider it a FlowStep under a checkpoint")
     for tool_id in sorted({*(tools or []), *[str(t) for spec in (milestone_specs or []) for t in (spec.get("tools") or [])]}):
-        if tool_id:
-            generate_tool(codebase, tool_id, overwrite=overwrite)
+        if not tool_id:
+            continue
+        tool_result = generate_tool(codebase, tool_id, overwrite=overwrite)
+        if not tool_result.get("seeded"):
+            notes.append(f"{tool_id}: generate-new stub")
     spec_by_id = {str(item["id"]): item for item in (milestone_specs or [])}
     items = []
     previous = None
@@ -355,13 +376,11 @@ def generate_v3_flow(
     previous_id = None
     for item in items:
         mid = item["id"]
-        if item["_is_last"]:
-            output_obj = ASSET_OUTPUT_SCHEMA
-        elif isinstance(item.get("_output_schema_object"), dict) and not _asset_schema(
-            item["_output_schema_object"]
-        ):
+        if isinstance(item.get("_output_schema_object"), dict):
             output_obj = item["_output_schema_object"]
             output_obj.setdefault("$id", f"{mid}.output.schema.json")
+        elif item["_is_last"]:
+            output_obj = ASSET_OUTPUT_SCHEMA
         else:
             output_obj = dict(PASSTHROUGH_SCHEMA)
             output_obj["$id"] = f"{mid}.output.schema.json"
@@ -465,6 +484,7 @@ def generate_v3_flow(
         "tool_vs_intelligence": table,
         "tool_vs_intelligence_path": str(table_path),
         "written": created,
+        "notes": notes,
     }
 
 
@@ -629,8 +649,11 @@ def generate_from_audit(
     result["skill_name"] = name
     result["tool_vs_intelligence"] = table
     result["tool_vs_intelligence_path"] = str(table_path)
-    if any(item.get("status") != "PASS" for item in toolbox):
-        result["status"] = "FINDINGS"
+    result["status"] = "PASS"
+    unseeded = [item["tool_id"] for item in toolbox if not item.get("seeded")]
+    if unseeded:
+        result.setdefault("notes", [])
+        result["notes"].append("generate-new stubs (fill in later): " + ", ".join(unseeded))
     return result
 
 

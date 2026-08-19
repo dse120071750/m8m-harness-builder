@@ -18,6 +18,7 @@ milestones:
     output_contract: harness_validate_v1
     tools: [validate_harness]
     intelligence: none
+    optional: true
   - id: skill_shipped
     output_contract: product_skill_v1
     tools: [ship_product_skill]

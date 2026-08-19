@@ -1,4 +1,4 @@
-"""Run the M8M factory milestones: audit, toolbox, generate, validate, ship."""
+"""Run the M8M writer: identify milestones, write chart/table, scaffold stubs."""
 
 from __future__ import annotations
 

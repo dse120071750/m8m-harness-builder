@@ -70,12 +70,13 @@ class MilestoneTests(unittest.TestCase):
         self.assertEqual(step_class_hint("render_html_shell"), "tool")
         self.assertEqual(step_class_hint("materialize_package"), "tool")
 
-    def test_rejects_crop_milestone(self) -> None:
+    def test_crop_named_checkpoint_still_draws(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             codebase = Path(temp) / "repo"
-            with self.assertRaises(FlowError) as ctx:
-                generate_v3_flow(codebase, "bad_v1", ["crop_4x5"], tools=["hash_bind"])
-            self.assertIn("use --tool", str(ctx.exception))
+            result = generate_v3_flow(codebase, "bad_v1", ["crop_4x5"], tools=["hash_bind"])
+            self.assertEqual(result["status"], "PASS")
+            self.assertTrue(any("crop_4x5" in note for note in result.get("notes") or []))
+            self.assertTrue(Path(result["flowchart_path"]).is_file())
 
     def test_v3_instruction_lists_toolbox(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
