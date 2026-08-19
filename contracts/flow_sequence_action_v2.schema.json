@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "flow_sequence_action_v2.schema.json",
+  "type": "object",
+  "required": ["schema", "state"],
+  "properties": {
+    "schema": { "const": "flow_sequence_action_v2" },
+    "state": { "enum": ["ACTION_REQUIRED", "COMPLETE", "BLOCKED"] },
+    "action": { "type": "string" },
+    "execution_mode": { "const": "tool" },
+    "step_id": { "type": "string" },
+    "attempt": { "type": "integer", "minimum": 1 },
+    "model": { "enum": ["none", "completion", "image", "judge"] },
+    "task_path": { "type": "string" },
+    "model_request_path": { "type": "string" },
+    "draft_path": { "type": "string" },
+    "draft_schema_path": { "type": "string" },
+    "expected_output_path": { "type": "string" },
+    "input_artifacts": { "type": "array" },
+    "tools": { "type": "array", "items": { "type": "string" } },
+    "blockers": { "type": "array", "items": { "type": "string" } },
+    "run_id": { "type": "string" },
+    "steps": { "type": "integer", "minimum": 0 }
+  },
+  "additionalProperties": false
+}

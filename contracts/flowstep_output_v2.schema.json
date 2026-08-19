@@ -1,0 +1,97 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "flowstep_output_v2.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "artifact_id",
+    "run_id",
+    "flow_id",
+    "flow_version",
+    "step_id",
+    "status",
+    "data",
+    "evidence",
+    "created_at"
+  ],
+  "properties": {
+    "schema": { "type": "string", "minLength": 3 },
+    "artifact_id": { "type": "string", "minLength": 3 },
+    "run_id": { "type": "string", "minLength": 1 },
+    "flow_id": { "type": "string", "minLength": 1 },
+    "flow_version": { "type": "integer", "minimum": 1 },
+    "step_id": { "type": "string", "minLength": 1 },
+    "status": { "enum": ["PASS", "BLOCKED"] },
+    "data": { "type": "object" },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "handler",
+        "model",
+        "attempt",
+        "input_artifacts",
+        "implementation_fingerprint_sha256",
+        "blockers"
+      ],
+      "properties": {
+        "handler": { "type": "string", "minLength": 1 },
+        "model": { "enum": ["none", "completion", "image", "judge"] },
+        "attempt": { "type": "integer", "minimum": 1 },
+        "input_artifacts": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/input_artifact" }
+        },
+        "implementation_fingerprint_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "blockers": { "type": "array", "items": { "type": "string", "minLength": 1 } }
+      }
+    },
+    "created_at": { "type": "string", "format": "date-time" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "status": { "const": "PASS" } } },
+      "then": {
+        "properties": {
+          "evidence": { "properties": { "blockers": { "maxItems": 0 } } }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "status": { "const": "BLOCKED" } } },
+      "then": {
+        "properties": {
+          "evidence": { "properties": { "blockers": { "minItems": 1 } } }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "input_artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "input_name",
+        "source_step_id",
+        "artifact_path",
+        "artifact_id",
+        "artifact_sha256",
+        "contract",
+        "status"
+      ],
+      "properties": {
+        "input_name": { "type": "string", "minLength": 1 },
+        "source_step_id": { "type": "string", "minLength": 1 },
+        "artifact_path": { "type": "string", "minLength": 1 },
+        "artifact_id": { "type": "string", "minLength": 1 },
+        "artifact_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "contract": { "type": "string", "minLength": 1 },
+        "status": { "const": "PASS" }
+      }
+    }
+  }
+}

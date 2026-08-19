@@ -1,0 +1,44 @@
+schema: flowstep_flow_v2
+flow_id: text_pipeline_v1
+version: 1
+max_run_seconds: 3600
+artifact_root: artifacts
+steps:
+  - id: ingest
+    kind: source.ingest
+    class: tool
+    handler: steps/ingest/tool.py
+    model: none
+    inputs:
+      request: user.request
+    output_contract: ingest_v1
+    input_schema: steps/ingest/input.schema.json
+    output_schema: steps/ingest/output.schema.json
+    params:
+      step_budget_seconds: 30
+  - id: segment
+    kind: text.segment
+    class: tool
+    handler: steps/segment/tool.py
+    model: none
+    inputs:
+      ingest: ingest.ingest_v1
+    output_contract: segment_v1
+    input_schema: steps/segment/input.schema.json
+    output_schema: steps/segment/output.schema.json
+    params:
+      step_budget_seconds: 30
+  - id: label
+    kind: text.label
+    class: intelligence
+    handler: steps/label/tool.py
+    model: completion
+    model_justification: semantic class is not derivable from punctuation alone
+    draft_schema: steps/label/draft.schema.json
+    inputs:
+      segment: segment.segment_v1
+    output_contract: label_v1
+    input_schema: steps/label/input.schema.json
+    output_schema: steps/label/output.schema.json
+    params:
+      step_budget_seconds: 120

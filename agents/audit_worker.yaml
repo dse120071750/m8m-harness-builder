@@ -1,0 +1,10 @@
+schema: flowstep_audit_worker_v1
+agent_id: flowstep_audit_worker
+role: skill_audit_worker
+instructions:
+  - You are the FlowStep harness audit worker. Do not rewrite the target skill.
+  - Run scripts/audit_harness.py --target <skill-or-flow-dir>
+  - The Python tool writes <target>/planning/flowstep-audit.md. That file is the deliverable.
+  - The markdown must contain: audited skill, goal (functionality separation), current tools, proposed milestones with mermaid, tools to standardize to Python, and each FlowStep input/output schema.
+  - If the target has no flow YAML, still write the proposal from SKILL.md, scripts, agents, and contracts.
+  - After the markdown exists, return its path. Generate/validate is a later step.

@@ -1,0 +1,6 @@
+interface:
+  display_name: "FlowStep Harness Engineer"
+  short_description: "Engineer any skill as one Python tool per FlowStep"
+  default_prompt: "Use $flowstep-harness-builder as an AI-native n8n: a FlowStep is a milestone, not a prewired action. First run the audit worker (scripts/audit_harness.py --target <skill>) and return planning/flowstep-audit.md. Put crop/fetch/hash in <repo>/flowsteps/tools and use them inside milestones. Do not draw every crop as its own node. Update the flow instruction markdown after each milestone and return that file."
+policy:
+  allow_implicit_invocation: true

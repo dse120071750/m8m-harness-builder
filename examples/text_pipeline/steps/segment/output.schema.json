@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "segment.output.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["sentences", "sentence_count"],
+  "properties": {
+    "sentences": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "sentence_count": { "type": "integer", "minimum": 1 }
+  }
+}

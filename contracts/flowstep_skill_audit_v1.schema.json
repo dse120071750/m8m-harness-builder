@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "flowstep_skill_audit_v1.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "status",
+    "verdict",
+    "target",
+    "audited_skill",
+    "goal",
+    "current_tools",
+    "proposed_milestones",
+    "python_standardization"
+  ],
+  "properties": {
+    "schema": { "const": "flowstep_skill_audit_v1" },
+    "status": { "enum": ["PASS", "FINDINGS", "BLOCKED"] },
+    "verdict": { "enum": ["MILESTONE_TOOLBOX", "NEEDS_UPGRADE", "NO_FLOW"] },
+    "target": { "type": "string", "minLength": 1 },
+    "audited_at": { "type": "string", "minLength": 1 },
+    "report_path": { "type": "string", "minLength": 1 },
+    "audited_skill": {
+      "type": "object",
+      "required": ["name", "path"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "description": { "type": "string" },
+        "path": { "type": "string", "minLength": 1 },
+        "linked_flow": { "type": ["string", "null"] },
+        "references": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "goal": { "type": "string", "minLength": 1 },
+    "current_tools": { "type": "array" },
+    "proposed_milestones": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "intelligence", "tools", "output_contract", "input_schema", "output_schema"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "intelligence": { "enum": ["none", "completion", "image", "judge"] },
+          "tools": { "type": "array", "items": { "type": "string" } },
+          "output_contract": { "type": "string", "minLength": 1 },
+          "inputs": { "type": "object" },
+          "input_schema": { "type": "object" },
+          "output_schema": { "type": "object" }
+        }
+      }
+    },
+    "python_standardization": { "type": "array" },
+    "grade": { "type": "object" },
+    "contracts": { "type": "array" },
+    "agents": { "type": "array" },
+    "scripts": { "type": "array" }
+  }
+}

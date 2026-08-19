@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "segment.input.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["ingest"],
+  "properties": {
+    "ingest": { "$ref": "../ingest/output.schema.json" }
+  }
+}
