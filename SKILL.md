@@ -3,7 +3,7 @@ name: flowstep-harness-builder
 description: Engineering authority for AI-native milestone workflows. A FlowStep is a milestone node, not an n8n action. Pre-made tools live in the repo toolbox and are used between milestones. Use when designing a skill flow, auditing a skill into milestones and Python tools, adding crop/fetch/hash tools, or when n8n-style prewired graphs are too stiff.
 license: MIT
 metadata:
-  author: GaryLamindex
+  author: dse120071750
   version: "1.0"
 ---
 

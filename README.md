@@ -14,14 +14,14 @@ Tool     = pre-made function used *inside* a milestone
 **Codex (user skill):**
 
 ```powershell
-git clone https://github.com/GaryLamindex/flowstep-harness-builder.git $env:USERPROFILE\.codex\skills\flowstep-harness-builder
+git clone https://github.com/dse120071750/flowstep-harness-builder.git $env:USERPROFILE\.codex\skills\flowstep-harness-builder
 pip install -r $env:USERPROFILE\.codex\skills\flowstep-harness-builder\requirements.txt
 ```
 
 **GitHub CLI skill install** (after `gh` is installed):
 
 ```powershell
-gh skill install GaryLamindex/flowstep-harness-builder --agent codex
+gh skill install dse120071750/flowstep-harness-builder --agent codex
 ```
 
 **Repo-local skill** (share with a product repo):
