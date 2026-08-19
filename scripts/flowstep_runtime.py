@@ -256,6 +256,11 @@ def _load_flow_v3(skill_dir: Path, path: Path, raw: dict[str, Any]) -> dict[str,
         tools = item.get("tools")
         if not isinstance(tools, list) or not tools or not all(isinstance(t, str) and t for t in tools):
             raise FlowError(f"{step_id}: tools must be a non-empty list of toolbox ids")
+        on_tool_fail = str(item.get("on_tool_fail") or "BLOCKED")
+        if on_tool_fail not in {"BLOCKED", "need_model"}:
+            raise FlowError(f"{step_id}.on_tool_fail must be BLOCKED or need_model")
+        if on_tool_fail == "need_model" and intel == "none":
+            raise FlowError(f"{step_id}: on_tool_fail need_model requires intelligence completion|image|judge")
         if intel != "none" and not str(item.get("model_justification") or "").strip():
             raise FlowError(f"{step_id}: intelligence {intel} requires model_justification")
         item.setdefault("output_schema", f"schemas/{item['output_contract']}.json")
@@ -300,6 +305,7 @@ def _load_flow_v3(skill_dir: Path, path: Path, raw: dict[str, Any]) -> dict[str,
             "output_schema": item["output_schema"],
             "test": item.get("test", f"milestones/{step_id}/tests/test_assemble.py"),
             "params": item.get("params") or {},
+            "on_tool_fail": on_tool_fail,
             "next": list(next_edges),
             "else": item.get("else"),
             "foreach": foreach,

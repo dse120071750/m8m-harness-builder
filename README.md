@@ -7,8 +7,8 @@ Three words. Do not mix them:
 | Word | What it is | What it is not |
 | --- | --- | --- |
 | **Milestone** | The only canvas node. A human checkpoint. Input schema **is** the previous milestone’s output schema. | Not a crop. Not a fetch. Not a tool. |
-| **FlowStep** | A tool-heavy unit **inside** a milestone. Listed on that milestone. Never drawn on the canvas. | Not a milestone. Not free-form session code. |
-| **Tool** | The premade Python implementation a FlowStep runs: `<repo>/flowsteps/tools/<id>/`. Input schema in, output schema out. | Not stored in `~/.codex/skills` or `~/.claude/skills`. |
+| **FlowStep** | A small **goal** inside a milestone (bind five images, validate facts). Expected to be done by listed tools. | Not a milestone. Not a session script. |
+| **Tool** | One premade Python way to do that goal: `<repo>/flowsteps/tools/<id>/`. Input schema in, output schema out. | Not stored in `~/.codex/skills` or `~/.claude/skills`. A tool may fail; that does not authorize inventing another tool. |
 | **Gate / foreach** | n8n IF and Loop Over Items, as JSON Schema. `when` = instance validates. `foreach` = typed array + `maxItems`. | Not a milestone. Not semantic approval. Not `NEED_MODEL`. |
 
 This is a **skill for making skills** that produce assets or a standardized workflow — not another session transcript.
@@ -19,7 +19,7 @@ Codex and Claude usually **overuse intelligence**. For every small task they gen
 
 That is the problem. The flow is not controllable. The skill does not ship an asset.
 
-M8M does **not** remove intelligence. It stops the model from doing the mechanical jobs, so the remaining AI work is a typed draft on a milestone — not a session that writes crop/fetch/hash and then judges whether it “looks done.”
+M8M does **not** remove intelligence. It stops the model from *being* the toolbox: no on-the-fly crop/fetch/hash, no assuming three files count as five, no unbounded retry. Intelligence still runs — as a draft the listed tools must admit, including **once** when a listed tool fails.
 
 ## What M8M is
 
@@ -146,32 +146,46 @@ foreach:
 
 Audit infers these from **existing** output-schema fields (`enum` / `const` / array `maxItems`). Generate writes `schemas/gates/*.schema.json`. Intelligence may fill a field; it may not pick `then`.
 
-### 5. Intelligence is a draft on a milestone, not the PASS bit
+### 5. Intelligence is a draft the toolbox must admit — including when a tool fails
 
-The model kicks in **only** on a milestone with `intelligence: completion|image|judge`. The driver returns `ACTION_REQUIRED`. The session writes one JSON **draft**. Listed FlowSteps then admit that draft into the **output schema**. That is the AI part.
+A **tool** is rigid. A **FlowStep** is the small goal (“five images bound”). The model is not a third downloader. It is how the milestone recovers, or invents, without writing code in the session.
+
+Two times intelligence kicks in, both as `NEED_MODEL` → one JSON draft → listed tools run again:
+
+1. **Invention (happy path).** `intelligence: completion|image|judge` and no `on_tool_fail`. The assemble asks for a draft *before* tools (plan, caption, image).
+2. **Recovery (tool failed).** `on_tool_fail: need_model` (requires intelligence). Tools run first. If they throw, return BLOCKED, or miss the output schema, the driver asks for a draft **once**. Same toolbox retries with that draft. Fail again → **BLOCKED**.
+
+```yaml
+# try the listed downloaders first; ask the model only if they fail
+intelligence: completion
+on_tool_fail: need_model
+tools: [fastdl_carousel_download, hash_bind]
+```
 
 ```text
-carousel_captured     intelligence: none
-    tools download and hash 5 images
-    minItems: 5 + path/sha256  →  PASS or BLOCKED
-    (the model does not judge “did we download 5?”)
+usual skill when a tool fails:
+    write Playwright in the chat, retry forever, assume 3 == 5
 
-plan_frozen           intelligence: completion
-    NEED_MODEL  →  draft.json (editorial copy the schema cannot compute)
-    tools: schema_validate, hash_bind
-    out PASSes  →  that object is the next milestone’s input
+M8M when a listed tool fails:
+    typed blockers (INSTAGRAM_EMPTY, minItems)
+    → one draft: other URL, which listed fallback tool, what still fits the schema
+    → same toolbox runs
+    → still invalid → BLOCKED (fresh run, not a repair loop)
 ```
 
 | The model may | The model may not |
 | --- | --- |
-| Invent a plan, caption, or image the schema cannot compute | Write the crop/fetch/hash in the session |
-| Fill a field (`kind: url`) | Pick `then` / `else` (that is a JSON Schema gate) |
-| Judge teaching quality on a later milestone | Decide that a mechanical milestone secretly PASSed |
-| | Loop until it “looks downloaded” (that is a repair loop) |
+| Invent a plan, caption, or image the schema cannot compute | Write a new crop/fetch/hash in the session |
+| Draft a recovery the **listed** tools can admit | Add a tool that is not on the milestone |
+| Fill a field (`kind: url`) | Pick `then` / `else` (JSON Schema gate) |
+| Judge teaching quality on a later milestone | Declare PASS when `minItems: 5` got 3 files |
+| | Unbounded retry / “looks downloaded” |
 
-“Five Instagram images landed” is a receipt. Write `minItems: 5` and `file_ref_v2`. If the product later needs taste (“these are product shots, not memes”), that is a **later** judge milestone with its own draft schema. It consumes the download receipt. It does not re-run the downloader and it does not override `carousel_captured`.
+“Did we download five images?” stays a schema. “The official endpoint 404’d — try the other listed fetcher, or a shorter URL that still yields five `file_ref_v2`s” is intelligence. That is self-debug without becoming a session that invents the toolbox.
 
-That is how M8M solves the problem this repo states: Codex and Claude overuse intelligence for tiny tasks, so the flow is not controllable and nothing ships. Tools keep fetch/crop/hash fixture-testable and in the **project** toolbox. Intelligence stays, but only as a draft the tools can admit. The driver still stops at an **asset**, not at a vibe.
+Default `on_tool_fail` is `BLOCKED`. Use `need_model` only when a fixture cannot name the recovery.
+
+That is how M8M solves the problem this repo states: Codex and Claude overuse intelligence for tiny tasks, so the flow is not controllable and nothing ships. Tools stay fixture-testable in the **project**. Intelligence stays in the loop, but only as a draft the same toolbox can admit. The driver still stops at an **asset**, not at a vibe.
 
 Read [references/tool-vs-intelligence.md](references/tool-vs-intelligence.md).
 

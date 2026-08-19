@@ -5,8 +5,8 @@ Three words. Do not mix them.
 | Word | Meaning | Path |
 | --- | --- | --- |
 | **Milestone** | Canvas node. Human checkpoint. `this.in` **is** `previous.out`. | `flowsteps/flows/<flow_id>/` |
-| **FlowStep** | Tool-heavy unit **inside** a milestone. Not drawn on the canvas. | listed on that milestone |
-| **Tool** | Premade Python a FlowStep runs. Input schema in, output schema out. | `flowsteps/tools/<tool_id>/` |
+| **FlowStep** | Small goal **inside** a milestone (bind five images). Not drawn on the canvas. | listed on that milestone |
+| **Tool** | One premade Python way to do that goal. Input schema in, output schema out. | `flowsteps/tools/<tool_id>/` |
 
 n8n’s canvas is too stiff: every HTTP call and crop is its own node.
 Keep n8n’s good parts (typed units, reusable pieces, AI does not invent
@@ -41,8 +41,10 @@ milestone starts only when this one’s output schema PASSes. That payload
 **is** the next milestone’s input schema.
 
 `intelligence: none` — assemble only calls listed FlowSteps / tools.
-`intelligence: completion|image|judge` — a draft is allowed, then the
-tools must still produce a schema-valid payload.
+`intelligence: completion|image|judge` — a draft is allowed (invention,
+or **one** recovery after a listed tool fails when `on_tool_fail:
+need_model`). Tools must still produce a schema-valid payload. The model
+does not invent a tool and does not relax the output schema.
 
 ## Toolbox rules
 

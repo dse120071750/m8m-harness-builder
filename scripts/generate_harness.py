@@ -306,6 +306,8 @@ def generate_v3_flow(
         if intel_value != "none":
             item["model_justification"] = spec.get("model_justification") or "judgment that is not a typed transform"
             item["draft_schema"] = f"milestones/{mid}/draft.schema.json"
+        if spec.get("on_tool_fail"):
+            item["on_tool_fail"] = spec["on_tool_fail"]
         if spec.get("next"):
             edges = []
             gate_schemas: dict[str, Any] = dict(spec.get("_gate_schemas") or {})
@@ -385,7 +387,7 @@ def generate_v3_flow(
         input_path = harness / "milestones" / mid / "input.schema.json"
         if _write_json(input_path, input_obj, overwrite=overwrite):
             created.append(str(input_path))
-        if item["intelligence"] != "none":
+        if item["intelligence"] != "none" and item.get("on_tool_fail") != "need_model":
             intel_gate = (
                 "if draft is None:\n"
                 "        return {\n"
@@ -580,6 +582,7 @@ def generate_from_audit(
             "next": item.get("next"),
             "else": item.get("else"),
             "foreach": item.get("foreach"),
+            "on_tool_fail": item.get("on_tool_fail"),
             "join": item.get("join"),
             "_gate_schemas": {
                 str(edge["when"]): edge["schema"]
@@ -643,6 +646,8 @@ def yaml_dump_v3(flow: dict[str, Any]) -> str:
         lines.append(f"    output_schema: {item['output_schema']}")
         lines.append(f"    tools: [{', '.join(item['tools'])}]")
         lines.append(f"    intelligence: {item['intelligence']}")
+        if item.get("on_tool_fail"):
+            lines.append(f"    on_tool_fail: {item['on_tool_fail']}")
         if item["intelligence"] != "none":
             lines.append(f"    model_justification: {json.dumps(item.get('model_justification') or '', ensure_ascii=False)}")
             lines.append(f"    draft_schema: {item['draft_schema']}")

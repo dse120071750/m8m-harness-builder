@@ -554,5 +554,67 @@ class ToolboxPlanTests(unittest.TestCase):
         self.assertIn("`instagram_url_canonicalize`", md)
 
 
+class ToolFailRecoveryTests(unittest.TestCase):
+    def test_listed_tool_fail_asks_for_one_draft_then_blocks(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            codebase = Path(temp) / "repo"
+            generate_tool(codebase, "hash_bind")
+            generate_v3_flow(
+                codebase,
+                "recover_v1",
+                ["source_ready"],
+                tools=["hash_bind"],
+                milestone_specs=[
+                    {
+                        "id": "source_ready",
+                        "tools": ["hash_bind"],
+                        "intelligence": "completion",
+                        "model_justification": "recover when the listed downloader fails",
+                        "on_tool_fail": "need_model",
+                    }
+                ],
+            )
+            harness = codebase / "flowsteps" / "flows" / "recover_v1"
+            _write(
+                harness / "milestones" / "source_ready" / "assemble.py",
+                "def run(input_data, draft=None, **_):\n"
+                "    if isinstance(draft, dict) and draft.get('retry'):\n"
+                "        raise RuntimeError('still down')\n"
+                "    raise RuntimeError('download failed')\n",
+            )
+            _write(
+                harness / "milestones" / "source_ready" / "draft.schema.json",
+                json.dumps({"type": "object", "additionalProperties": True}),
+            )
+            _write(
+                harness / "schemas" / "source_ready_v1.json",
+                json.dumps({"type": "object", "additionalProperties": True}),
+            )
+            request = Path(temp) / "request.json"
+            request.write_text(json.dumps({"ok": True}), encoding="utf-8")
+            first = advance(harness, Path(temp) / "run-rec", request_path=request)
+            self.assertEqual(first["state"], "ACTION_REQUIRED")
+            self.assertEqual(first.get("on_tool_fail"), "need_model")
+            draft = Path(temp) / "draft.json"
+            draft.write_text(json.dumps({"retry": True}), encoding="utf-8")
+            second = advance(harness, Path(temp) / "run-rec", draft_path=draft)
+            self.assertEqual(second["state"], "BLOCKED")
+
+    def test_tool_fail_without_recovery_stays_blocked(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            codebase = Path(temp) / "repo"
+            generate_tool(codebase, "hash_bind")
+            generate_v3_flow(codebase, "rigid_v1", ["source_ready"], tools=["hash_bind"])
+            harness = codebase / "flowsteps" / "flows" / "rigid_v1"
+            _write(
+                harness / "milestones" / "source_ready" / "assemble.py",
+                "def run(input_data, draft=None, **_):\n    raise RuntimeError('download failed')\n",
+            )
+            request = Path(temp) / "request.json"
+            request.write_text(json.dumps({"ok": True}), encoding="utf-8")
+            blocked = advance(harness, Path(temp) / "run-rigid", request_path=request)
+            self.assertEqual(blocked["state"], "BLOCKED")
+
+
 if __name__ == "__main__":
     unittest.main()

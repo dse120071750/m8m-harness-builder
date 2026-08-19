@@ -66,6 +66,11 @@ def _validate_control(
     errors: list[str],
 ) -> None:
     step_id = step["id"]
+    fail = step.get("on_tool_fail") or "BLOCKED"
+    if fail not in {"BLOCKED", "need_model"}:
+        errors.append(f"{step_id}: on_tool_fail must be BLOCKED or need_model")
+    if fail == "need_model" and step.get("intelligence") in {None, "none"}:
+        errors.append(f"{step_id}: on_tool_fail need_model requires intelligence")
     if step.get("next"):
         if not step.get("else"):
             errors.append(f"{step_id}: next requires else")

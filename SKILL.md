@@ -54,9 +54,11 @@ foreach owned by intelligence               = invalid
 ```
 
 Intelligence may exist *on* a milestone (`NEED_MODEL`) and may only call
-the FlowSteps listed on that milestone. It is a draft the tools admit
-into the output schema. It is not the PASS bit of a mechanical
-milestone (five files downloaded is `minItems`, not a judge).
+the FlowSteps listed on that milestone. A FlowStep is a small goal; a
+tool is one way to do it. If a listed tool fails, `on_tool_fail:
+need_model` asks for **one** recovery draft — same toolbox, same output
+schema. It does not write a new tool in the session. It is not the PASS
+bit (`minItems: 5` is still five files).
 
 ## Working method
 

@@ -168,6 +168,52 @@ def _write_blocked(
     return _blocked_action(step["id"], blockers)
 
 
+def _recover_or_block(
+    skill_dir: Path,
+    run_dir: Path,
+    flow: dict[str, Any],
+    step: dict[str, Any],
+    bindings: list[dict[str, Any]],
+    fingerprint: str,
+    draft: dict[str, Any] | None,
+    blockers: list[str],
+) -> dict[str, Any]:
+    folder = work_dir(run_dir, step["id"])
+    folder.mkdir(parents=True, exist_ok=True)
+    already = (folder / "tool_failed.json").is_file()
+    if draft is not None or already or step.get("on_tool_fail") != "need_model" or step.get("model") == "none":
+        return _write_blocked(run_dir, flow, step, bindings, fingerprint, blockers)
+    write_json(folder / "tool_failed.json", {"blockers": blockers})
+    request = {
+        "milestone": step["id"],
+        "blockers": blockers,
+        "tools": step.get("tools") or [],
+        "instruction": (
+            "Listed tools failed this FlowStep. Write a draft the same toolbox can admit. "
+            "Do not invent tools. Do not relax the output schema."
+        ),
+    }
+    request_path = folder / "model_request.json"
+    write_json(request_path, request)
+    return {
+        "schema": ACTION_SCHEMA,
+        "state": "ACTION_REQUIRED",
+        "action": "run_model_then_advance",
+        "execution_mode": "tool",
+        "step_id": step["id"],
+        "attempt": 1,
+        "model": step.get("model"),
+        "task_path": relative_to(run_dir, run_dir / "runtime-tasks" / f"{step['id']}.json"),
+        "model_request_path": relative_to(run_dir, request_path),
+        "draft_path": relative_to(run_dir, folder / "draft.json"),
+        "draft_schema_path": step.get("draft_schema"),
+        "expected_output_path": relative_to(run_dir, expected_artifact_path(run_dir, flow, step)),
+        "input_artifacts": bindings,
+        "tools": step.get("tools") or [],
+        "on_tool_fail": "need_model",
+    }
+
+
 def _execute_step(
     skill_dir: Path,
     run_dir: Path,
@@ -208,12 +254,30 @@ def _execute_step(
         else:
             result = invoke_tool(skill_dir, step, input_data, draft, task)
     except Exception as exc:
-        return _write_blocked(run_dir, flow, step, bindings, fingerprint, [f"{type(exc).__name__}: {exc}"])
+        return _recover_or_block(
+            skill_dir,
+            run_dir,
+            flow,
+            step,
+            bindings,
+            fingerprint,
+            draft,
+            [f"{type(exc).__name__}: {exc}"],
+        )
     if not isinstance(result, dict):
-        return _write_blocked(run_dir, flow, step, bindings, fingerprint, ["tool must return a JSON object"])
+        return _recover_or_block(
+            skill_dir,
+            run_dir,
+            flow,
+            step,
+            bindings,
+            fingerprint,
+            draft,
+            ["tool must return a JSON object"],
+        )
     if result.get("_flowstep") == "BLOCKED":
         blockers = [str(item) for item in result.get("blockers") or ["tool returned BLOCKED"]]
-        return _write_blocked(run_dir, flow, step, bindings, fingerprint, blockers)
+        return _recover_or_block(skill_dir, run_dir, flow, step, bindings, fingerprint, draft, blockers)
     if result.get("_flowstep") == NEED_MODEL:
         if step["model"] == "none":
             return _write_blocked(
@@ -244,7 +308,7 @@ def _execute_step(
     try:
         validate_against_schema(result, skill_dir / step["output_schema"])
     except FlowError as exc:
-        return _write_blocked(run_dir, flow, step, bindings, fingerprint, [str(exc)])
+        return _recover_or_block(skill_dir, run_dir, flow, step, bindings, fingerprint, draft, [str(exc)])
     artifact = make_envelope(
         flow=flow,
         step=step,
