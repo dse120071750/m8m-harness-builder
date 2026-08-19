@@ -2,19 +2,20 @@
 name: m8m-harness-builder
 description: >
   M8M writer. Split a Codex or Claude skill into milestones, FlowSteps,
-  and tools, then write one toolbox table and one flowchart. Use when
+  and tools, then write one toolbox table and one flowchart. Each
+  milestone is a harness checkpoint with a required asset. Use when
   the user wants to identify checkpoints, list tools per checkpoint, or
   scaffold a flow. Invoke as $m8m-harness-builder.
 license: MIT
 metadata:
   author: dse120071750
-  version: "1.2"
+  version: "1.3"
 ---
 
 # M8M harness builder
 
-This skill **writes** a split. It is not a production runtime and not a
-guardrail.
+This skill **writes** a split. FlowSteps and tools may be sketches.
+**Milestones are the harness.**
 
 ```text
 identify milestones
@@ -27,9 +28,12 @@ identify milestones
 Three words:
 
 ```text
-Milestone  = checkpoint you would inspect. previous.out is this.in.
-FlowStep   = small goal inside that checkpoint.
+Milestone  = harness checkpoint. previous.out is this.in.
+             Must produce a declared asset (file, image, json proof, data).
+             If it is not produced: BLOCK. Next milestone does not start.
+FlowStep   = small goal inside that checkpoint. May be a stub.
 Tool       = Python that does the goal, at <repo>/flowsteps/tools/<id>/.
+             Generate-new is a successful sketch.
 ```
 
 ## Do this
@@ -56,7 +60,11 @@ Deliverables (this is the product):
 | `<repo>/.agents/skills/<name>/SKILL.md` and `.claude/skills/<name>/SKILL.md` | Pointer skill |
 
 A stub tool or a generate-new row is a successful sketch, not a failed
-build. `validate_harness.py` and `run_flow.py` are optional follow-ups.
+build. The **milestone output schema is not a sketch**: it names the
+asset that must exist. Runtime BLOCKs if that schema does not PASS.
+
+`validate_harness.py` is an optional follow-up for filling in tools.
+`run_flow.py` is the harness: no asset → BLOCK.
 
 ## Response
 

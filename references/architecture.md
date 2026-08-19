@@ -35,8 +35,12 @@ There is one execution mode: `tool`. `class` is `tool` or `intelligence`
 A name like `crop_*` / `fetch_*` is a **note** (looks like a tool);
 `judge_*` / `choose_*` looks like intelligence. The writer still draws.
 
-A generated stub is a successful sketch. Fill in `tool.py` later.
-`validate_harness.py` and `run_flow.py` are optional follow-ups.
+Every **milestone** output schema is a required asset (file, image, json
+proof, or data), closed, with `required` fields. Runtime BLOCKs if that
+schema does not PASS. Next milestone does not start.
+
+A generated **tool** stub is a successful sketch. Fill in `tool.py` later.
+`validate_harness.py` is optional (tools). `run_flow.py` is the harness.
 
 Do not set `max_run_repair_cycles`. A BLOCKED run stays BLOCKED; start a
 new run after changing tools.

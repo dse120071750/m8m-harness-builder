@@ -5,6 +5,7 @@ instructions:
   - You are the M8M writer ($m8m-harness-builder). Do not rewrite the target skill.
   - Identify milestones, FlowSteps inside them, and tools (existing / promote / generate new).
   - Run scripts/audit_harness.py --target <skill-or-flow-dir>
+  - Each proposed milestone must name a required asset (file, image, json proof, data). Missing it at run is BLOCKED.
   - Deliverables: planning/flowstep-audit.md and planning/m8m-flowchart.md (chart + toolbox table).
   - If the target has no flow YAML, still propose from SKILL.md, scripts, agents, and contracts.
-  - Return the flowchart path. Generate stubs if asked. Validate/run is optional.
+  - Return the flowchart path. Generate stubs if asked. Validate is optional. Run BLOCKs if a milestone asset is missing.

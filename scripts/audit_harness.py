@@ -19,6 +19,7 @@ from flowstep_runtime import (
     FlowError,
     add_harness_location_args,
     harness_dir_from_args,
+    infer_asset_kind,
     is_stub_output_schema,
     is_under_home_skills,
     load_yaml,
@@ -238,10 +239,12 @@ def proposed_schema_object(
             "$schema": "https://json-schema.org/draft/2020-12/schema",
             "$id": f"{step_id}.{kind}.schema.json",
             "type": "object",
-            "additionalProperties": bool(summary.get("additionalProperties", False)),
-            "required": list(summary.get("required") or []),
+            "additionalProperties": False if kind == "output" else bool(summary.get("additionalProperties", False)),
+            "required": list(summary.get("required") or list(summary.get("properties") or {})),
             "properties": summary.get("properties") or {},
         }
+        if kind == "output" and not schema["required"]:
+            schema["required"] = list(schema["properties"])
         return schema
     if kind == "input":
         properties = {
@@ -632,6 +635,7 @@ def _attach_schemas(root: Path, milestone: dict[str, Any]) -> dict[str, Any]:
         kind="output",
         summary=output_summary,
     )
+    milestone["asset"] = {"kind": infer_asset_kind(milestone["output_schema"])}
     return milestone
 
 
@@ -1352,14 +1356,15 @@ def render_audit_markdown(report: dict[str, Any]) -> str:
     lines.extend(
         [
             "",
-            "| # | Milestone | Intelligence | Python tools | Output contract | Human inspects |",
-            "| ---: | --- | --- | --- | --- | --- |",
+            "| # | Milestone | Asset | Intelligence | Python tools | Output contract | Human inspects |",
+            "| ---: | --- | --- | --- | --- | --- | --- |",
         ]
     )
     for index, item in enumerate(report.get("proposed_milestones") or [], start=1):
         tools = ", ".join(f"`{tool}`" for tool in item.get("tools") or []) or "none"
+        asset = ((item.get("asset") or {}).get("kind") if isinstance(item.get("asset"), dict) else None) or "required"
         lines.append(
-            f"| {index} | `{item['id']}` | `{item.get('intelligence') or 'none'}` | {tools} | "
+            f"| {index} | `{item['id']}` | `{asset}` | `{item.get('intelligence') or 'none'}` | {tools} | "
             f"`{item['output_contract']}` | {item.get('inspects') or ''} |"
         )
     lines.extend(

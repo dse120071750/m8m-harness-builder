@@ -3,12 +3,14 @@
 
 This file is the skill instruction. Each section is a milestone.
 A milestone input schema is the previous milestone output schema.
-FlowSteps listed on a milestone run tools. Mark DONE when the output schema PASSes.
+Each milestone is a harness checkpoint: a required asset (file, image, json proof, or data).
+Mark DONE when that asset is produced (output schema PASS). Missing it is BLOCKED.
+FlowSteps listed on a milestone run tools. Tools may be stubs until filled in.
 
 - harness: `C:\Users\gasil\.codex\skills\m8m-harness-builder\examples\text_pipeline`
 - flow_id: `text_pipeline_v1`
 - final_payload: `label_v1` from `label`
-- updated_at: 2026-08-19T20:26:09Z
+- updated_at: 2026-08-19T20:36:52Z
 
 ## Run
 

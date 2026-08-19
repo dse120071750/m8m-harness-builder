@@ -208,7 +208,8 @@ def _recover_or_block(
         "max_model_attempts": limit,
         "instruction": (
             "Listed tools ran first and failed this FlowStep. Write a draft those tools can admit "
-            "so the milestone output schema PASSes. Tools stay first. Do not skip the output schema."
+            "so the milestone asset is produced (output schema PASS). Tools stay first. "
+            "Do not skip the asset. Missing it is BLOCKED."
         ),
     }
     request_path = folder / "model_request.json"
@@ -326,7 +327,16 @@ def _execute_step(
     try:
         validate_against_schema(result, skill_dir / step["output_schema"])
     except FlowError as exc:
-        return _recover_or_block(skill_dir, run_dir, flow, step, bindings, fingerprint, draft, [str(exc)])
+        return _recover_or_block(
+            skill_dir,
+            run_dir,
+            flow,
+            step,
+            bindings,
+            fingerprint,
+            draft,
+            [f"{step['id']}: milestone asset not produced; {exc}"],
+        )
     artifact = make_envelope(
         flow=flow,
         step=step,

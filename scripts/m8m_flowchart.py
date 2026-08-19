@@ -39,6 +39,7 @@ def _nodes(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "foreach": foreach,
                 "join": [str(src) for src in join] if isinstance(join, list) else None,
                 "output_contract": str(item.get("output_contract") or ""),
+                "asset_kind": str(((item.get("asset") or {}).get("kind") if isinstance(item.get("asset"), dict) else "") or ""),
             }
         )
     return nodes
@@ -82,19 +83,21 @@ def render_mermaid(items: list[dict[str, Any]]) -> str:
         mid = item["id"]
         tools = ",".join(item["tools"] or [])
         tool_line = f"<br/>{tools}" if tools else ""
+        asset_kind = item.get("asset_kind") or ""
+        asset_line = f"<br/>asset:{asset_kind}" if asset_kind else ""
         fe = item.get("foreach")
         if fe:
             loop_tools = ",".join(fe.get("tools") or item["tools"] or ["tools"])
             lines.append(
-                f'    {mid}[["foreach {fe.get("path")} max={fe.get("max_items")}<br/>{mid}<br/>{loop_tools}"]]'
+                f'    {mid}[["foreach {fe.get("path")} max={fe.get("max_items")}<br/>{mid}{asset_line}<br/>{loop_tools}"]]'
             )
         elif item["next"]:
-            lines.append(f"    {mid}{{{mid}{tool_line}}}")
+            lines.append(f"    {mid}{{{mid}{asset_line}{tool_line}}}")
         else:
             extra = ""
             if item["intelligence"] not in {None, "none"}:
                 extra = f"<br/>intel:{item['intelligence']}"
-            lines.append(f'    {mid}["{mid}{extra}{tool_line}"]')
+            lines.append(f'    {mid}["{mid}{extra}{asset_line}{tool_line}"]')
         if item["next"] and (item.get("else") or ELSE_BLOCKED) in {None, ELSE_BLOCKED, "BLOCKED"}:
             lines.append(f"    {_blocked_id(mid)}{{{{{ELSE_BLOCKED}}}}}")
     if ids:
@@ -159,8 +162,9 @@ def render_flowchart(
     lines = [
         f"# M8M flowchart: {title}",
         "",
-        "One chart. Milestone to milestone. If/else and foreach are JSON Schema,",
-        "not semantic approval. Intelligence does not pick `then`.",
+        "One chart. Milestone to milestone. Each node is a required asset",
+        "(file, image, json proof, or data). Missing it is BLOCKED.",
+        "If/else and foreach are JSON Schema, not semantic approval.",
         "",
         f"- flow_id: `{flow_id or title}`",
         f"- source: `{source}`",
@@ -180,12 +184,12 @@ def render_flowchart(
         [
             "## Nodes",
             "",
-            "| Milestone | Intelligence | Tools | Control |",
-            "| --- | --- | --- | --- |",
+            "| Milestone | Asset | Intelligence | Tools | Control |",
+            "| --- | --- | --- | --- | --- |",
         ]
     )
     if not nodes:
-        lines.append("| (none) | | | |")
+        lines.append("| (none) | | | | |")
     for item in nodes:
         tools = ", ".join(f"`{tool}`" for tool in item["tools"]) or "none"
         if item["next"]:
@@ -197,8 +201,9 @@ def render_flowchart(
             control = f"foreach `{fe.get('path')}` max={fe.get('max_items')}"
         else:
             control = "linear"
+        asset = item.get("asset_kind") or "required"
         lines.append(
-            f"| `{item['id']}` | `{item['intelligence']}` | {tools} | {control} |"
+            f"| `{item['id']}` | `{asset}` | `{item['intelligence']}` | {tools} | {control} |"
         )
     lines.extend(["", "## Gates (if / else)", ""])
     gate_rows = [item for item in nodes if item["next"]]

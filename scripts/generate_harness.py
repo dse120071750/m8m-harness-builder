@@ -16,6 +16,7 @@ from flowstep_runtime import (
     FlowError,
     assert_product_harness_location,
     find_flow_path,
+    harness_output_schema,
     is_under_home_skills,
     load_flow,
     resolve_harness_dir,
@@ -219,24 +220,6 @@ def generate_tool(codebase: Path, tool_id: str, *, overwrite: bool = False) -> d
     }
 
 
-ASSET_OUTPUT_SCHEMA = {
-    "$schema": "https://json-schema.org/draft/2020-12/schema",
-    "type": "object",
-    "additionalProperties": False,
-    "required": ["asset"],
-    "properties": {
-        "asset": {
-            "type": "object",
-            "additionalProperties": False,
-            "required": ["path", "sha256"],
-            "properties": {
-                "path": {"type": "string", "minLength": 1},
-                "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-            },
-        }
-    },
-}
-
 PASSTHROUGH_SCHEMA = {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "type": "object",
@@ -246,13 +229,6 @@ PASSTHROUGH_SCHEMA = {
 
 def _write_json(path: Path, value: Any, *, overwrite: bool) -> bool:
     return _write_text(path, json.dumps(value, indent=2, ensure_ascii=False) + "\n", overwrite=overwrite)
-
-
-def _asset_schema(schema: dict[str, Any] | None) -> bool:
-    if not isinstance(schema, dict):
-        return False
-    props = schema.get("properties") or {}
-    return "asset" in props
 
 
 def generate_v3_flow(
@@ -302,7 +278,13 @@ def generate_v3_flow(
         if not step_tools:
             step_tools = ["hash_bind"]
         is_last = index == len(milestones) - 1
-        if is_last and "hash_bind" not in step_tools:
+        spec_asset = spec.get("asset") if isinstance(spec.get("asset"), dict) else {}
+        output_obj, asset_kind = harness_output_schema(
+            spec.get("output_schema_object") if isinstance(spec.get("output_schema_object"), dict) else None,
+            step_id=mid,
+            kind=str(spec_asset.get("kind") or "") or None,
+        )
+        if asset_kind in {"file", "image"} and "hash_bind" not in step_tools:
             step_tools.append("hash_bind")
         intel_value = spec.get("intelligence") or ("completion" if mid in intel else "none")
         item: dict[str, Any] = {
@@ -314,9 +296,11 @@ def generate_v3_flow(
             "intelligence": intel_value,
             "handler": f"milestones/{mid}/assemble.py",
             "test": f"milestones/{mid}/tests/test_assemble.py",
-            "_output_schema_object": spec.get("output_schema_object"),
+            "asset": {"kind": asset_kind},
+            "_output_schema_object": output_obj,
             "_input_schema_object": spec.get("input_schema_object"),
             "_is_last": is_last,
+            "_asset_kind": asset_kind,
         }
         if previous is None:
             item["inputs"] = spec.get("inputs") or {"request": "user.request"}
@@ -376,14 +360,8 @@ def generate_v3_flow(
     previous_id = None
     for item in items:
         mid = item["id"]
-        if isinstance(item.get("_output_schema_object"), dict):
-            output_obj = item["_output_schema_object"]
-            output_obj.setdefault("$id", f"{mid}.output.schema.json")
-        elif item["_is_last"]:
-            output_obj = ASSET_OUTPUT_SCHEMA
-        else:
-            output_obj = dict(PASSTHROUGH_SCHEMA)
-            output_obj["$id"] = f"{mid}.output.schema.json"
+        output_obj = item["_output_schema_object"]
+        output_obj.setdefault("$id", f"{mid}.output.schema.json")
         schema_path = harness / "schemas" / f"{mid}_v1.json"
         if _write_json(schema_path, output_obj, overwrite=overwrite):
             created.append(str(schema_path))
@@ -427,6 +405,7 @@ def generate_v3_flow(
             "TOOLS_JSON": json.dumps(item["tools"]),
             "INTELLIGENCE": item["intelligence"],
             "IS_LAST": "True" if item["_is_last"] else "False",
+            "ASSET_KIND": item.get("_asset_kind") or "file",
             "INTEL_GATE": intel_gate,
         }
         assemble = harness / "milestones" / mid / "assemble.py"
@@ -599,6 +578,7 @@ def generate_from_audit(
             "output_contract": item.get("output_contract") or f"{item['id']}_v1",
             "output_schema_object": item.get("output_schema"),
             "input_schema_object": item.get("input_schema"),
+            "asset": item.get("asset") if isinstance(item.get("asset"), dict) else None,
             "inputs": item.get("inputs"),
             "model_justification": item.get("model_justification"),
             "next": item.get("next"),
@@ -670,6 +650,10 @@ def yaml_dump_v3(flow: dict[str, Any]) -> str:
         lines.append(f"  - id: {item['id']}")
         lines.append(f"    output_contract: {item['output_contract']}")
         lines.append(f"    output_schema: {item['output_schema']}")
+        asset_kind = ((item.get("asset") or {}).get("kind") if isinstance(item.get("asset"), dict) else None) or ""
+        if asset_kind:
+            lines.append("    asset:")
+            lines.append(f"      kind: {asset_kind}")
         lines.append(f"    tools: [{', '.join(item['tools'])}]")
         lines.append(f"    intelligence: {item['intelligence']}")
         if item.get("on_tool_fail"):

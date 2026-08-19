@@ -9,7 +9,7 @@ import support  # noqa: F401  # puts scripts/ on sys.path
 
 from audit_harness import audit_harness, audit_skill, render_audit_markdown
 from m8m_factory import run_factory
-from flowstep_runtime import FlowError
+from flowstep_runtime import FlowError, is_passthrough_schema
 from flowstep_tools import run_library_tool, validate_library_tool
 from generate_harness import (
     generate_from_audit,
@@ -63,9 +63,16 @@ class AuditDrivesGenerateTests(unittest.TestCase):
             harness = Path(result["harness_dir"])
             flow = (harness / "flow.yaml").read_text(encoding="utf-8")
             self.assertIn("hash_bind", flow)
+            self.assertIn("asset:", flow)
+            self.assertIn("kind:", flow)
             last_id = result["milestones"][-1]
             last_schema = harness / "schemas" / f"{last_id}_v1.json"
             self.assertTrue(last_schema.is_file())
+            for mid in result["milestones"]:
+                schema = json.loads((harness / "schemas" / f"{mid}_v1.json").read_text(encoding="utf-8"))
+                self.assertFalse(is_passthrough_schema(schema), mid)
+                self.assertEqual(schema.get("additionalProperties"), False)
+                self.assertTrue(schema.get("required"), mid)
             self.assertTrue((harness / "planning" / "m8m-flowchart.md").is_file())
             self.assertEqual(result["status"], "PASS")
             self.assertTrue((codebase / ".agents" / "skills" / "toy-skill" / "SKILL.md").is_file())

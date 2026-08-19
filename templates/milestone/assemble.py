@@ -12,6 +12,7 @@ STEP_ID = "__STEP_ID__"
 TOOLS: list[str] = json.loads("""__TOOLS_JSON__""")
 INTELLIGENCE = "__INTELLIGENCE__"
 IS_LAST = __IS_LAST__
+ASSET_KIND = "__ASSET_KIND__"
 
 
 def _codebase() -> Path:
@@ -75,12 +76,14 @@ def run(input_data: dict[str, Any], draft: dict[str, Any] | None = None, **kwarg
             {"instance": payload["instance"], "schema": payload["schema"]},
         )
         payload["valid"] = True
-    if IS_LAST:
+    if ASSET_KIND in {"file", "image"} or IS_LAST:
         asset = payload.get("asset")
         if not isinstance(asset, dict) or "path" not in asset or "sha256" not in asset:
             path = _first_path(payload)
             if not path:
-                raise ValueError(f"{STEP_ID}: last milestone must emit asset path+sha256")
+                raise ValueError(f"{STEP_ID}: milestone asset not produced (need {ASSET_KIND} path+sha256)")
             asset = tools.run_library_tool(codebase, "hash_bind", {"path": path})
         return {"asset": {"path": asset["path"], "sha256": asset["sha256"]}}
+    if not payload:
+        raise ValueError(f"{STEP_ID}: milestone asset not produced (empty {ASSET_KIND} proof)")
     return payload

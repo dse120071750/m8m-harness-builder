@@ -292,6 +292,10 @@ def _load_flow_v3(skill_dir: Path, path: Path, raw: dict[str, Any]) -> dict[str,
         join = item.get("join")
         if join is not None and (not isinstance(join, list) or not join):
             raise FlowError(f"{step_id}: join must be a non-empty list of milestone ids")
+        asset = item.get("asset") if isinstance(item.get("asset"), dict) else {}
+        asset_kind = str(asset.get("kind") or "").strip().lower()
+        if asset_kind not in ASSET_KINDS:
+            asset_kind = ""
         step = {
             "id": step_id,
             "kind": "milestone",
@@ -312,6 +316,7 @@ def _load_flow_v3(skill_dir: Path, path: Path, raw: dict[str, Any]) -> dict[str,
             "else": item.get("else"),
             "foreach": foreach,
             "join": list(join) if isinstance(join, list) else None,
+            "asset": {"kind": asset_kind} if asset_kind else dict(asset),
         }
         if intel != "none":
             step["draft_schema"] = item["draft_schema"]
@@ -659,6 +664,103 @@ def is_stub_output_schema(schema: dict[str, Any]) -> bool:
     required = schema.get("required") or []
     properties = schema.get("properties") or {}
     return list(required) == ["ok"] and set(properties) <= {"ok"}
+
+
+ASSET_KINDS = ("file", "image", "json", "data")
+
+
+def is_passthrough_schema(schema: dict[str, Any] | None) -> bool:
+    """True when a milestone output would accept anything — not a harness asset."""
+    if not isinstance(schema, dict):
+        return True
+    if is_stub_output_schema(schema):
+        return True
+    required = [str(item) for item in (schema.get("required") or []) if item]
+    properties = schema.get("properties") if isinstance(schema.get("properties"), dict) else {}
+    if not required:
+        return True
+    if schema.get("additionalProperties") is True and not properties:
+        return True
+    return False
+
+
+def is_harness_asset_schema(schema: dict[str, Any] | None) -> bool:
+    return not is_passthrough_schema(schema)
+
+
+def infer_asset_kind(schema: dict[str, Any] | None, *, fallback: str = "file") -> str:
+    kind = fallback if fallback in ASSET_KINDS else "file"
+    if not isinstance(schema, dict):
+        return kind
+    props = schema.get("properties") if isinstance(schema.get("properties"), dict) else {}
+    names = " ".join([*props, *[str(item) for item in (schema.get("required") or [])]]).lower()
+    asset = props.get("asset") if isinstance(props.get("asset"), dict) else {}
+    asset_props = asset.get("properties") if isinstance(asset.get("properties"), dict) else {}
+    image_tokens = ("image", "png", "jpg", "jpeg", "webp", "card", "render", "screenshot")
+    if "path" in asset_props or "sha256" in asset_props:
+        return "image" if any(tok in names for tok in image_tokens) else "file"
+    if any(tok in names for tok in image_tokens):
+        return "image"
+    if any(key in props for key in ("path", "sha256")) or any(
+        str(key).endswith("_sha256") or str(key).endswith("_path") for key in props
+    ):
+        return "file"
+    if props:
+        return "json"
+    return kind
+
+
+def file_asset_schema(step_id: str) -> dict[str, Any]:
+    return {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": f"{step_id}.output.schema.json",
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["asset"],
+        "properties": {
+            "asset": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["path", "sha256"],
+                "properties": {
+                    "path": {"type": "string", "minLength": 1},
+                    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                },
+            }
+        },
+    }
+
+
+def harness_output_schema(
+    schema: dict[str, Any] | None,
+    *,
+    step_id: str,
+    kind: str | None = None,
+) -> tuple[dict[str, Any], str]:
+    """Closed required proof for a milestone. Never a passthrough object."""
+    if is_harness_asset_schema(schema) and isinstance(schema, dict):
+        closed = dict(schema)
+        closed.setdefault("$schema", "https://json-schema.org/draft/2020-12/schema")
+        closed.setdefault("$id", f"{step_id}.output.schema.json")
+        closed["type"] = "object"
+        closed["additionalProperties"] = False
+        if not closed.get("required"):
+            closed["required"] = [str(key) for key in (closed.get("properties") or {})]
+        return closed, infer_asset_kind(closed, fallback=kind or "json")
+    resolved = kind if kind in ASSET_KINDS else "file"
+    if resolved in {"file", "image"}:
+        return file_asset_schema(step_id), resolved
+    return (
+        {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "$id": f"{step_id}.output.schema.json",
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["proof"],
+            "properties": {"proof": {"type": "object", "minProperties": 1}},
+        },
+        resolved,
+    )
 
 
 def _returns_draft(node: ast.AST) -> bool:

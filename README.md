@@ -2,21 +2,23 @@
 
 A **skill that writes a split**: milestones, FlowSteps, tools, one table, one flowchart.
 
-It is not a production runtime and not a doctrine engine. `validate_harness.py` and `run_flow.py` are optional.
+**Milestones are the harness.** Each one is a person-shaped checkpoint: it must produce a declared asset (file, image, json proof, data). If that asset is not produced, the run **BLOCKs**. The next milestone does not start.
+
+FlowSteps and tools inside a milestone may be sketches (`generate-new` stubs). That is not a factory failure. Do not put the same rigidity on tools that the harness puts on the milestone asset.
 
 ```text
 identify milestones
   → FlowSteps (small goals) inside each
-  → tools: existing | promote from a script | generate new
+  → tools: existing | promote from a skill script | generate new
   → planning/m8m-flowchart.md  (chart + table)
   → scaffold flow.yaml + tool stubs
 ```
 
 | Word | Meaning |
 | --- | --- |
-| **Milestone** | Checkpoint. Input is the previous output. |
-| **FlowStep** | Small goal inside that checkpoint. |
-| **Tool** | Python at `<repo>/flowsteps/tools/<id>/`. |
+| **Milestone** | Harness checkpoint. `this.in` is `previous.out`. Required asset, or BLOCK. |
+| **FlowStep** | Small goal inside that checkpoint. May be a stub. |
+| **Tool** | Python at `<repo>/flowsteps/tools/<id>/`. Generate-new is a sketch. |
 
 ## Run
 
@@ -39,7 +41,7 @@ Deliverables:
 - `<repo>/flowsteps/tools/<id>/` (seed or stub)
 - `<repo>/.agents/skills/<name>/SKILL.md` and `<repo>/.claude/skills/<name>/SKILL.md`
 
-Generate-new / stub tools are expected. The factory **PASSes** when the chart, table, and stubs exist. Fill in real `tool.py` later.
+Generate-new / stub tools are expected. The factory **PASSes** when the chart, table, stubs, and **per-milestone asset schemas** exist. Fill in real `tool.py` later. A missing milestone asset at **run** time is BLOCKED.
 
 ## Toolbox table (on the chart)
 
@@ -53,9 +55,11 @@ Generate-new / stub tools are expected. The factory **PASSes** when the chart, t
 ```mermaid
 flowchart TD
     request([request]) --> source_ready
-    source_ready["source_ready<br/>hash_bind"] --> plan_frozen
-    plan_frozen["plan_frozen<br/>intel:completion"] --> release_packaged
+    source_ready["source_ready<br/>asset:file<br/>hash_bind"] --> plan_frozen
+    plan_frozen["plan_frozen<br/>intel:completion<br/>asset:json"] --> release_packaged
 ```
+
+`asset:file` / `asset:image` / `asset:json` / `asset:data` is the harness policy on that node. No asset → BLOCK.
 
 If/else and foreach are optional YAML on a milestone (`next.when` / `foreach`). They show up on the same chart when the split has them.
 
@@ -94,7 +98,7 @@ pip install -r requirements.txt
 python -m unittest discover -s tests -v
 ```
 
-Optional later: `validate_harness.py`, `run_flow.py`. They are not this skill’s PASS bit.
+`validate_harness.py` is optional (filling in tools). `run_flow.py` is the harness: missing milestone asset → BLOCK.
 
 ## Layout
 

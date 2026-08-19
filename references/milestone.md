@@ -1,15 +1,15 @@
 # Milestone nodes (M8M — milestone to milestone)
 
-The builder **writes** this split (chart + table + stubs). It is not a
-production guardrail.
+The builder **writes** the split (chart + table + stubs). **FlowSteps and
+tools** may be sketches. **Milestones are the harness.**
 
 Three words. Do not mix them.
 
 | Word | Meaning | Path |
 | --- | --- | --- |
-| **Milestone** | Canvas node. Human checkpoint. `this.in` **is** `previous.out`. | `flowsteps/flows/<flow_id>/` |
-| **FlowStep** | Small goal **inside** a milestone (bind five images). Not drawn on the canvas. | listed on that milestone |
-| **Tool** | One premade Python way to do that goal. Input schema in, output schema out. | `flowsteps/tools/<tool_id>/` |
+| **Milestone** | Canvas node. Harness checkpoint. `this.in` **is** `previous.out`. Required asset or BLOCK. | `flowsteps/flows/<flow_id>/` |
+| **FlowStep** | Small goal **inside** a milestone (bind five images). Not drawn on the canvas. May be a stub. | listed on that milestone |
+| **Tool** | One premade Python way to do that goal. Input schema in, output schema out. Generate-new is a sketch. | `flowsteps/tools/<tool_id>/` |
 
 n8n’s canvas is too stiff: every HTTP call and crop is its own node.
 Keep n8n’s good parts (typed units, reusable pieces, AI does not invent
@@ -30,25 +30,49 @@ inside a milestone. n8n IF/loop are **schema gates** (`next.when` /
 Intelligence is optional *on* a milestone (`NEED_MODEL`). It is not a
 third canvas node.
 
-## Milestone rules
+## Milestone rules (the harness)
 
-A milestone is something you would stop and inspect: `source_ready`,
-`plan_frozen`, `assets_bound`, `cards_rendered`, `release_decided`.
+A milestone is a person doing one checkpoint in a workflow:
+`source_ready`, `plan_frozen`, `assets_bound`, `cards_rendered`,
+`release_decided`. You either produced the thing or you did not.
 
 It is **not** `crop_4x5` or `fetch_record`. Those are FlowSteps (and
-tools).
+tools). A name like that is a **note** on the chart, not a reason to
+refuse to draw.
 
-Each milestone lists the only FlowSteps it may run. How many times, in
-what order, on which pages — that stays inside the milestone. The next
-milestone starts only when this one’s output schema PASSes. That payload
-**is** the next milestone’s input schema.
+Each milestone declares a **required asset**. Kind is one of:
+
+| Kind | Proof |
+| --- | --- |
+| `file` | `asset.path` + `asset.sha256` |
+| `image` | same file receipt (bytes of a picture) |
+| `json` | closed JSON object with required fields (a proof, not an open bag) |
+| `data` | same as json: typed required fields |
+
+The output schema is closed (`additionalProperties: false`) and has
+`required` fields. An empty passthrough object is not a milestone.
+
+The next milestone starts **only** when this asset is produced (output
+schema PASS). That payload **is** the next milestone’s input schema.
+If the asset is missing or invalid: **BLOCK**. No semantic approval.
+No “close enough.” Intelligence may draft until the schema PASSes or
+the budget is exhausted; it may not skip the asset.
+
+YAML:
+
+```yaml
+- id: plan_frozen
+  asset:
+    kind: json
+  output_contract: plan_frozen_v1
+  output_schema: schemas/plan_frozen_v1.json
+```
 
 `intelligence: none` — assemble only calls listed FlowSteps / tools.
 `intelligence: completion|image|judge` — a draft is allowed. Tools run
 **first**. On `on_tool_fail: need_model`, drafts may repeat until the
-output schema PASSes or `max_model_attempts` / the run budget is
-exhausted. The next milestone only reads that schema. That communication
-contract is the rigidity; draft count is not.
+asset schema PASSes or `max_model_attempts` / the run budget is
+exhausted. Then BLOCK.
 
 ## Toolbox rules
 

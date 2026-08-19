@@ -1,14 +1,16 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
 
 from support import EXAMPLE, optional_product_repo
 
-from flowstep_runtime import FlowError, load_flow, step_class_hint
+from flowstep_runtime import FlowError, is_passthrough_schema, load_flow, step_class_hint
 from flowstep_tools import run_library_tool, validate_library_tool
 from generate_harness import generate_tool, generate_v3_flow
+from run_flow import advance
 from validate_harness import validate_harness
 
 
@@ -77,6 +79,47 @@ class MilestoneTests(unittest.TestCase):
             self.assertEqual(result["status"], "PASS")
             self.assertTrue(any("crop_4x5" in note for note in result.get("notes") or []))
             self.assertTrue(Path(result["flowchart_path"]).is_file())
+
+    def test_every_milestone_has_closed_asset_schema(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            codebase = Path(temp) / "repo"
+            result = generate_v3_flow(
+                codebase,
+                "proof_v1",
+                ["source_ready", "plan_frozen"],
+                tools=["hash_bind"],
+            )
+            harness = Path(result["harness_dir"])
+            flow_text = (harness / "flow.yaml").read_text(encoding="utf-8")
+            for mid in ("source_ready", "plan_frozen"):
+                schema = json.loads((harness / "schemas" / f"{mid}_v1.json").read_text(encoding="utf-8"))
+                self.assertFalse(is_passthrough_schema(schema), mid)
+                self.assertEqual(schema.get("additionalProperties"), False)
+                self.assertTrue(schema.get("required"), mid)
+                self.assertIn("kind: file", flow_text)
+            chart = Path(result["flowchart_path"]).read_text(encoding="utf-8")
+            self.assertIn("asset:file", chart)
+            loaded = load_flow(harness)
+            self.assertEqual(loaded["steps"][0]["asset"]["kind"], "file")
+
+    def test_missing_milestone_asset_blocks(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            codebase = Path(temp) / "repo"
+            generate_tool(codebase, "hash_bind")
+            result = generate_v3_flow(codebase, "block_v1", ["source_ready"], tools=["hash_bind"])
+            harness = Path(result["harness_dir"])
+            assemble = harness / "milestones" / "source_ready" / "assemble.py"
+            assemble.write_text(
+                "def run(input_data, draft=None, **_):\n    return {}\n",
+                encoding="utf-8",
+            )
+            request = Path(temp) / "request.json"
+            request.write_text(json.dumps({"ok": True}), encoding="utf-8")
+            blocked = advance(harness, Path(temp) / "run-miss", request_path=request)
+            self.assertEqual(blocked["state"], "BLOCKED")
+            self.assertTrue(
+                any("asset not produced" in item for item in blocked.get("blockers") or [])
+            )
 
     def test_v3_instruction_lists_toolbox(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
