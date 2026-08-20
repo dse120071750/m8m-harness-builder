@@ -66,12 +66,13 @@ def run_factory(
     )
     harness = Path(generated.get("harness_dir") or (codebase / "flowsteps" / "flows" / fid))
     chart = harness / "planning" / "m8m-flowchart.md"
+    jpg = harness / "planning" / "m8m-flowchart.jpg"
     validation: dict[str, Any]
     try:
         validation = validate_harness(codebase=codebase, flow_id=fid)
     except FlowError as exc:
         validation = {"status": "OPTIONAL", "blockers": [str(exc)]}
-    wrote = bool(generated.get("product_skill")) and chart.is_file()
+    wrote = bool(generated.get("product_skill")) and chart.is_file() and jpg.is_file()
     status = "PASS" if wrote else "FINDINGS"
 
     return {
@@ -106,4 +107,5 @@ def run_factory(
         "audit_json": str(audit_json),
         "notes": list(generated.get("notes") or []),
         "flowchart_path": str(chart),
+        "flowchart_jpg": str(jpg),
     }

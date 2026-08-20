@@ -9,7 +9,7 @@ description: >
 license: MIT
 metadata:
   author: dse120071750
-  version: "1.7"
+  version: "1.8"
 ---
 
 # M8M harness builder
@@ -22,7 +22,7 @@ identify milestones
   → list FlowSteps inside each (atomic; prefer ONE tool)
   → develop that tool (existing / promote / generate-new stub)
   → write one FlowStep table + one milestone flowchart
-     (for = ledger milestone; if = judge-until-ok milestone)
+     (markdown + humanized JPEG; for = ledger; if = judge-until-ok)
   → scaffold flow YAML and tool stubs
 ```
 
@@ -59,6 +59,7 @@ Deliverables (this is the product):
 | --- | --- |
 | `planning/flowstep-audit.md` | Proposed milestones, FlowSteps, tools |
 | `planning/m8m-flowchart.md` | Milestone chart (harness) + FlowStep table (guide) + For/Judge tables |
+| `planning/m8m-flowchart.jpg` | Portable audit JPEG. Humanizer names each milestone and FlowStep. Rewritten on generate and on every step edit. |
 | `<repo>/flowsteps/flows/<id>/flow.yaml` | Scaffolded chain |
 | `<repo>/flowsteps/tools/<id>/` | Seeded tools, or stubs marked generate-new |
 | `<repo>/.agents/skills/<name>/SKILL.md` and `.claude/skills/<name>/SKILL.md` | Pointer skill |
@@ -69,7 +70,11 @@ asset that must exist. Runtime BLOCKs if that schema does not PASS.
 
 Inside a milestone, follow the FlowStep table as a **guide**: try the
 preferred tool first. If it fails, find a way like a normal agent.
-The flowchart is only the milestone canvas.
+The flowchart is only the milestone canvas. The JPEG is the audit
+copy: portable, easy to pass around, native when a person reviews
+the split. After generate, and after every step edit (`write` /
+`mark`), both `planning/m8m-flowchart.md` and
+`planning/m8m-flowchart.jpg` are rewritten.
 
 ## For and judge (if) are milestones
 
@@ -130,9 +135,10 @@ tool fail → agent recovery; no asset → BLOCK; worker not ok / no receipt →
 Outcome: writer
 Audit: planning/flowstep-audit.md
 Chart: planning/m8m-flowchart.md
+JPEG:  planning/m8m-flowchart.jpg
 Flow: <repo>/flowsteps/flows/<flow_id>
 Tools: <repo>/flowsteps/tools/
 Notes: (name hints, generate-new tools — never a refusal to draw)
 ```
 
-Return the flowchart markdown and the FlowStep table. Then the audit.
+Return the flowchart JPEG (human labels), then the markdown table, then the audit.

@@ -135,8 +135,11 @@ Audit infers `loop: for` from a previous array with `maxItems`, and
 `loop: judge` from image/align/generate names or `intelligence: image|judge`.
 The model does not approve proceed.
 
-The one chart is `planning/m8m-flowchart.md` (For table + Judge table;
-GitHub publishes a JPEG, not a mermaid rich display).
+The one chart is `planning/m8m-flowchart.md` plus
+`planning/m8m-flowchart.jpg`. The JPEG is the audit copy: humanizer
+names each milestone and FlowStep; it is portable; a person can review
+it without mermaid. Generate writes both. Every step edit (`write` /
+`mark`) rewrites both.
 
 Teaching contracts (`references/*.md` on a Codex or Claude skill) belong
 on the flow: `<repo>/flowsteps/flows/<id>/references/`. Same ownership as

@@ -610,6 +610,7 @@ class FlowchartMarkdownTests(unittest.TestCase):
             path = write_audit_markdown(report, root / "planning" / "flowstep-audit.md")
             chart = root / "planning" / "m8m-flowchart.md"
             self.assertTrue(chart.is_file())
+            self.assertTrue(chart.with_suffix(".jpg").is_file())
             self.assertEqual(path.parent, chart.parent)
             text = chart.read_text(encoding="utf-8")
             self.assertIn("# M8M flowchart:", text)

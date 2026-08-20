@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from flowstep_runtime import normalize_flowsteps, utc_now
+from humanize_chart import humanize_flowstep, humanize_milestone
 from toolbox_plan import render_toolbox_plan_markdown
 
 
@@ -17,7 +18,8 @@ def flowchart_path(root: Path) -> Path:
     return root / FLOWCHART_REL
 
 
-def _nodes(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _nodes(items: list[dict[str, Any]], statuses: dict[str, str] | None = None) -> list[dict[str, Any]]:
+    statuses = statuses or {}
     nodes: list[dict[str, Any]] = []
     for item in items:
         mid = str(item.get("id") or "")
@@ -44,6 +46,7 @@ def _nodes(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
                     flowsteps=item.get("flowsteps"),
                     tools=item.get("tools"),
                 )[0],
+                "status": str(statuses.get(mid) or item.get("status") or ""),
             }
         )
     return nodes
@@ -144,8 +147,9 @@ def render_flowchart(
     flow_id: str | None = None,
     source: str = "audit",
     toolbox_plan: list[dict[str, Any]] | None = None,
+    statuses: dict[str, str] | None = None,
 ) -> str:
-    nodes = _nodes(items)
+    nodes = _nodes(items, statuses)
     mermaid = render_mermaid(items)
     lines = [
         f"# M8M flowchart: {title}",
@@ -154,7 +158,8 @@ def render_flowchart(
         "(file, image, json proof, or data). Missing it is BLOCKED.",
         "FlowSteps inside a node are a guide (one preferred tool each), not a compulsory path.",
         "for = ledger milestone until remaining=0. judge (if) = retry until worker ok.",
-        "GitHub publishes a JPEG, not a mermaid rich display.",
+        "The JPEG is the audit copy: portable, human-labeled, native to review.",
+        "It is rewritten on generate and on every step edit.",
         "",
         f"- flow_id: `{flow_id or title}`",
         f"- source: `{source}`",
@@ -162,7 +167,10 @@ def render_flowchart(
         "",
         "## Chart",
         "",
-        "GitHub does not render this as a diagram. Publish a JPEG next to this file.",
+        "Portable JPEG for audit. Humanizer names each milestone and FlowStep.",
+        "Regenerated on generate and on every step edit (`write` / `mark`).",
+        "",
+        f"![M8M flowchart: {title}](m8m-flowchart.jpg)",
         "",
         "```text",
         mermaid,
@@ -176,12 +184,12 @@ def render_flowchart(
         [
             "## Nodes",
             "",
-            "| Milestone | Asset | Intelligence | Tools | Control |",
-            "| --- | --- | --- | --- | --- |",
+            "| Milestone | What it means | Asset | Status | Intelligence | Tools | Control |",
+            "| --- | --- | --- | --- | --- | --- | --- |",
         ]
     )
     if not nodes:
-        lines.append("| (none) | | | | |")
+        lines.append("| (none) | | | | | | |")
     for item in nodes:
         tools = ", ".join(f"`{tool}`" for tool in item["tools"]) or "none"
         if item.get("loop") == "for" and item.get("ledger"):
@@ -192,8 +200,11 @@ def render_flowchart(
         else:
             control = "linear"
         asset = item.get("asset_kind") or "required"
+        human = humanize_milestone(item)
+        status = human.get("status") or "—"
         lines.append(
-            f"| `{item['id']}` | `{asset}` | `{item['intelligence']}` | {tools} | {control} |"
+            f"| `{item['id']}` | {human['title']} | `{asset}` | `{status}` | "
+            f"`{item['intelligence']}` | {tools} | {control} |"
         )
     lines.extend(
         [
@@ -203,20 +214,21 @@ def render_flowchart(
             "Sequence inside each milestone. Prefer the named tool. Optional.",
             "If it fails, recover like a normal agent. The milestone asset is still compulsory.",
             "",
-            "| Milestone | # | FlowStep | Preferred tool |",
-            "| --- | ---: | --- | --- |",
+            "| Milestone | # | FlowStep | What it means | Preferred tool |",
+            "| --- | ---: | --- | --- | --- |",
         ]
     )
     guide_rows = 0
     for item in nodes:
         for index, fs in enumerate(item.get("flowsteps") or [], start=1):
             guide_rows += 1
+            human_fs = humanize_flowstep(fs, index)
             lines.append(
                 f"| `{item['id']}` | {index} | `{fs.get('id') or fs.get('tool')}` | "
-                f"`{fs.get('tool') or '—'}` |"
+                f"{human_fs['caption']} | `{fs.get('tool') or '—'}` |"
             )
     if not guide_rows:
-        lines.append("| (none) | | | |")
+        lines.append("| (none) | | | | |")
     lines.extend(["", "## For (ledger)", ""])
     fors = [item for item in nodes if item.get("loop") == "for"]
     if not fors:
@@ -268,6 +280,8 @@ def write_flowchart(
     flow_id: str | None = None,
     source: str = "audit",
     toolbox_plan: list[dict[str, Any]] | None = None,
+    statuses: dict[str, str] | None = None,
+    focus_id: str | None = None,
 ) -> Path:
     path = flowchart_path(root)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -278,8 +292,18 @@ def write_flowchart(
             flow_id=flow_id,
             source=source,
             toolbox_plan=toolbox_plan,
+            statuses=statuses,
         ),
         encoding="utf-8",
         newline="\n",
+    )
+    from flowchart_jpg import write_flowchart_jpg
+
+    write_flowchart_jpg(
+        path.with_suffix(".jpg"),
+        items,
+        title=title,
+        focus_id=focus_id,
+        statuses=statuses,
     )
     return path

@@ -17,6 +17,7 @@ The driver creates `<repo>/flowsteps/runs/<flow_id>/<run_id>/`.
 
 - flow: `<repo>/flowsteps/flows/__FLOW_ID__/`
 - chart: `<repo>/flowsteps/flows/__FLOW_ID__/planning/m8m-flowchart.md`
+- chart jpeg: `<repo>/flowsteps/flows/__FLOW_ID__/planning/m8m-flowchart.jpg`
 - tools: `<repo>/flowsteps/tools/`
 
 __CLASSIFICATION_TABLE__

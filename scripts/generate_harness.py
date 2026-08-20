@@ -24,7 +24,7 @@ from flowstep_runtime import (
     step_class_hint,
 )
 from flowstep_tools import tools_root
-from m8m_flowchart import write_flowchart
+from m8m_flowchart import flowchart_path
 from teaching_contracts import copy_teaching_contracts
 from toolbox_plan import build_toolbox_plan, existing_toolbox_ids
 from tool_vs_intelligence import from_audit as classification_from_audit
@@ -454,17 +454,13 @@ def generate_v3_flow(
     plan_path = harness / "planning" / "toolbox-plan.json"
     plan_path.parent.mkdir(parents=True, exist_ok=True)
     plan_path.write_text(json.dumps(plan, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    instruction = write_instruction(harness, loaded, toolbox_plan=plan)
+    instruction = write_instruction(harness, loaded, toolbox_plan=plan, source="generate")
     created.append(str(instruction))
-    chart = write_flowchart(
-        harness,
-        loaded.get("steps") or items,
-        title=flow_id,
-        flow_id=flow_id,
-        source="generate",
-        toolbox_plan=plan,
-    )
+    chart = flowchart_path(harness)
     created.append(str(chart))
+    jpg = chart.with_suffix(".jpg")
+    if jpg.is_file():
+        created.append(str(jpg))
     table = classification_from_flow(loaded)
     table_path = harness / "planning" / "tool-vs-intelligence.json"
     table_path.parent.mkdir(parents=True, exist_ok=True)
@@ -480,6 +476,7 @@ def generate_v3_flow(
         "tools": sorted({tool for item in items for tool in item["tools"]}),
         "instruction_path": str(instruction),
         "flowchart_path": str(chart),
+        "flowchart_jpg": str(jpg),
         "tool_vs_intelligence": table,
         "tool_vs_intelligence_path": str(table_path),
         "written": created,
@@ -634,6 +631,7 @@ def generate_from_audit(
             Path(result["harness_dir"]),
             load_flow(Path(result["harness_dir"])),
             toolbox_plan=audit.get("toolbox_plan"),
+            source="generate",
         )
         result.setdefault("written", []).extend(copied_teaching)
         result["teaching_contracts"] = copied_teaching

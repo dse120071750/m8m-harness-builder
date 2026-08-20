@@ -48,7 +48,7 @@ M8M:   节点 = 一个里程碑（护栏）
   → 每个里面列出 FlowStep（原子；优先一支工具）
   → 开发该工具（existing / promote / generate-new）
   → 写一张 FlowStep 表 + 一张里程碑流程图
-     （for = ledger 里程碑；if = judge until ok）
+     （markdown + 人话 JPEG；for = ledger；if = judge until ok）
   → scaffold flow.yaml 和 tool stub
 ```
 
@@ -60,7 +60,9 @@ M8M:   节点 = 一个里程碑（护栏）
 
 一关**里面**是若干 FlowStep。每个 FlowStep 优先一支 repo 工具。工具可以失败、可以找路。关卡能不能过，只看 asset。
 
-![M8M 演示：上面是里程碑画布；下面打开 source_ready，里面是 fetch_record 和 hash_bind 两支 FlowStep 工具，然后做 asset 检查](docs/m8m-chart.jpg)
+![M8M 演示：上面是里程碑画布（人话标签）；下面打开 source_ready，里面是 fetch_record 和 hash_bind 两支 FlowStep 工具，然后做 asset 检查](docs/m8m-chart.jpg)
+
+生成 skill 时写出 `planning/m8m-flowchart.md` 和 `planning/m8m-flowchart.jpg`。开发中每改一步（`write` / `mark`）两份都重写。JPEG 给人审：可携带、好核对、不靠 mermaid。人话来自 humanizer（`source_ready` → Source is ready）。
 
 怎么往下走：
 
@@ -159,6 +161,7 @@ python scripts/generate_harness.py --codebase <repo> --from-audit <skill>/planni
 
 - `planning/flowstep-audit.md`
 - `planning/m8m-flowchart.md`：图（护栏）+ FlowStep 表（指引）+ For/Judge 表
+- `planning/m8m-flowchart.jpg`：人话审计 JPEG（生成时写，改一步就重写）
 - `<repo>/flowsteps/flows/<flow_id>/`
 - `<repo>/flowsteps/tools/<id>/`（seed 或 stub）
 - `<repo>/.agents/skills/<name>/SKILL.md` 和 `<repo>/.claude/skills/<name>/SKILL.md`
@@ -259,7 +262,7 @@ identify milestones
   → list FlowSteps inside each (atomic; prefer ONE tool)
   → develop that tool (existing / promote / generate-new)
   → write one FlowStep table + one milestone flowchart
-     (for = ledger milestone; if = judge until ok)
+     (markdown + humanized JPEG; for = ledger; if = judge until ok)
   → scaffold flow.yaml and tool stubs
 ```
 
@@ -271,7 +274,9 @@ The canvas is only milestones. Each one must produce its declared asset before t
 
 **Inside** a milestone are several FlowSteps. Each FlowStep prefers one repo tool. The tool may fail; recover like a normal agent. Whether the milestone proceeds depends only on the asset.
 
-![M8M demo: top is the milestone canvas; bottom opens source_ready and shows FlowSteps fetch_record and hash_bind, each with a tool, then the asset check](docs/m8m-chart.jpg)
+![M8M demo: top is the milestone canvas with human labels; bottom opens source_ready and shows FlowSteps fetch_record and hash_bind, each with a tool, then the asset check](docs/m8m-chart.jpg)
+
+Generate writes `planning/m8m-flowchart.md` and `planning/m8m-flowchart.jpg`. Every step edit during development (`write` / `mark`) rewrites both. The JPEG is the audit copy: portable, easy to review, no mermaid. Labels come from the humanizer (`source_ready` → Source is ready).
 
 How a run proceeds:
 
@@ -372,6 +377,7 @@ This writes:
 
 - `planning/flowstep-audit.md`
 - `planning/m8m-flowchart.md`: chart (harness), FlowStep table (guide), origin table, For/Judge tables
+- `planning/m8m-flowchart.jpg`: humanized audit JPEG (written on generate, rewritten on every step edit)
 - `<repo>/flowsteps/flows/<flow_id>/`
 - `<repo>/flowsteps/tools/<id>/` (seed or stub)
 - `<repo>/.agents/skills/<name>/SKILL.md` and `<repo>/.claude/skills/<name>/SKILL.md`

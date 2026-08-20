@@ -123,7 +123,8 @@ def render_instruction(
             [
                 "## Milestones",
                 "",
-                "The M8M flowchart (gates, foreach, toolbox plan) is `planning/m8m-flowchart.md`.",
+                "The M8M flowchart is `planning/m8m-flowchart.md` plus `planning/m8m-flowchart.jpg`.",
+                "The JPEG is rewritten on generate and on every step edit. It is the portable audit copy.",
                 "",
             ]
         )
@@ -213,6 +214,7 @@ def write_instruction(
     *,
     statuses: dict[str, str] | None = None,
     toolbox_plan: list[dict[str, Any]] | None = None,
+    source: str = "edit",
 ) -> Path:
     skill_dir = skill_dir.resolve()
     flow = flow or load_flow(skill_dir, find_flow_path(skill_dir))
@@ -224,6 +226,8 @@ def write_instruction(
         merged.update(statuses)
     known = {step["id"] for step in flow["steps"]}
     merged = {key: value for key, value in merged.items() if key in known}
+    for step in flow["steps"]:
+        merged.setdefault(step["id"], "PENDING")
     if toolbox_plan is None:
         saved = skill_dir / "planning" / "toolbox-plan.json"
         if saved.is_file():
@@ -239,7 +243,41 @@ def write_instruction(
         encoding="utf-8",
         newline="\n",
     )
+    if flow.get("_v3"):
+        refresh_chart(skill_dir, flow, statuses=merged, source=source)
     return path
+
+
+def refresh_chart(
+    skill_dir: Path,
+    flow: dict[str, Any],
+    statuses: dict[str, str] | None = None,
+    source: str = "edit",
+) -> Path:
+    from m8m_flowchart import write_flowchart
+    from toolbox_plan import build_toolbox_plan
+
+    skill_dir = skill_dir.resolve()
+    plan = None
+    saved = skill_dir / "planning" / "toolbox-plan.json"
+    if saved.is_file():
+        try:
+            loaded_plan = json.loads(saved.read_text(encoding="utf-8"))
+            if isinstance(loaded_plan, list):
+                plan = loaded_plan
+        except (OSError, json.JSONDecodeError, TypeError):
+            plan = None
+    if plan is None:
+        plan = build_toolbox_plan(flow.get("steps") or [])
+    return write_flowchart(
+        skill_dir,
+        flow.get("steps") or [],
+        title=str(flow.get("flow_id") or skill_dir.name),
+        flow_id=str(flow.get("flow_id") or ""),
+        source=source,
+        toolbox_plan=plan,
+        statuses=statuses,
+    )
 
 
 def mark_step(skill_dir: Path, step_id: str, status: str) -> Path:
