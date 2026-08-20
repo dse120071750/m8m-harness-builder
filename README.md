@@ -1,5 +1,7 @@
 # M8M harness builder
 
+[![tests](https://github.com/dse120071750/m8m-harness-builder/actions/workflows/tests.yml/badge.svg)](https://github.com/dse120071750/m8m-harness-builder/actions/workflows/tests.yml)
+
 [中文](#中文) · [English](#english)
 
 给 Codex / Claude 用的 skill。它把一条 skill 拆成里程碑、FlowStep、工具，再写出一张表和一张流程图。
@@ -143,7 +145,13 @@ python scripts/generate_harness.py --codebase <repo> --from-audit <skill>/planni
 
 图、表、stub、每个里程碑的 asset schema 都在，factory 就 PASS。`validate_harness.py` 可选，用来把工具填实。`run_flow.py` 是护栏：工具失败走 agent，没有产出就 BLOCK。
 
+真实样本（一篇文章做成七页 infographic）：[examples/article_infographic/planning/m8m-flowchart.md](examples/article_infographic/planning/m8m-flowchart.md)
+
 ## 安装
+
+```bash
+npx skills add dse120071750/m8m-harness-builder
+```
 
 Codex：
 
@@ -182,8 +190,9 @@ python -m unittest discover -s tests -v
 SKILL.md                 writer 工作方法
 scripts/                 audit、generate、flowchart，可选 run/validate
 templates/               stubs
-examples/text_pipeline   fixture
-references/              milestone + tool-vs-intelligence
+examples/text_pipeline           fixture
+examples/article_infographic     real audit sample
+references/                      milestone + tool-vs-intelligence
 ```
 
 ---
@@ -258,6 +267,8 @@ The origin table says where the Python comes from: existing toolbox, promote a s
 
 Follow the FlowStep order. Do not treat that path as a production lock. Do not skip the asset.
 
+A real run on a seven-page article infographic skill is in [examples/article_infographic/planning/m8m-flowchart.md](examples/article_infographic/planning/m8m-flowchart.md).
+
 ## Chart (harness)
 
 One mermaid canvas. Nodes are milestones, not crops. Each node names the required asset. If it is missing, the run is BLOCKED. FlowSteps are not extra nodes. They live in the table above.
@@ -329,6 +340,10 @@ The factory PASSes when the chart, tables, stubs, and each milestone's asset sch
 
 ## Install
 
+```bash
+npx skills add dse120071750/m8m-harness-builder
+```
+
 Codex:
 
 ```powershell
@@ -366,6 +381,7 @@ python -m unittest discover -s tests -v
 SKILL.md                 writer working method
 scripts/                 audit, generate, flowchart, optional run/validate
 templates/               stubs
-examples/text_pipeline   fixture
-references/              milestone + tool-vs-intelligence
+examples/text_pipeline           fixture
+examples/article_infographic     real audit sample
+references/                      milestone + tool-vs-intelligence
 ```
