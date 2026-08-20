@@ -54,20 +54,45 @@ M8M:   节点 = 一个里程碑（护栏）
 
 `$m8m-harness-builder` 写这个拆法。名字长得像 `crop_*` 不会拒绝画图。Stub 工具是能用的草图。里程碑 output schema 不是草图。
 
+## 图：里程碑到里程碑，以及一关里面有什么
+
+画布上只有里程碑。每一关必须交出声明的 asset，下一关才开始。`this.in` 就是 `previous.out`。没有 asset → BLOCK。
+
+一关**里面**是若干 FlowStep。每个 FlowStep 优先一支 repo 工具。工具可以失败、可以找路。关卡能不能过，只看 asset。
+
+![M8M 演示：上面是里程碑画布；下面打开 source_ready，里面是 fetch_record 和 hash_bind 两支 FlowStep 工具，然后做 asset 检查](docs/m8m-chart.jpg)
+
+怎么往下走：
+
+```text
+request
+  → source_ready     必须交出 file（path + sha256）
+      里面：FlowStep fetch_record → tool fetch_record
+            FlowStep hash_bind    → tool hash_bind
+            然后检查 asset。有 → 过关。没有 → BLOCK。
+  → plan_frozen      必须交出 json plan
+  → release_packaged 必须交出 file package
+```
+
+| 种类 | 这一关必须交出的证明 |
+| --- | --- |
+| `file` | `asset.path` + `asset.sha256` |
+| `image` | 同一套文件回执，图的 bytes |
+| `json` | 封闭对象，必填字段 |
+| `data` | 同上：typed 必填字段 |
+
 ## 表（指引）
 
-两张表写进 `planning/m8m-flowchart.md`。
+`planning/m8m-flowchart.md` 里有 FlowStep 表。那是关卡**里面**的顺序，不是第二张画布。
 
-FlowSteps 是每个关卡里面的顺序。按表优先用那支工具。可选。失败就像普通 agent 找路。里程碑产出仍是硬的。
-
-| Milestone | # | FlowStep | 首选工具 |
+| Milestone | # | FlowStep（在关卡里面） | 首选工具 |
 | --- | ---: | --- | --- |
 | `source_ready` | 1 | `fetch_record` | `fetch_record` |
 | `source_ready` | 2 | `hash_bind` | `hash_bind` |
 | `plan_frozen` | 1 | `compact_plan` | `compact_editorial_config` |
 | `release_packaged` | 1 | `materialize_package` | `materialize_package` |
 
-来源说这支 Python 从哪来。现成 toolbox、把 skill script promote 进 repo、或 generate-new。Generate-new 是 builder 该写的工具，stub 算草图。
+来源说这支 Python 从哪来。现成 toolbox、把 skill script promote 进 repo、或 generate-new。Stub 算草图。
 
 | Milestone | Asset | 现成 toolbox | 从 skill script promote | Generate new |
 | --- | --- | --- | --- | --- |
@@ -75,30 +100,18 @@ FlowSteps 是每个关卡里面的顺序。按表优先用那支工具。可选�
 | `plan_frozen` | `json` | — | — | `compact_editorial_config` |
 | `release_packaged` | `file` | — | `materialize_package` ← `scripts/package.py` | — |
 
-FlowStep 按表的顺序走。别把这条路径当成 production lock。别跳过产出。
+## for / judge（也是里程碑，不是画布外的东西）
 
-## 图（护栏）
+有的关卡要走完一份 ledger，有的关卡要重复做到合格。它们仍是上面那种里程碑：里面若干 FlowStep，出来必须有 asset。
 
-一张图。节点是里程碑，不是 crop。每个节点标必交的 asset。没有就 BLOCKED。FlowStep 不是额外节点，它们在上面的表里。GitHub 上用 PNG/JPEG，不用 mermaid 富文本。
+- **for：** 上一关交出 ledger（typed 数组 + `maxItems`）。这一关按条产出，直到 `remaining=0`。例：数据库拉图片列表 → 待办 → 绑完每一张。
+- **judge（if）：** 做到 worker 收据 `{ok: true}` 为止。出图、空间对齐永远走这一关。
 
-![M8M 里程碑图：source_ready → for ledger → judge until ok → release_packaged](docs/m8m-chart.jpg)
+内部 worker 是 repo 工具，写出 `{ok: true|false}`。模型不能填 `ok`。收据 ok 仍不能免掉 asset。
 
-| 种类 | 里程碑上的证明 |
-| --- | --- |
-| `file` | `asset.path` + `asset.sha256` |
-| `image` | 同一套文件回执，图的 bytes |
-| `json` | 封闭对象，必填字段 |
-| `data` | 同上：typed 必填字段 |
-
-**for** 和 **judge（if）** 都是里程碑。内部 worker（repo 工具）写出 `{ok: true|false}` 收据，才能往下走。模型不能填 `ok`。
-
-- **for：** 上一关交出 ledger（typed 数组 + `maxItems`）。这一关按 ledger 逐条产出，直到 `remaining=0`。例如从数据库拉图片列表 → 待办 ledger → 绑完每一张。
-- **judge（if）：** 做到 worker 说 ok 为止。出图、空间对齐永远走这一关。`ok: false` 还有预算就停在本关重做；预算用完 BLOCK。
-- 没有 exclusive `next.when`。url / text 只是产出上的字段。
-
-| Milestone | loop | Worker |
+| Milestone | 这一关怎么走完 | Worker |
 | --- | --- | --- |
-| `images_bound` | for（ledger `items` max=32） | `ledger_receipt` |
+| `images_bound` | for：ledger `items` max=32 | `ledger_receipt` |
 | `card_aligned` | judge until ok | `alignment_judge` |
 
 `--milestone` 写成 `crop_4x5` 只是备注：看起来像工具。不是拒绝画图。
@@ -252,20 +265,45 @@ identify milestones
 
 `$m8m-harness-builder` writes that split. A name like `crop_*` is not a reason to refuse the chart. A stub tool is a usable sketch. The milestone output schema is not a sketch.
 
+## Chart: milestone to milestone, and what is inside one
+
+The canvas is only milestones. Each one must produce its declared asset before the next starts. `this.in` is `previous.out`. No asset → BLOCK.
+
+**Inside** a milestone are several FlowSteps. Each FlowStep prefers one repo tool. The tool may fail; recover like a normal agent. Whether the milestone proceeds depends only on the asset.
+
+![M8M demo: top is the milestone canvas; bottom opens source_ready and shows FlowSteps fetch_record and hash_bind, each with a tool, then the asset check](docs/m8m-chart.jpg)
+
+How a run proceeds:
+
+```text
+request
+  → source_ready     must produce a file (path + sha256)
+      inside: FlowStep fetch_record → tool fetch_record
+              FlowStep hash_bind    → tool hash_bind
+              then the asset check. Present → pass. Missing → BLOCK.
+  → plan_frozen      must produce a json plan
+  → release_packaged must produce a file package
+```
+
+| Kind | Proof this milestone must hand over |
+| --- | --- |
+| `file` | `asset.path` + `asset.sha256` |
+| `image` | same file receipt, for a picture |
+| `json` | closed object with required fields |
+| `data` | same: typed required fields |
+
 ## Table (guide)
 
-`planning/m8m-flowchart.md` gets two tables.
+`planning/m8m-flowchart.md` has the FlowStep table. That is the order **inside** a checkpoint, not a second canvas.
 
-The FlowStep table is the order inside each checkpoint. Prefer the named tool, in this order. The tool is optional. If it fails, recover like a normal agent. The milestone asset is still required.
-
-| Milestone | # | FlowStep | Preferred tool |
+| Milestone | # | FlowStep (inside the milestone) | Preferred tool |
 | --- | ---: | --- | --- |
 | `source_ready` | 1 | `fetch_record` | `fetch_record` |
 | `source_ready` | 2 | `hash_bind` | `hash_bind` |
 | `plan_frozen` | 1 | `compact_plan` | `compact_editorial_config` |
 | `release_packaged` | 1 | `materialize_package` | `materialize_package` |
 
-The origin table says where the Python comes from: existing toolbox, promote a skill script into the repo, or generate-new. Generate-new is a tool the builder should write. A stub counts as a sketch.
+The origin table says where the Python comes from: existing toolbox, promote a skill script into the repo, or generate-new. A stub counts as a sketch.
 
 | Milestone | Asset | Existing toolbox | Promote from a skill script | Generate new |
 | --- | --- | --- | --- | --- |
@@ -273,32 +311,20 @@ The origin table says where the Python comes from: existing toolbox, promote a s
 | `plan_frozen` | `json` | — | — | `compact_editorial_config` |
 | `release_packaged` | `file` | — | `materialize_package` ← `scripts/package.py` | — |
 
-Follow the FlowStep order. Do not treat that path as a production lock. Do not skip the asset.
+A real run on a seven-page article infographic is in [examples/article_infographic/planning/m8m-flowchart.md](examples/article_infographic/planning/m8m-flowchart.md).
 
-A real run on a seven-page article infographic skill is in [examples/article_infographic/planning/m8m-flowchart.md](examples/article_infographic/planning/m8m-flowchart.md).
+## for / judge (still milestones)
 
-## Chart (harness)
+Some checkpoints walk a ledger. Some retry until the work is good. They are still the same kind of node: FlowSteps inside, required asset out.
 
-One chart. Nodes are milestones, not crops. Each node names the required asset. If it is missing, the run is BLOCKED. FlowSteps are not extra nodes. They live in the table above. On GitHub this is a JPEG, not a mermaid rich display.
+- **for:** the previous asset is a ledger (typed array + `maxItems`). This milestone produces each item until `remaining=0`. Example: fetch image rows from a DB → freeze the todo list → bind every image.
+- **judge (if):** keep going until the worker receipt is `{ok: true}`. Image generation and spatial alignment always use this.
 
-![M8M milestone chart: source_ready then for-ledger then judge-until-ok then release_packaged](docs/m8m-chart.jpg)
+The internal worker is a repo tool. It writes `{ok: true|false}`. The model must not set `ok`. An ok receipt still cannot waive a missing asset.
 
-| Kind | Proof on the milestone |
-| --- | --- |
-| `file` | `asset.path` + `asset.sha256` |
-| `image` | same file receipt, for a picture |
-| `json` | closed object with required fields |
-| `data` | same: typed required fields |
-
-**for** and **judge (if)** are milestones. An internal worker (repo tool) writes `{ok: true|false}`. That receipt is the only proceed guard. The model must not set `ok`.
-
-- **for:** the previous asset is a ledger (typed array + `maxItems`). This milestone produces each item's asset until `remaining=0`. Example: fetch image rows from a DB → freeze the todo list → bind every image.
-- **judge (if):** keep going until the worker says ok. Image generation and spatial alignment always use this. `ok: false` with budget left → stay and retry. Budget gone → BLOCK.
-- No exclusive `next.when`. url / text is a field on the asset.
-
-| Milestone | loop | Worker |
+| Milestone | How this checkpoint finishes | Worker |
 | --- | --- | --- |
-| `images_bound` | for (ledger `items` max=32) | `ledger_receipt` |
+| `images_bound` | for: ledger `items` max=32 | `ledger_receipt` |
 | `card_aligned` | judge until ok | `alignment_judge` |
 
 A name like `crop_4x5` on `--milestone` is a note that it looks like a tool. It is not a refusal to draw.

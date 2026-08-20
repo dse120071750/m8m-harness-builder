@@ -1,9 +1,9 @@
 # M8M flowchart: article-infographic-maker
 
-One chart. Milestone to milestone. Each node is a required asset
-(file, image, json proof, or data). Missing it is BLOCKED.
-FlowSteps inside a node are a guide (one preferred tool each), not a compulsory path.
-for = ledger milestone until remaining=0. judge (if) = retry until worker ok.
+Two pictures. Top: milestone to milestone. Each node must hand over an
+asset or the next node does not start. Bottom: open one milestone
+(`cards_rendered`) — several FlowSteps, each with one preferred tool,
+then the image asset check.
 
 - flow_id: `article_infographic_zh_hant_v2`
 - source: `audit`
@@ -11,7 +11,7 @@ for = ledger milestone until remaining=0. judge (if) = retry until worker ok.
 
 ## Chart
 
-![article infographic M8M chart: linear milestones, for-ledger on pages, judge-until-ok on cards](m8m-flowchart.jpg)
+![article infographic: canvas of milestones, then inside cards_rendered the FlowSteps render_html_shell, footer_geometry_qa, hash_bind and the image asset check](m8m-flowchart.jpg)
 
 ## Toolbox plan
 
