@@ -17,6 +17,9 @@ IS_LAST = __IS_LAST__
 ASSET_KIND = "__ASSET_KIND__"
 WORKER = "__WORKER__"
 LOOP = "__LOOP__"
+HARNESS_DIR = Path(__file__).resolve().parents[2]
+GEM_PATH = str(HARNESS_DIR / "references" / f"{STEP_ID}.md")
+SCHEMA_PATH = str(HARNESS_DIR / "schemas" / f"{STEP_ID}_v1.json")
 
 
 def _codebase() -> Path:
@@ -133,26 +136,43 @@ def run(input_data: dict[str, Any], draft: dict[str, Any] | None = None, **kwarg
                 payload["receipt"] = result
     if WORKER and WORKER not in {str((item or {}).get("tool") or "") for item in sequence}:
         try:
-            receipt_input = payload
+            receipt_input = dict(payload)
+            receipt_input["gem_path"] = GEM_PATH
+            if isinstance(payload.get("asset"), dict):
+                receipt_input["asset"] = payload["asset"]
+            if isinstance(draft, dict):
+                receipt_input["draft"] = draft
             if WORKER == "ok_receipt":
-                receipt_input = {"ok": True, "code": "pass"}
+                if isinstance(draft, dict) and "ok" in draft:
+                    receipt_input = {"ok": bool(draft["ok"]), "code": "pass" if draft["ok"] else "fail"}
+                elif "ok" in payload:
+                    receipt_input = {"ok": bool(payload["ok"])}
+                else:
+                    raise ValueError(f"{STEP_ID}: ok_receipt looks at the gem; draft {{ok}} for the rule of success")
+            elif WORKER == "schema_validate":
+                receipt_input = {"schema_path": SCHEMA_PATH, "instance": payload}
+            elif WORKER == "hash_bind":
+                asset = payload.get("asset") if isinstance(payload.get("asset"), dict) else {}
+                path = asset.get("path") or _first_path(payload)
+                if not path:
+                    raise ValueError(f"{STEP_ID}: hash_bind worker needs an asset path")
+                receipt_input = {"path": path}
             elif WORKER == "ledger_receipt":
                 ledger = payload.get("ledger") or payload.get("items") or []
                 done = payload.get("done")
                 if not isinstance(done, list):
                     done = list(ledger) if isinstance(ledger, list) else []
                 receipt_input = {"ledger": ledger if isinstance(ledger, list) else [], "done": done}
-            elif WORKER == "branch_receipt":
+            elif WORKER in {"branch_receipt", "cycle_receipt"}:
                 receipt_input = dict(payload)
-                if isinstance(draft, dict):
-                    receipt_input["draft"] = draft
-            elif WORKER == "cycle_receipt":
-                receipt_input = dict(payload)
+                receipt_input["gem_path"] = GEM_PATH
                 if isinstance(draft, dict):
                     receipt_input["draft"] = draft
             receipt = tools.run_library_tool(codebase, WORKER, receipt_input)
             if isinstance(receipt, dict):
                 payload["receipt"] = receipt
+                if "ok" in receipt:
+                    payload["ok"] = receipt["ok"]
         except Exception as exc:
             if draft is None:
                 return _need_model(STEP_ID, WORKER, f"{type(exc).__name__}: {exc}")

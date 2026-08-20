@@ -9,7 +9,7 @@ description: >
 license: MIT
 metadata:
   author: dse120071750
-  version: "1.11"
+  version: "1.12"
 ---
 
 # M8M harness builder
@@ -80,25 +80,31 @@ the split. After generate, and after every step edit (`write` /
 
 ## Rule of success (gem), then cycle / judge / branch
 
-Every milestone has a **rule of success**. The meaning lives on that
-milestone’s **gem**: `flowsteps/flows/<id>/references/<milestone_id>.md`.
-The harness still only gates on the **asset**. Do not add a shared
-judge module and drop it onto cycle, asset, quality, and branch.
+Every milestone has a **gem** and **one worker that looks at that gem**.
+The gem is not a canvas node. The judge is not a second canvas node.
+Both sit **on** this checkpoint. Develop that worker separately
+(`alignment_pass_judge` is not `dna_frozen_judge`). Do not default
+to shared `ok_receipt`.
+
+```text
+milestone  = one canvas box (asset or BLOCK)
+gem        = references/<id>.md  (rule of success)
+worker     = repo tool that reads the gem and writes the receipt
+```
 
 Two layers. Do not merge them.
 
 1. **Exist (harness).** Source is ready must produce a file (path +
-   sha256). Missing → BLOCK. Schema cannot be waived by a model, a
-   gem, or a judge.
-2. **Good (gem).** How a person would pass this checkpoint. Teaching,
-   like a normal skill. `loop: judge` only when exist is not enough
-   (image, alignment, “does it teach”). Worker writes `{ok}`.
-   Intelligence may draft. It may not set `ok`.
+   sha256). Worker is `hash_bind` or `schema_validate`, one shot.
+   Missing → BLOCK. No `loop: judge`.
+2. **Good.** Exist is not enough (image, alignment, taste).
+   `loop: judge` + named `<id>_judge` (or a listed gate tool).
+   Stay on this box until `{ok}`. Intelligence may draft. It may
+   not set `ok`.
 
-Self-looping FlowSteps when it is not working is already this
-milestone: `on_tool_fail: need_model`, and `loop: judge` when quality
-is the gate. Do not add a new canvas loop that re-runs the FlowStep
-table as a program.
+Cycle and branch keep `cycle_receipt` / `branch_receipt`. Do not wrap
+them in judge. Do not draw `fetch_record` then `fetch_record_judge`
+as two boxes.
 
 Proceed is guarded by an **internal worker**. Intelligence may draft.
 It may not set `ok`, `branch`, or `cycle`. Do not use FOR or IF.
@@ -130,8 +136,9 @@ It may not set `ok`, `branch`, or `cycle`. Do not use FOR or IF.
     join: release_packaged
     pass: "current row has a bound image (path + sha256)"
 - id: card_aligned
+  gem: references/card_aligned.md
   loop: judge
-  worker: alignment_judge
+  worker: card_aligned_judge
   intelligence: image
   success: "Card is aligned — must produce an image (path + sha256). Retry until the worker receipt is ok."
 - id: intake_ready

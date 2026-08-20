@@ -30,6 +30,7 @@ from flowstep_runtime import (
 )
 from flowstep_tools import infer_codebase, tools_root, validate_library_tool
 from m8m_flowchart import write_flowchart
+from milestone_pair import needs_judge, pair_milestone
 from teaching_contracts import build_teaching_plan, render_teaching_plan_markdown
 from toolbox_plan import build_toolbox_plan, render_toolbox_plan_markdown
 from tool_vs_intelligence import from_audit as classification_from_audit
@@ -719,26 +720,6 @@ def _schema_properties(schema: dict[str, Any] | None) -> dict[str, Any]:
     return props if isinstance(props, dict) else {}
 
 
-JUDGE_HINTS = ("align", "generate", "spatial", "judge")
-JUDGE_TOKENS = ("align", "aligned", "generate", "generated", "spatial", "judge")
-
-
-def needs_judge(item: dict[str, Any]) -> bool:
-    """Exists is not enough: image/align/generate quality. Schema PASS is not judge."""
-    if str(item.get("loop") or "none") == "judge":
-        return True
-    intel = str(item.get("intelligence") or "none")
-    if intel in {"image", "judge"}:
-        return True
-    name = str(item.get("id") or "").lower()
-    tokens = _tokens(name)
-    if any(token in JUDGE_TOKENS for token in tokens):
-        return True
-    if any(hint in name for hint in JUDGE_HINTS):
-        return True
-    return False
-
-
 def infer_schema_control(milestones: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Mark for (ledger) and judge (until ok) milestones. Never exclusive next.when."""
     from humanize_chart import success_line
@@ -748,8 +729,6 @@ def infer_schema_control(milestones: list[dict[str, Any]]) -> list[dict[str, Any
         if loop in {"for", "judge"}:
             if loop == "for" and not item.get("worker"):
                 item["worker"] = "ledger_receipt"
-            if loop == "judge" and not item.get("worker"):
-                item["worker"] = "ok_receipt"
             if not item.get("success"):
                 item["success"] = success_line(item)
             continue
@@ -792,9 +771,8 @@ def infer_schema_control(milestones: list[dict[str, Any]]) -> list[dict[str, Any
                 item["worker"] = item.get("worker") or "cycle_receipt"
                 item["receipt_schema"] = item["cycle"]["receipt_schema"]
                 continue
-        if needs_judge(item):
+        if needs_judge(item) and not item.get("cycle"):
             item["loop"] = "judge"
-            item["worker"] = item.get("worker") or "ok_receipt"
             item["receipt_schema"] = item.get("receipt_schema") or f"schemas/{item['id']}_receipt_v1.json"
         if not item.get("success"):
             item["success"] = success_line(item)
@@ -803,6 +781,7 @@ def infer_schema_control(milestones: list[dict[str, Any]]) -> list[dict[str, Any
         item.pop("join", None)
     _infer_branch(milestones)
     for item in milestones:
+        pair_milestone(item)
         if not item.get("success"):
             item["success"] = success_line(item)
     return milestones

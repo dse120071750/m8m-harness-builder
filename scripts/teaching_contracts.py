@@ -159,15 +159,19 @@ def write_milestone_gems(
             or "required"
         )
         loop = str(item.get("loop") or "none")
+        worker = str(item.get("worker") or "")
         if loop == "judge":
-            judge_line = "- Judge: stay on this box until the worker receipt is ok. Exists is not enough."
+            judge_line = "- Loop: judge. Stay on this box until that worker receipt is ok. Exists is not enough."
+        elif worker:
+            judge_line = "- Loop: none. The worker certifies the gem in one shot (exist). Not a retry loop."
         else:
-            judge_line = "- Judge: no. Schema PASS is success unless a later edit marks exists ≠ good."
+            judge_line = "- Loop: none. Exist check is the closed output schema PASS."
         text = (
             body.replace("__TITLE__", title_id(mid))
             .replace("__SUCCESS__", str(item.get("success") or success_line(item)))
             .replace("__MID__", mid)
             .replace("__KIND__", kind)
+            .replace("__WORKER__", worker or "—")
             .replace("__JUDGE_LINE__", judge_line)
         )
         dest.parent.mkdir(parents=True, exist_ok=True)

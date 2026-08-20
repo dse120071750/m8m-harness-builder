@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "__STEP_ID__.input.schema.json",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "gem_path": { "type": "string" },
+    "asset": { "type": "object" },
+    "draft": { "type": "object" },
+    "ok": { "type": "boolean" }
+  }
+}

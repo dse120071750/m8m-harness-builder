@@ -60,12 +60,35 @@ class JpegWriteTests(unittest.TestCase):
             self.assertIn("Success", text)
             yaml_text = (harness / "flow.yaml").read_text(encoding="utf-8")
             self.assertIn("success:", yaml_text)
+            self.assertIn("gem:", yaml_text)
             gem = harness / "references" / "source_ready.md"
             self.assertTrue(gem.is_file())
-            self.assertIn("Rule of success:", gem.read_text(encoding="utf-8"))
-            self.assertGreater(jpg.stat().st_size, 1000)
-            self.assertEqual(jpg.read_bytes()[:2], b"\xff\xd8")
-            self.assertTrue(result.get("flowchart_jpg"))
+            gem_text = gem.read_text(encoding="utf-8")
+            self.assertIn("Rule of success:", gem_text)
+            self.assertIn("Worker:", gem_text)
+            self.assertNotIn('{"ok": True', (harness / "milestones" / "source_ready" / "assemble.py").read_text(encoding="utf-8"))
+            self.assertIn("hash_bind", yaml_text)
+
+    def test_quality_milestone_gets_named_judge_stub(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            codebase = Path(temp) / "repo"
+            generate_tool(codebase, "hash_bind")
+            result = generate_v3_flow(
+                codebase,
+                "pair_v1",
+                ["card_aligned"],
+                tools=["hash_bind"],
+            )
+            harness = Path(result["harness_dir"])
+            yaml_text = (harness / "flow.yaml").read_text(encoding="utf-8")
+            self.assertIn("loop: judge", yaml_text)
+            self.assertIn("worker: card_aligned_judge", yaml_text)
+            self.assertNotIn("worker: ok_receipt", yaml_text)
+            judge = codebase / "flowsteps" / "tools" / "card_aligned_judge" / "tool.py"
+            self.assertTrue(judge.is_file())
+            self.assertIn("gem_path", judge.read_text(encoding="utf-8"))
+            gem = (harness / "references" / "card_aligned.md").read_text(encoding="utf-8")
+            self.assertIn("card_aligned_judge", gem)
 
     def test_mark_step_rewrites_md_and_jpg(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

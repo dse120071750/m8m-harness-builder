@@ -115,7 +115,7 @@ n8n 的画布是动作。M8M 的画布是关卡。人话来自 humanizer（`sour
 | IF / Switch 节点 | **branch**：**这一关之后**选路。AI 起草，工具写 `{ok, branch}`。另一条路 skipped |
 | Loop Over Items / Split in Batches | **cycle**：先冻账本，再**包一圈关卡**。每一轮 AI 起草 pass/fail，工具改账本。pass 保留；fail 清 residual，可 resume |
 
-每一关都有**成功规则**。意思写在这一关的 gem：`flowsteps/flows/<id>/references/<id>.md`。护栏仍只看 asset（东西在不在）。`loop: judge` 只在「文件在」不等于「人会过」时用（出图、对齐）。不要把一个 judge 模块丢到 cycle、branch、每一关 asset 上。那和 FOR / IF 一样硬。
+每一关都有一份 gem，和一支**看这份 gem 的 worker**。gem 不是画布节点。judge 也不是第二关。存在关用 `hash_bind` / `schema_validate` 一次过；质量关才 `loop: judge` 加 `<id>_judge`（分开开发，不要共用 `ok_receipt`）。cycle / branch 仍用自己的收据。
 
 模型不能填 `ok` / `branch` / `cycle`。收据 ok 仍不能免掉 asset。
 
@@ -380,7 +380,7 @@ Deploy as open source, like n8n: companies self-host a standardized, auditable a
 | IF / Switch node | **branch**: pick a path **after this milestone**. AI drafts; the tool writes `{ok, branch}`. The other path is skipped |
 | Loop Over Items / Split in Batches | **cycle**: freeze a ledger, then **wrap a stretch of milestones**. Each round AI drafts pass/fail; the tool updates the ledger. Pass preserves; fail purges residue so you can resume |
 
-Every milestone has a **rule of success**. The meaning lives on that checkpoint’s gem: `flowsteps/flows/<id>/references/<id>.md`. The harness still only gates on the asset (the thing exists). `loop: judge` only when “the file exists” is not “a person would pass” (image, alignment). Do not drop one judge module onto cycle, branch, and every asset. That is as rigid as FOR / IF.
+Every milestone has a gem and **one worker that looks at that gem**. The gem is not a canvas node. The judge is not a second box. Exist boxes use `hash_bind` / `schema_validate` once. Quality boxes use `loop: judge` plus a named `<id>_judge` (developed separately; not shared `ok_receipt`). Cycle and branch keep their own receipts.
 
 The model must not set `ok` / `branch` / `cycle`. An ok receipt still cannot waive a missing asset.
 

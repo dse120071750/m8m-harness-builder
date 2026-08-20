@@ -8,6 +8,7 @@ from pathlib import Path
 import support  # noqa: F401
 
 from audit_harness import infer_schema_control, needs_judge
+from milestone_pair import pair_milestone, pick_gate_tool
 from flowstep_runtime import FlowError, read_json
 from generate_harness import generate_tool, generate_v3_flow
 from m8m_flowchart import render_flowchart, render_mermaid
@@ -290,9 +291,12 @@ class InferLoopTests(unittest.TestCase):
         ]
         infer_schema_control(milestones)
         self.assertEqual(milestones[1]["loop"], "judge")
-        self.assertEqual(milestones[1]["worker"], "ok_receipt")
+        self.assertEqual(milestones[1]["worker"], "card_aligned_judge")
+        self.assertNotEqual(milestones[1]["worker"], "ok_receipt")
+        self.assertEqual(milestones[0].get("worker"), "hash_bind")
         self.assertNotEqual(milestones[0].get("loop"), "judge")
         self.assertTrue(milestones[0].get("success"))
+        self.assertTrue(milestones[0].get("gem", "").endswith("source_ready.md"))
         self.assertIn("Retry until the worker receipt is ok", milestones[1]["success"])
 
     def test_does_not_judge_every_asset_milestone(self) -> None:
@@ -304,6 +308,9 @@ class InferLoopTests(unittest.TestCase):
         infer_schema_control(milestones)
         self.assertTrue(all(str(item.get("loop") or "none") != "judge" for item in milestones))
         self.assertTrue(all(item.get("success") for item in milestones))
+        self.assertEqual(milestones[0]["worker"], "hash_bind")
+        self.assertNotEqual(milestones[1].get("worker"), "ok_receipt")
+        self.assertEqual(milestones[2]["worker"], "hash_bind")
 
     def test_needs_judge_is_quality_not_every_checkpoint(self) -> None:
         self.assertFalse(needs_judge({"id": "source_ready"}))
@@ -311,6 +318,18 @@ class InferLoopTests(unittest.TestCase):
         self.assertTrue(needs_judge({"id": "card_aligned"}))
         self.assertTrue(needs_judge({"id": "slot_generated"}))
         self.assertTrue(needs_judge({"id": "design_frozen", "intelligence": "image"}))
+
+    def test_gate_tool_wins_over_named_judge(self) -> None:
+        item = {
+            "id": "alignment_pass",
+            "intelligence": "judge",
+            "tools": ["restyle_alignment_gate", "ok_receipt"],
+            "worker": "ok_receipt",
+        }
+        pair_milestone(item)
+        self.assertEqual(item["loop"], "judge")
+        self.assertEqual(item["worker"], "restyle_alignment_gate")
+        self.assertEqual(pick_gate_tool(["hash_bind", "ok_receipt"]), None)
 
 
 class ChartLoopTests(unittest.TestCase):

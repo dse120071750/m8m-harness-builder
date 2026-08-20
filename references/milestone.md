@@ -108,15 +108,17 @@ A **tool** is the Python package. A **FlowStep** is the atomic goal that
 
 ## Rule of success (gem)
 
-Every milestone has a rule of success. Put it on that milestone’s gem
-(`flowsteps/flows/<id>/references/<milestone_id>.md`) and on YAML
-`success:`. Schema PASS is **exist**. `loop: judge` is **good** when
-exist is not enough. Cycle and branch keep their own receipts.
+Every milestone has a gem and **one worker that looks at that gem**.
+The gem is teaching, not a canvas node. The worker is developed per
+box (`<id>_judge` or a listed gate tool), not shared `ok_receipt`.
 
-Do not ship a shared judge module used on cycle, asset, quality, and
-branch. That is the same rigidity as FOR and IF.
+- Exist boxes: worker `hash_bind` / `schema_validate`. No `loop: judge`.
+- Good boxes: `loop: judge` + named worker. Stay until `{ok}`.
+- Cycle / branch keep their own receipts. Not a second milestone
+  after the doer.
 
-The product `SKILL.md` points at the gems. It is not the recipe book.
+YAML: `success:`, `gem: references/<id>.md`, `worker:`. The product
+`SKILL.md` points at the gems. It is not the recipe book.
 
 ## Cycle, judge, and branch
 

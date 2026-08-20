@@ -27,6 +27,7 @@ from flowstep_tools import tools_root
 from m8m_flowchart import flowchart_path
 from teaching_contracts import copy_teaching_contracts, write_milestone_gems
 from humanize_chart import success_line
+from milestone_pair import pair_milestone
 from toolbox_plan import build_toolbox_plan, existing_toolbox_ids
 from tool_vs_intelligence import from_audit as classification_from_audit
 from tool_vs_intelligence import from_flow as classification_from_flow
@@ -164,6 +165,21 @@ def _write_step_package(
     )
 
 
+def _write_judge_package(dest: Path, tool_id: str, *, overwrite: bool) -> list[str]:
+    written: list[str] = []
+    mapping = {"STEP_ID": tool_id}
+    targets = {
+        dest / "tool.py": _render("milestone/judge_tool.py", mapping),
+        dest / "input.schema.json": _render("milestone/judge_input.schema.json", mapping),
+        dest / "output.schema.json": _render("milestone/judge_output.schema.json", mapping),
+        dest / "tests" / "test_tool.py": _render("milestone/judge_test_tool.py", mapping),
+    }
+    for path, content in targets.items():
+        if _write_text(path, content, overwrite=overwrite):
+            written.append(str(path))
+    return written
+
+
 def seed_path(tool_id: str) -> Path | None:
     path = SEEDS_DIR / tool_id
     if (path / "tool.py").is_file():
@@ -207,6 +223,18 @@ def generate_tool(codebase: Path, tool_id: str, *, overwrite: bool = False) -> d
             "tool_dir": str(dest),
             "seeded": True,
             "origin": "existing",
+            "written": written,
+        }
+    if tool_id.endswith("_judge"):
+        written = _write_judge_package(dest, tool_id, overwrite=overwrite)
+        return {
+            "schema": "flowstep_tool_generate_v3",
+            "status": "PASS",
+            "tool_id": tool_id,
+            "tool_dir": str(dest),
+            "seeded": False,
+            "origin": "generate-new",
+            "note": "generate-new judge stub; it reads the gem and writes {ok}",
             "written": written,
         }
     written = _write_package(dest, tool_id, previous_id=None, overwrite=overwrite)
@@ -335,7 +363,7 @@ def generate_v3_flow(
         loop = str(spec.get("loop") or "none")
         if loop in {"for", "judge"}:
             item["loop"] = loop
-            item["worker"] = spec.get("worker") or ("ledger_receipt" if loop == "for" else "ok_receipt")
+            item["worker"] = spec.get("worker") or ("ledger_receipt" if loop == "for" else "")
             item["receipt_schema"] = spec.get("receipt_schema") or f"schemas/{mid}_receipt_v1.json"
             if spec.get("max_attempts"):
                 item["max_attempts"] = spec["max_attempts"]
@@ -376,7 +404,24 @@ def generate_v3_flow(
         if spec.get("on_cycle"):
             item["on_cycle"] = spec["on_cycle"]
         item["success"] = str(spec.get("success") or "").strip() or success_line(item)
+        if spec.get("gem"):
+            item["gem"] = spec["gem"]
+        pair_milestone(item)
+        worker = str(item.get("worker") or "")
+        if worker.endswith("_judge"):
+            if worker not in item["tools"]:
+                item["tools"].append(worker)
+        elif worker and item["tools"] and worker not in item["tools"]:
+            item["tools"].append(worker)
+        elif worker in {"hash_bind", "schema_validate"} and not item["tools"]:
+            item.pop("worker", None)
         items.append(item)
+    for item in items:
+        worker = str(item.get("worker") or "")
+        if worker:
+            tool_result = generate_tool(codebase, worker, overwrite=overwrite)
+            if not tool_result.get("seeded"):
+                notes.append(f"{worker}: generate-new stub")
         previous = item
     flow = {
         "schema": "flowstep_flow_v3",
@@ -683,6 +728,7 @@ def generate_from_audit(
             "on_cycle": item.get("on_cycle"),
             "on_tool_fail": item.get("on_tool_fail"),
             "success": item.get("success"),
+            "gem": item.get("gem"),
             "max_model_attempts": item.get("max_model_attempts"),
             "_gate_schemas": {
                 str(edge["when"]): edge["schema"]
@@ -754,6 +800,15 @@ def yaml_dump_v3(flow: dict[str, Any]) -> str:
             lines.append(f"      kind: {asset_kind}")
         if item.get("success"):
             lines.append(f"    success: {json.dumps(str(item['success']), ensure_ascii=False)}")
+        if item.get("gem"):
+            lines.append(f"    gem: {item['gem']}")
+        if (
+            item.get("worker")
+            and item.get("loop") not in {"for", "judge"}
+            and not item.get("branch")
+            and not item.get("cycle")
+        ):
+            lines.append(f"    worker: {item['worker']}")
         flowsteps = item.get("flowsteps") or []
         if flowsteps:
             lines.append("    flowsteps:")

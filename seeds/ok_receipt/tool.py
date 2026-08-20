@@ -1,4 +1,4 @@
-"""Judge/for receipt worker. Toolbox function: ok or not ok. Not a milestone."""
+"""Copy {ok} from input. Not the default per-milestone judge. Prefer <id>_judge."""
 
 from __future__ import annotations
 
