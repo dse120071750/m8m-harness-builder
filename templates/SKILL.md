@@ -27,3 +27,6 @@ render, and package are tools. Do not write those on the fly.
 
 for is a ledger milestone (walk items until remaining=0). judge (if)
 retries until the worker receipt is ok. The worker is a repo tool.
+
+Generated files go in `address.write_to` inside the run session folder.
+Do not invent a folder structure.

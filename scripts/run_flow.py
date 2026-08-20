@@ -10,6 +10,16 @@ from pathlib import Path
 from typing import Any
 
 from schema_gate import ledger_items, read_receipt, schema_accepts
+from session_layout import (
+    assert_in_run,
+    attach_address,
+    copy_envelope_to_slot,
+    default_run_dir,
+    ensure_session_tree,
+    materialize_bytes_into_slot,
+    record_slot,
+)
+from flowstep_tools import infer_codebase
 from flowstep_runtime import (
     ACTION_SCHEMA,
     NEED_MODEL,
@@ -50,6 +60,7 @@ def _progress_path(run_dir: Path) -> Path:
 
 def initialize_run(run_dir: Path, skill_dir: Path, flow: dict[str, Any], request_path: Path | None) -> None:
     run_dir.mkdir(parents=True, exist_ok=True)
+    ensure_session_tree(run_dir, flow)
     target = run_dir / "request.json"
     if not target.exists():
         if request_path is None:
@@ -353,6 +364,26 @@ def _item_payload(result: dict[str, Any], fallback: Any) -> Any:
     return body or fallback
 
 
+def _place_result(
+    run_dir: Path,
+    step: dict[str, Any],
+    result: dict[str, Any],
+    *,
+    item_index: int | None = None,
+    attempt: int | None = None,
+) -> dict[str, Any]:
+    kind = str(((step.get("asset") or {}).get("kind") if isinstance(step.get("asset"), dict) else "") or "")
+    if kind not in {"file", "image"}:
+        return result
+    asset = result.get("asset") if isinstance(result.get("asset"), dict) else {}
+    has_path = isinstance(asset.get("path"), str) and asset["path"]
+    if not has_path:
+        return result
+    placed = materialize_bytes_into_slot(run_dir, step, result, item_index=item_index, attempt=attempt)
+    assert_in_run(run_dir, placed["asset"]["path"])
+    return placed
+
+
 def _pass_artifact(
     skill_dir: Path,
     run_dir: Path,
@@ -388,6 +419,8 @@ def _pass_artifact(
     path = expected_artifact_path(run_dir, flow, step)
     write_json(path, artifact, overwrite=False)
     validate_against_schema(artifact, envelope_schema_path())
+    copy_envelope_to_slot(run_dir, step, path)
+    record_slot(run_dir, step, result)
     _materialize(run_dir, flow, step, artifact, path)
     return None
 
@@ -479,6 +512,7 @@ def _execute_step(
             item_input["item"] = item
             item_input["ledger"] = items
             item_input["done"] = done
+            item_input = attach_address(run_dir, step, item_input, item_index=index)
             outcome = _run_handler(
                 skill_dir, run_dir, flow, step, item_input, current_draft, task, bindings, fingerprint, folder
             )
@@ -494,6 +528,10 @@ def _execute_step(
             if not receipt["ok"]:
                 write_json(state_path, {"index": index, "done": done, "attempts": attempts}, overwrite=True)
                 continue
+            try:
+                result = _place_result(run_dir, step, result, item_index=index)
+            except FlowError:
+                pass
             done.append(_item_payload(result, item))
             index += 1
             write_json(state_path, {"index": index, "done": done, "attempts": attempts}, overwrite=True)
@@ -523,8 +561,9 @@ def _execute_step(
                     [f"{step['id']}: judge budget {max_attempts} exhausted; receipt not ok"],
                 )
             write_json(state_path, {"attempts": attempts}, overwrite=True)
+            judged = attach_address(run_dir, step, input_data, attempt=attempts)
             outcome = _run_handler(
-                skill_dir, run_dir, flow, step, input_data, current_draft, task, bindings, fingerprint, folder
+                skill_dir, run_dir, flow, step, judged, current_draft, task, bindings, fingerprint, folder
             )
             current_draft = None
             if outcome.get("action") is not None:
@@ -536,15 +575,25 @@ def _execute_step(
             except FlowError as exc:
                 return _write_blocked(run_dir, flow, step, bindings, fingerprint, [str(exc)])
             if receipt["ok"]:
+                try:
+                    result = _place_result(run_dir, step, result)
+                except FlowError as exc:
+                    return _write_blocked(run_dir, flow, step, bindings, fingerprint, [str(exc)])
                 return _pass_artifact(skill_dir, run_dir, flow, step, result, bindings, fingerprint, attempts)
         return _write_blocked(
             run_dir, flow, step, bindings, fingerprint, [f"{step['id']}: judge ended without ok receipt"]
         )
 
+    input_data = attach_address(run_dir, step, input_data)
     outcome = _run_handler(skill_dir, run_dir, flow, step, input_data, draft, task, bindings, fingerprint, folder)
     if outcome.get("action") is not None:
         return outcome["action"]
-    return _pass_artifact(skill_dir, run_dir, flow, step, outcome["result"], bindings, fingerprint, 1)
+    result = outcome["result"]
+    try:
+        result = _place_result(run_dir, step, result)
+    except FlowError as exc:
+        return _write_blocked(run_dir, flow, step, bindings, fingerprint, [str(exc)])
+    return _pass_artifact(skill_dir, run_dir, flow, step, result, bindings, fingerprint, 1)
 
 
 def advance(
@@ -622,6 +671,7 @@ def advance(
         "schema": ACTION_SCHEMA,
         "state": "COMPLETE",
         "run_id": run_dir.name,
+        "run_dir": str(run_dir.resolve()),
         "steps": len(record["steps"]),
     }
 
@@ -629,7 +679,7 @@ def advance(
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     add_harness_location_args(parser)
-    parser.add_argument("--run-dir", required=True, type=Path)
+    parser.add_argument("--run-dir", type=Path, default=None)
     parser.add_argument("--request", type=Path)
     parser.add_argument("--draft", type=Path)
     parser.add_argument("--flow")
@@ -638,16 +688,26 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    skill_dir = harness_dir_from_args(args)
+    run_dir = args.run_dir
     try:
+        if run_dir is None:
+            flow = load_flow(skill_dir, find_flow_path(skill_dir, args.flow) if args.flow else None)
+            codebase = infer_codebase(skill_dir)
+            if codebase is None:
+                raise FlowError("pass --run-dir, or run a product flow under flowsteps/flows/<id>")
+            run_dir = default_run_dir(codebase, str(flow.get("flow_id") or "flow"))
         result = advance(
-            harness_dir_from_args(args),
-            args.run_dir,
+            skill_dir,
+            run_dir,
             request_path=args.request,
             draft_path=args.draft,
             flow_arg=args.flow,
         )
+        if isinstance(result, dict):
+            result["run_dir"] = str(Path(run_dir).resolve())
     except FlowError as exc:
-        record_path = args.run_dir / "flow-execution-record.json"
+        record_path = (run_dir or Path(".")) / "flow-execution-record.json"
         if record_path.is_file():
             record = read_json(record_path)
             if record.get("status") != "COMPLETE":

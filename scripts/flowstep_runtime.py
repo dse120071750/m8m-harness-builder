@@ -790,6 +790,8 @@ def file_asset_schema(step_id: str) -> dict[str, Any]:
                 "properties": {
                     "path": {"type": "string", "minLength": 1},
                     "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                    "slot": {"type": "string", "minLength": 1},
+                    "mime": {"type": "string", "minLength": 1},
                 },
             }
         },

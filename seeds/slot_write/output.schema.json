@@ -1,14 +1,11 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "file_ref_v2.schema.json",
   "type": "object",
   "additionalProperties": false,
-  "required": ["path", "sha256"],
+  "required": ["path", "sha256", "slot"],
   "properties": {
     "path": { "type": "string", "minLength": 1 },
     "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
-    "slot": { "type": "string", "minLength": 1 },
-    "mime": { "type": "string", "minLength": 1 },
-    "content_schema": { "type": "string", "minLength": 1 }
+    "slot": { "type": "string", "minLength": 1 }
   }
 }

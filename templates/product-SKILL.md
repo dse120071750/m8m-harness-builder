@@ -11,6 +11,10 @@ BLOCKED. FlowSteps inside are a guide: prefer one tool, recover like a
 normal agent if it fails. for is a ledger milestone; judge (if) retries
 until a repo worker receipt is `ok: true`.
 
+Put generated images in `address.write_to` on the milestone input.
+Do not invent a folder. Do not leave files in Downloads or `/tmp`.
+The driver creates `<repo>/flowsteps/runs/<flow_id>/<run_id>/`.
+
 - flow: `<repo>/flowsteps/flows/__FLOW_ID__/`
 - chart: `<repo>/flowsteps/flows/__FLOW_ID__/planning/m8m-flowchart.md`
 - tools: `<repo>/flowsteps/tools/`

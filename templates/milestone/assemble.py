@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -149,6 +150,8 @@ def run(input_data: dict[str, Any], draft: dict[str, Any] | None = None, **kwarg
                 return _need_model(STEP_ID, WORKER, f"{type(exc).__name__}: {exc}")
             payload[f"{WORKER}_error"] = f"{type(exc).__name__}: {exc}"
     if ASSET_KIND in {"file", "image"} or IS_LAST:
+        address = payload.get("address") if isinstance(payload.get("address"), dict) else {}
+        dest = address.get("write_to")
         asset = payload.get("asset")
         if not isinstance(asset, dict) or "path" not in asset or "sha256" not in asset:
             path = _first_path(payload)
@@ -156,13 +159,27 @@ def run(input_data: dict[str, Any], draft: dict[str, Any] | None = None, **kwarg
                 if draft is None:
                     return _need_model(STEP_ID, "hash_bind", f"{STEP_ID}: milestone asset not produced (need {ASSET_KIND} path+sha256)")
                 raise ValueError(f"{STEP_ID}: milestone asset not produced (need {ASSET_KIND} path+sha256)")
+            if dest:
+                dest_path = Path(str(dest))
+                dest_path.parent.mkdir(parents=True, exist_ok=True)
+                if Path(path).resolve() != dest_path.resolve():
+                    shutil.copy2(path, dest_path)
+                path = str(dest_path)
             try:
                 asset = tools.run_library_tool(codebase, "hash_bind", {"path": path})
             except Exception as exc:
                 if draft is None:
                     return _need_model(STEP_ID, "hash_bind", f"{type(exc).__name__}: {exc}")
                 raise ValueError(f"{STEP_ID}: milestone asset not produced (need {ASSET_KIND} path+sha256)") from exc
+        elif dest and Path(str(asset.get("path") or "")).is_file():
+            dest_path = Path(str(dest))
+            dest_path.parent.mkdir(parents=True, exist_ok=True)
+            if Path(str(asset["path"])).resolve() != dest_path.resolve():
+                shutil.copy2(asset["path"], dest_path)
+                asset = tools.run_library_tool(codebase, "hash_bind", {"path": str(dest_path)})
         out = {"asset": {"path": asset["path"], "sha256": asset["sha256"]}}
+        if address.get("slot"):
+            out["asset"]["slot"] = str(address["slot"])
         if isinstance(payload.get("receipt"), dict):
             out["receipt"] = payload["receipt"]
         return out

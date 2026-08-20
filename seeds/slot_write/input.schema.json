@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["path"],
+  "properties": {
+    "path": { "type": "string", "minLength": 1 },
+    "address": {
+      "type": "object",
+      "required": ["write_to", "slot"],
+      "properties": {
+        "write_to": { "type": "string", "minLength": 1 },
+        "slot": { "type": "string", "minLength": 1 },
+        "run_dir": { "type": "string" },
+        "kind": { "type": "string" }
+      }
+    },
+    "write_to": { "type": "string" }
+  }
+}

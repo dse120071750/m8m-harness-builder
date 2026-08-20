@@ -144,7 +144,7 @@ request
 
 ## 怎么跑
 
-Codex（`$m8m-harness-builder`）和 Claude Code 都能用。
+Codex（`$m8m-harness-builder`）和 Claude Code 都能用。不传 `--run-dir` 时，driver 会在 `<repo>/flowsteps/runs/<flow_id>/<时间>/` 开 session。生成的图必须写进该树的 `address.write_to`，不要另开文件夹。
 
 ```powershell
 python scripts/run_m8m.py --target <skill-or-flow-dir> --codebase <repo>
@@ -357,7 +357,7 @@ Tools belong in `<repo>/flowsteps/tools/`, not in `~/.codex/skills` or `~/.claud
 
 ## Run
 
-Works in Codex (`$m8m-harness-builder`) and Claude Code.
+Works in Codex (`$m8m-harness-builder`) and Claude Code. If you omit `--run-dir`, the driver opens `<repo>/flowsteps/runs/<flow_id>/<timestamp>/`. Generated images must be written to `address.write_to` in that tree.
 
 ```powershell
 python scripts/run_m8m.py --target <skill-or-flow-dir> --codebase <repo>
