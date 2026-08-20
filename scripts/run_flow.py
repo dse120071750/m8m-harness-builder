@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from schema_gate import ELSE_BLOCKED, resolve_next, run_foreach
+from schema_gate import ELSE_BLOCKED, check_foreach, resolve_next
 from flowstep_runtime import (
     ACTION_SCHEMA,
     NEED_MODEL,
@@ -269,10 +269,7 @@ def _execute_step(
                 return _write_blocked(run_dir, flow, step, bindings, fingerprint, [str(exc)])
         write_json(folder / "draft.json", draft)
     try:
-        if step.get("foreach"):
-            result = run_foreach(skill_dir, step, input_data)
-        else:
-            result = invoke_tool(skill_dir, step, input_data, draft, task)
+        result = invoke_tool(skill_dir, step, input_data, draft, task)
     except Exception as exc:
         return _recover_or_block(
             skill_dir,
@@ -339,6 +336,18 @@ def _execute_step(
             bindings,
             fingerprint,
             [f"{step['id']}: milestone asset not produced; {exc}"],
+        )
+    try:
+        if step.get("foreach"):
+            check_foreach(skill_dir, step, result)
+    except FlowError as exc:
+        return _write_blocked(
+            run_dir,
+            flow,
+            step,
+            bindings,
+            fingerprint,
+            [f"{step['id']}: milestone check failed; {exc}"],
         )
     artifact = make_envelope(
         flow=flow,

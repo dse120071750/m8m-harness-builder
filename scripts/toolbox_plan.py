@@ -99,11 +99,6 @@ def build_toolbox_plan(
         if not mid:
             continue
         tools = [str(tool) for tool in (item.get("tools") or []) if tool]
-        fe = item.get("foreach") if isinstance(item.get("foreach"), dict) else None
-        if fe:
-            for tool in fe.get("tools") or []:
-                if tool and str(tool) not in tools:
-                    tools.append(str(tool))
         existing_cell: list[str] = []
         promote_cell: list[dict[str, str]] = []
         generate_cell: list[str] = []

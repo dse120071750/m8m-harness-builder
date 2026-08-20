@@ -24,8 +24,9 @@ M8M:     node = one milestone (harness)
 ```
 
 The driver advances milestone → milestone. Crop/hash stay FlowSteps
-inside a milestone. n8n IF/loop are **schema gates** (`next.when` /
-`foreach`), not canvas nodes and not intelligence.
+inside a milestone. n8n IF/loop are **schema gates on the milestone
+check** (`next.when` / `foreach` against **this.out**), not canvas
+nodes, not FlowSteps, not tools, and not intelligence.
 
 Intelligence is optional *on* a milestone (`NEED_MODEL`). It is not a
 third canvas node.
@@ -105,23 +106,29 @@ A **tool** is the Python package. A **FlowStep** is the atomic goal that
 
 ## Schema gates (if/else and loop)
 
-Criterion is JSON Schema validity, never a model.
+Criterion is JSON Schema validity on **this.out**, never a model, never
+a tool fan-out.
 
-- `next[].when` + `else`: exclusive branch. First gate schema that
-  validates `this.out` wins. `else: BLOCKED` is allowed.
-- `foreach.path` + `item_schema` + `max_items`: loop over a typed array
-  already declared on the previous output schema (`maxItems` required).
-- Join after a branch: `join: [url_ready, file_ready]` binds the PASS
+- **if:** `next[].when` + `else`. After the asset PASSes, the first gate
+  schema that validates `this.out` picks the next milestone.
+  `else: BLOCKED` is allowed. If an enum on this.out does not match later
+  ids, every `then` is the next linear milestone — still an if on the
+  asset check.
+- **for:** `foreach.path` + `item_schema` + `max_items`. This.out has a
+  typed array (`maxItems` required). That is the check. Assemble still
+  runs once. There is no `foreach.tools`.
+- Join after a real fork: `join: [url_ready, file_ready]` binds the PASS
   branch. Downstream input is still a schema (`oneOf` / open object).
 
-Audit infers `next` from `enum`/`const` fields that match later milestone
-ids, and `foreach` from a previous array that already declares
-`maxItems`. Generate writes the gate schemas. The model does not approve
+Audit infers `next` from `enum`/`const` fields on this.out, and
+`foreach` from an array on **this** output schema that already declares
+`maxItems`. Intelligence on the milestone does not skip the for-check.
+Generate writes the gate and item schemas. The model does not approve
 the branch.
 
-The one chart is `planning/m8m-flowchart.md` (mermaid + gate table +
-foreach table). Audit and generate both write that file. It is not
-embedded in the audit report or the instruction.
+The one chart is `planning/m8m-flowchart.md` (mermaid + Gates table +
+Loops table of schema paths). Audit and generate both write that file.
+It is not embedded in the audit report or the instruction.
 
 Teaching contracts (`references/*.md` on a Codex or Claude skill) belong
 on the flow: `<repo>/flowsteps/flows/<id>/references/`. Same ownership as

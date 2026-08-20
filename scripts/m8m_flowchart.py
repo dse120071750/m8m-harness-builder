@@ -90,18 +90,16 @@ def render_mermaid(items: list[dict[str, Any]]) -> str:
         asset_kind = item.get("asset_kind") or ""
         asset_line = f"<br/>asset:{asset_kind}" if asset_kind else ""
         fe = item.get("foreach")
+        for_line = ""
         if fe:
-            loop_tools = ",".join(fe.get("tools") or item["tools"] or ["tools"])
-            lines.append(
-                f'    {mid}[["foreach {fe.get("path")} max={fe.get("max_items")}<br/>{mid}{asset_line}<br/>{loop_tools}"]]'
-            )
-        elif item["next"]:
-            lines.append(f"    {mid}{{{mid}{asset_line}{tool_line}}}")
+            for_line = f"<br/>for:{fe.get('path')} max={fe.get('max_items')}"
+        if item["next"]:
+            lines.append(f"    {mid}{{{mid}{asset_line}{for_line}{tool_line}}}")
         else:
             extra = ""
             if item["intelligence"] not in {None, "none"}:
                 extra = f"<br/>intel:{item['intelligence']}"
-            lines.append(f'    {mid}["{mid}{extra}{asset_line}{tool_line}"]')
+            lines.append(f'    {mid}["{mid}{extra}{asset_line}{for_line}{tool_line}"]')
         if item["next"] and (item.get("else") or ELSE_BLOCKED) in {None, ELSE_BLOCKED, "BLOCKED"}:
             lines.append(f"    {_blocked_id(mid)}{{{{{ELSE_BLOCKED}}}}}")
     if ids:
@@ -118,11 +116,6 @@ def render_mermaid(items: list[dict[str, Any]]) -> str:
             else:
                 lines.append(f'    {mid} -->|"else"| {else_to}')
             continue
-        fe = item.get("foreach")
-        if fe:
-            path = fe.get("path") or "item"
-            tools = ",".join(fe.get("tools") or item["tools"] or [])
-            lines.append(f'    {mid} -->|"each {path} {tools}"| {mid}')
     by_id = {item["id"]: item for item in nodes}
     for item in nodes:
         if item.get("join"):
@@ -142,13 +135,7 @@ def render_mermaid(items: list[dict[str, Any]]) -> str:
                 break
             if dest.get("join"):
                 continue
-            label = None
-            if item.get("foreach"):
-                label = f'collect {item["foreach"].get("path")}'
-            if label:
-                lines.append(f'    {item["id"]} -->|"{label}"| {later}')
-            else:
-                lines.append(f"    {item['id']} --> {later}")
+            lines.append(f"    {item['id']} --> {later}")
             break
     return "\n".join(lines)
 
@@ -169,7 +156,7 @@ def render_flowchart(
         "One chart. Milestone to milestone. Each node is a required asset",
         "(file, image, json proof, or data). Missing it is BLOCKED.",
         "FlowSteps inside a node are a guide (one preferred tool each), not a compulsory path.",
-        "If/else and foreach are JSON Schema, not semantic approval.",
+        "If/else and foreach are JSON Schema checks on this.out, not tools and not semantic approval.",
         "",
         f"- flow_id: `{flow_id or title}`",
         f"- source: `{source}`",
@@ -203,7 +190,7 @@ def render_flowchart(
             control = "join"
         elif item.get("foreach"):
             fe = item["foreach"]
-            control = f"foreach `{fe.get('path')}` max={fe.get('max_items')}"
+            control = f"for `{fe.get('path')}` max={fe.get('max_items')}"
         else:
             control = "linear"
         asset = item.get("asset_kind") or "required"
@@ -254,20 +241,19 @@ def render_flowchart(
     lines.extend(["", "## Loops (foreach)", ""])
     loops = [item for item in nodes if item.get("foreach")]
     if not loops:
-        lines.append("None. No typed array with `maxItems` on a tool milestone.")
+        lines.append("None. No typed array with `maxItems` on a milestone output.")
     else:
         lines.extend(
             [
-                "| Milestone | Path | Item schema | Tools | max_items | Collect |",
-                "| --- | --- | --- | --- | ---: | --- |",
+                "| Milestone | Path on this.out | Item schema | max_items |",
+                "| --- | --- | --- | ---: |",
             ]
         )
         for item in loops:
             fe = item["foreach"]
-            tools = ", ".join(f"`{tool}`" for tool in (fe.get("tools") or item["tools"])) or "none"
             lines.append(
-                f"| `{item['id']}` | `{fe.get('path')}` | `{fe.get('item_schema')}` | {tools} | "
-                f"{fe.get('max_items')} | `{fe.get('collect') or fe.get('path')}` |"
+                f"| `{item['id']}` | `{fe.get('path')}` | `{fe.get('item_schema')}` | "
+                f"{fe.get('max_items')} |"
             )
     lines.extend(
         [

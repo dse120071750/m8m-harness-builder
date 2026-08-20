@@ -51,6 +51,15 @@ class ControlNameTests(unittest.TestCase):
             self.assertTrue(Path(result["flowchart_path"]).is_file())
 
 
+class WriterSkillTests(unittest.TestCase):
+    def test_skill_md_teaches_if_for_on_this_out(self) -> None:
+        text = (Path(__file__).resolve().parents[1] / "SKILL.md").read_text(encoding="utf-8")
+        self.assertIn("next.when", text)
+        self.assertIn("this.out", text)
+        self.assertIn("foreach", text)
+        self.assertIn("Do not loop tools", text)
+
+
 class GateTests(unittest.TestCase):
     def test_schema_gate_selects_url_branch(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -181,10 +190,10 @@ class ForeachTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             codebase = Path(temp) / "repo"
             generate_tool(codebase, "hash_bind")
-            generate_v3_flow(codebase, "loop_v1", ["source_ready", "pages_bound"], tools=["hash_bind"])
+            generate_v3_flow(codebase, "loop_v1", ["pages_bound", "release_packaged"], tools=["hash_bind"])
             harness = codebase / "flowsteps" / "flows" / "loop_v1"
             _write(
-                harness / "schemas" / "source_ready_v1.json",
+                harness / "schemas" / "pages_bound_v1.json",
                 json.dumps(
                     {
                         "type": "object",
@@ -193,7 +202,7 @@ class ForeachTests(unittest.TestCase):
                             "pages": {
                                 "type": "array",
                                 "maxItems": 7,
-                                "items": {"type": "object", "required": ["path"], "properties": {"path": {"type": "string"}}},
+                                "items": {"type": "object"},
                             }
                         },
                     }
@@ -204,17 +213,8 @@ class ForeachTests(unittest.TestCase):
                 json.dumps({"type": "object", "required": ["path"], "properties": {"path": {"type": "string", "minLength": 1}}}),
             )
             _write(
-                harness / "schemas" / "pages_bound_v1.json",
-                json.dumps(
-                    {
-                        "type": "object",
-                        "required": ["pages", "item_count"],
-                        "properties": {
-                            "pages": {"type": "array"},
-                            "item_count": {"type": "integer"},
-                        },
-                    }
-                ),
+                harness / "schemas" / "release_packaged_v1.json",
+                json.dumps({"type": "object", "additionalProperties": True}),
             )
             text = (harness / "flow.yaml").read_text(encoding="utf-8")
             text = text.replace(
@@ -223,15 +223,13 @@ class ForeachTests(unittest.TestCase):
                 "    foreach:\n"
                 "      path: pages\n"
                 "      item_schema: schemas/page_v1.json\n"
-                "      tools: [hash_bind]\n"
-                "      max_items: 7\n"
-                "      collect: pages\n",
+                "      max_items: 7\n",
             )
             (harness / "flow.yaml").write_text(text, encoding="utf-8")
-            _passthrough_assemble(harness / "milestones" / "source_ready" / "assemble.py")
-            _ok_test(harness / "milestones" / "source_ready" / "tests" / "test_assemble.py")
             _passthrough_assemble(harness / "milestones" / "pages_bound" / "assemble.py")
             _ok_test(harness / "milestones" / "pages_bound" / "tests" / "test_assemble.py")
+            _passthrough_assemble(harness / "milestones" / "release_packaged" / "assemble.py")
+            _ok_test(harness / "milestones" / "release_packaged" / "tests" / "test_assemble.py")
             files = []
             for i in range(2):
                 path = Path(temp) / f"p{i}.txt"
@@ -242,8 +240,9 @@ class ForeachTests(unittest.TestCase):
             done = advance(harness, Path(temp) / "run-2", request_path=request)
             self.assertEqual(done["state"], "COMPLETE")
             out = read_json(Path(temp) / "run-2" / "artifacts" / "pages_bound.pages_bound_v1.json")
-            self.assertEqual(out["data"]["item_count"], 2)
-            self.assertEqual(len(out["data"]["pages"][0]["sha256"]), 64)
+            self.assertEqual(len(out["data"]["pages"]), 2)
+            self.assertNotIn("item_count", out["data"])
+            self.assertNotIn("sha256", out["data"]["pages"][0])
 
             extra = []
             for i in range(8):
@@ -255,16 +254,56 @@ class ForeachTests(unittest.TestCase):
             blocked = advance(harness, Path(temp) / "run-8", request_path=request8)
             self.assertEqual(blocked["state"], "BLOCKED")
 
+    def test_foreach_item_schema_blocks(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            codebase = Path(temp) / "repo"
+            generate_tool(codebase, "hash_bind")
+            generate_v3_flow(codebase, "loop_item_v1", ["pages_bound"], tools=["hash_bind"])
+            harness = codebase / "flowsteps" / "flows" / "loop_item_v1"
+            _write(
+                harness / "schemas" / "pages_bound_v1.json",
+                json.dumps(
+                    {
+                        "type": "object",
+                        "required": ["pages"],
+                        "properties": {
+                            "pages": {"type": "array", "maxItems": 7, "items": {"type": "object"}},
+                        },
+                    }
+                ),
+            )
+            _write(
+                harness / "schemas" / "page_v1.json",
+                json.dumps({"type": "object", "required": ["path"], "properties": {"path": {"type": "string", "minLength": 1}}}),
+            )
+            text = (harness / "flow.yaml").read_text(encoding="utf-8")
+            text = text.replace(
+                "    handler: milestones/pages_bound/assemble.py\n",
+                "    handler: milestones/pages_bound/assemble.py\n"
+                "    foreach:\n"
+                "      path: pages\n"
+                "      item_schema: schemas/page_v1.json\n"
+                "      max_items: 7\n",
+            )
+            (harness / "flow.yaml").write_text(text, encoding="utf-8")
+            _passthrough_assemble(harness / "milestones" / "pages_bound" / "assemble.py")
+            _ok_test(harness / "milestones" / "pages_bound" / "tests" / "test_assemble.py")
+            request = Path(temp) / "request.json"
+            request.write_text(json.dumps({"pages": [{"path": "ok"}, {"nope": True}]}), encoding="utf-8")
+            blocked = advance(harness, Path(temp) / "run-item", request_path=request)
+            self.assertEqual(blocked["state"], "BLOCKED")
+            self.assertTrue(any("foreach item" in str(item) for item in blocked.get("blockers") or []))
+
 
 class ValidateControlTests(unittest.TestCase):
     def test_foreach_without_maxitems_on_schema_fails(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             codebase = Path(temp) / "repo"
             generate_tool(codebase, "hash_bind")
-            generate_v3_flow(codebase, "badloop_v1", ["source_ready", "pages_bound"], tools=["hash_bind"])
+            generate_v3_flow(codebase, "badloop_v1", ["pages_bound"], tools=["hash_bind"])
             harness = codebase / "flowsteps" / "flows" / "badloop_v1"
             _write(
-                harness / "schemas" / "source_ready_v1.json",
+                harness / "schemas" / "pages_bound_v1.json",
                 json.dumps(
                     {
                         "type": "object",
@@ -282,13 +321,11 @@ class ValidateControlTests(unittest.TestCase):
                 "    foreach:\n"
                 "      path: pages\n"
                 "      item_schema: schemas/page_v1.json\n"
-                "      tools: [hash_bind]\n"
                 "      max_items: 7\n",
             )
             (harness / "flow.yaml").write_text(text, encoding="utf-8")
-            for mid in ("source_ready", "pages_bound"):
-                _passthrough_assemble(harness / "milestones" / mid / "assemble.py")
-                _ok_test(harness / "milestones" / mid / "tests" / "test_assemble.py")
+            _passthrough_assemble(harness / "milestones" / "pages_bound" / "assemble.py")
+            _ok_test(harness / "milestones" / "pages_bound" / "tests" / "test_assemble.py")
             with self.assertRaises(FlowError) as ctx:
                 validate_harness(codebase=codebase, flow_id="badloop_v1")
             self.assertIn("maxItems", str(ctx.exception))
@@ -343,12 +380,30 @@ class SkillWriterControlTests(unittest.TestCase):
             },
         ]
         infer_schema_control(milestones)
-        fe = milestones[1]["foreach"]
+        fe = milestones[0]["foreach"]
         self.assertEqual(fe["path"], "pages")
         self.assertEqual(fe["max_items"], 7)
-        self.assertEqual(fe["tools"], ["hash_bind"])
+        self.assertNotIn("tools", fe)
+        self.assertNotIn("foreach", milestones[1])
 
-    def test_intelligence_does_not_get_foreach(self) -> None:
+    def test_intelligence_gets_foreach_on_this_out(self) -> None:
+        milestones = [
+            {
+                "id": "plan_frozen",
+                "intelligence": "completion",
+                "tools": ["hash_bind"],
+                "output_schema": {
+                    "type": "object",
+                    "properties": {"pages": {"type": "array", "maxItems": 7, "items": {"type": "object"}}},
+                },
+            },
+            {"id": "prompts_frozen", "intelligence": "none", "tools": ["hash_bind"], "output_schema": {}},
+        ]
+        infer_schema_control(milestones)
+        self.assertEqual(milestones[0]["foreach"]["path"], "pages")
+        self.assertNotIn("tools", milestones[0]["foreach"])
+
+    def test_infer_gate_without_matching_ids_still_checks_this_out(self) -> None:
         milestones = [
             {
                 "id": "source_ready",
@@ -356,13 +411,17 @@ class SkillWriterControlTests(unittest.TestCase):
                 "tools": ["hash_bind"],
                 "output_schema": {
                     "type": "object",
-                    "properties": {"pages": {"type": "array", "maxItems": 7, "items": {"type": "object"}}},
+                    "properties": {"kind": {"enum": ["url", "text"]}},
                 },
             },
-            {"id": "pages_frozen", "intelligence": "completion", "tools": ["hash_bind"], "output_schema": {}},
+            {"id": "plan_frozen", "intelligence": "none", "tools": ["hash_bind"], "output_schema": {}},
         ]
         infer_schema_control(milestones)
-        self.assertNotIn("foreach", milestones[1])
+        self.assertEqual(len(milestones[0]["next"]), 2)
+        thens = {edge["then"] for edge in milestones[0]["next"]}
+        self.assertEqual(thens, {"plan_frozen"})
+        self.assertEqual(milestones[0]["else"], "BLOCKED")
+        self.assertNotIn("join", milestones[1])
 
     def test_audit_then_generate_writes_gate_files(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -478,9 +537,7 @@ class FlowchartMarkdownTests(unittest.TestCase):
                 "foreach": {
                     "path": "pages",
                     "item_schema": "schemas/page_v1.json",
-                    "tools": ["hash_bind"],
                     "max_items": 7,
-                    "collect": "pages",
                 },
             },
             {"id": "release_packaged", "intelligence": "none", "tools": ["hash_bind"]},
@@ -491,9 +548,11 @@ class FlowchartMarkdownTests(unittest.TestCase):
         self.assertIn('kind_bound -->|"kind=file"| file_ready', mermaid)
         self.assertIn("else BLOCKED", mermaid)
         self.assertIn('url_ready -->|"join"| source_ready', mermaid)
-        self.assertIn("foreach pages max=7", mermaid)
-        self.assertIn('pages_bound -->|"each pages hash_bind"| pages_bound', mermaid)
-        self.assertIn("collect pages", mermaid)
+        self.assertIn("for:pages max=7", mermaid)
+        self.assertNotIn("each pages", mermaid)
+        self.assertNotIn("collect pages", mermaid)
+        self.assertNotIn("[[", mermaid)
+        self.assertIn("pages_bound --> release_packaged", mermaid)
         self.assertNotIn("url_ready --> file_ready", mermaid)
 
     def test_audit_writes_single_flowchart_md(self) -> None:

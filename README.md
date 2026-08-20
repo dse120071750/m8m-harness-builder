@@ -48,6 +48,7 @@ M8M:   节点 = 一个里程碑（护栏）
   → 每个里面列出 FlowStep（原子；优先一支工具）
   → 开发该工具（existing / promote / generate-new）
   → 写一张 FlowStep 表 + 一张里程碑流程图
+     （if/for 挂在产出检查上，不挂在工具上）
   → scaffold flow.yaml 和 tool stub
 ```
 
@@ -83,8 +84,12 @@ FlowStep 按表的顺序走。别把这条路径当成 production lock。别跳�
 ```mermaid
 flowchart TD
     request([request]) --> source_ready
-    source_ready["source_ready<br/>asset:file"] --> plan_frozen
-    plan_frozen["plan_frozen<br/>asset:json<br/>intel:completion"] --> release_packaged
+    source_ready{source_ready<br/>asset:file}
+    blocked_source_ready{{BLOCKED}}
+    source_ready -->|"kind=url"| plan_frozen
+    source_ready -->|"kind=text"| plan_frozen
+    source_ready -->|"else BLOCKED"| blocked_source_ready
+    plan_frozen["plan_frozen<br/>asset:json<br/>for:pages max=7<br/>intel:completion"] --> release_packaged
     release_packaged["release_packaged<br/>asset:file"]
 ```
 
@@ -95,7 +100,20 @@ flowchart TD
 | `json` | 封闭对象，必填字段 |
 | `data` | 同上：typed 必填字段 |
 
-if/else 和 foreach 是里程碑上可选的 JSON Schema 闸（`next.when` / `foreach`）。同一张图会画出来。模型不批准分支。
+if/else 和 foreach 挂在 **this.out** 上，是里程碑产出检查，不是工具循环，也不是模型批准。
+
+- **if：** 产出 PASSes 之后，第一个能验证 this.out 的 `next.when` 选下一关。对不上就 BLOCK。
+- **for：** this.out 里有带 `maxItems` 的 typed 数组。这就是检查。Assemble 仍跑一次。不要按条跑工具。
+
+| From | When | Then |
+| --- | --- | --- |
+| `source_ready` | `kind=url` | `plan_frozen` |
+| `source_ready` | `kind=text` | `plan_frozen` |
+| `source_ready` | else | BLOCKED |
+
+| Milestone | Path on this.out | max_items |
+| --- | --- | ---: |
+| `plan_frozen` | `pages` | 7 |
 
 `--milestone` 写成 `crop_4x5` 只是备注：看起来像工具。不是拒绝画图。
 
@@ -105,8 +123,9 @@ if/else 和 foreach 是里程碑上可选的 JSON Schema 闸（`next.when` / `fo
 | --- | --- |
 | 首选 FlowStep 工具失败 | 像普通 agent 找路（`on_tool_fail: need_model`）。先用工具。 |
 | 里程碑产出缺失或不合格 | BLOCK。下一关不开始。 |
+| if/for 检查没过（this.out） | BLOCK。不是工具失败，不走 agent 找路。 |
 | Generate-new / stub `tool.py` | Writer PASS。稍后填。 |
-| 里程碑上的 intelligence | 可选，用来做出产出。不能跳过首选工具。不能挑选下一个里程碑。 |
+| 里程碑上的 intelligence | 可选，用来做出产出。不能跳过首选工具。不能挑选下一个里程碑。不能取消 for 检查。 |
 
 ```yaml
 - id: source_ready
@@ -138,12 +157,12 @@ python scripts/generate_harness.py --codebase <repo> --from-audit <skill>/planni
 会写出：
 
 - `planning/flowstep-audit.md`
-- `planning/m8m-flowchart.md`：mermaid（护栏）+ FlowStep 表（指引）+ 来源表
+- `planning/m8m-flowchart.md`：mermaid（护栏）+ FlowStep 表（指引）+ 来源表 + Gates/Loops（this.out）
 - `<repo>/flowsteps/flows/<flow_id>/`
 - `<repo>/flowsteps/tools/<id>/`（seed 或 stub）
 - `<repo>/.agents/skills/<name>/SKILL.md` 和 `<repo>/.claude/skills/<name>/SKILL.md`
 
-图、表、stub、每个里程碑的 asset schema 都在，factory 就 PASS。`validate_harness.py` 可选，用来把工具填实。`run_flow.py` 是护栏：工具失败走 agent，没有产出就 BLOCK。
+图、表、stub、每个里程碑的 asset schema 都在，factory 就 PASS。`validate_harness.py` 可选，用来把工具填实。`run_flow.py` 是护栏：工具失败走 agent，没有产出或 if/for 检查没过就 BLOCK。
 
 真实样本（一篇文章做成七页 infographic）：[examples/article_infographic/planning/m8m-flowchart.md](examples/article_infographic/planning/m8m-flowchart.md)
 
@@ -239,6 +258,7 @@ identify milestones
   → list FlowSteps inside each (atomic; prefer ONE tool)
   → develop that tool (existing / promote / generate-new)
   → write one FlowStep table + one milestone flowchart
+     (if/for attach to the asset check, not to tools)
   → scaffold flow.yaml and tool stubs
 ```
 
@@ -276,8 +296,12 @@ One mermaid canvas. Nodes are milestones, not crops. Each node names the require
 ```mermaid
 flowchart TD
     request([request]) --> source_ready
-    source_ready["source_ready<br/>asset:file"] --> plan_frozen
-    plan_frozen["plan_frozen<br/>asset:json<br/>intel:completion"] --> release_packaged
+    source_ready{source_ready<br/>asset:file}
+    blocked_source_ready{{BLOCKED}}
+    source_ready -->|"kind=url"| plan_frozen
+    source_ready -->|"kind=text"| plan_frozen
+    source_ready -->|"else BLOCKED"| blocked_source_ready
+    plan_frozen["plan_frozen<br/>asset:json<br/>for:pages max=7<br/>intel:completion"] --> release_packaged
     release_packaged["release_packaged<br/>asset:file"]
 ```
 
@@ -288,7 +312,20 @@ flowchart TD
 | `json` | closed object with required fields |
 | `data` | same: typed required fields |
 
-if/else and foreach are optional JSON Schema gates on a milestone (`next.when` / `foreach`). They show up on the same chart. The model does not approve the branch.
+if/else and foreach attach to **this.out**. They are the milestone check, not a tool loop, and not a model verdict.
+
+- **if:** after the asset PASSes, the first `next.when` schema that validates this.out picks the next milestone. No match → BLOCK.
+- **for:** this.out has a typed array with `maxItems`. That is the check. Assemble still runs once. Do not loop tools.
+
+| From | When | Then |
+| --- | --- | --- |
+| `source_ready` | `kind=url` | `plan_frozen` |
+| `source_ready` | `kind=text` | `plan_frozen` |
+| `source_ready` | else | BLOCKED |
+
+| Milestone | Path on this.out | max_items |
+| --- | --- | ---: |
+| `plan_frozen` | `pages` | 7 |
 
 A name like `crop_4x5` on `--milestone` is a note that it looks like a tool. It is not a refusal to draw.
 
@@ -298,8 +335,9 @@ A name like `crop_4x5` on `--milestone` is a note that it looks like a tool. It 
 | --- | --- |
 | Preferred FlowStep tool fails | Recover like a normal agent (`on_tool_fail: need_model`). Try the tool first. |
 | Milestone asset missing or invalid | BLOCK. The next milestone does not start. |
+| if/for check on this.out fails | BLOCK. This is not a tool failure. Do not recover as an agent. |
 | Generate-new / stub `tool.py` | Writer PASS. Fill it in later. |
-| Intelligence on a milestone | Optional judgment for producing the asset. Must not skip the preferred tool. Must not pick the next milestone. |
+| Intelligence on a milestone | Optional judgment for producing the asset. Must not skip the preferred tool. Must not pick the next milestone. Must not cancel the for-check. |
 
 ```yaml
 - id: source_ready
@@ -331,12 +369,12 @@ python scripts/generate_harness.py --codebase <repo> --from-audit <skill>/planni
 This writes:
 
 - `planning/flowstep-audit.md`
-- `planning/m8m-flowchart.md`: mermaid (harness), FlowStep table (guide), origin table
+- `planning/m8m-flowchart.md`: mermaid (harness), FlowStep table (guide), origin table, Gates/Loops on this.out
 - `<repo>/flowsteps/flows/<flow_id>/`
 - `<repo>/flowsteps/tools/<id>/` (seed or stub)
 - `<repo>/.agents/skills/<name>/SKILL.md` and `<repo>/.claude/skills/<name>/SKILL.md`
 
-The factory PASSes when the chart, tables, stubs, and each milestone's asset schema exist. `validate_harness.py` is optional. Use it when you fill in tools. `run_flow.py` is the harness: a failed tool goes to the agent; a missing asset BLOCKs.
+The factory PASSes when the chart, tables, stubs, and each milestone's asset schema exist. `validate_harness.py` is optional. Use it when you fill in tools. `run_flow.py` is the harness: a failed tool goes to the agent; a missing asset or a failed if/for check BLOCKs.
 
 ## Install
 

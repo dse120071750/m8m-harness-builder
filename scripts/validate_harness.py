@@ -113,28 +113,29 @@ def _validate_control(
         item_schema = skill_dir / str(fe.get("item_schema") or "")
         if not item_schema.is_file():
             errors.append(f"{step_id}: missing foreach.item_schema {fe.get('item_schema')}")
-        # path must exist as array on an input / previous output
-        prev = None
-        for reference in (step.get("inputs") or {}).values():
-            if isinstance(reference, str) and "." in reference and reference != "user.request":
-                source_id = reference.split(".", 1)[0]
-                source = next((item for item in flow["steps"] if item["id"] == source_id), None)
-                if source:
-                    path = skill_dir / source["output_schema"]
-                    if path.is_file():
-                        prev = read_json(path)
-        if prev:
-            props = prev.get("properties") or {}
+        out_path = skill_dir / step["output_schema"]
+        out = None
+        if out_path.is_file():
+            try:
+                out = read_json(out_path)
+            except FlowError as exc:
+                errors.append(str(exc))
+        if out:
+            props = out.get("properties") or {}
             root = str(fe.get("path") or "").split(".", 1)[0]
             field = props.get(root)
             if not isinstance(field, dict) or field.get("type") != "array":
-                errors.append(f"{step_id}: foreach.path {fe.get('path')} is not an array on the previous output schema")
+                errors.append(
+                    f"{step_id}: foreach.path {fe.get('path')} is not an array on this output schema"
+                )
             else:
                 schema_max = field.get("maxItems")
                 if schema_max is None:
-                    errors.append(f"{step_id}: previous output {root} must declare maxItems")
+                    errors.append(f"{step_id}: output {root} must declare maxItems")
                 elif isinstance(fe.get("max_items"), int) and fe["max_items"] > int(schema_max):
-                    errors.append(f"{step_id}: foreach.max_items {fe['max_items']} exceeds schema maxItems {schema_max}")
+                    errors.append(
+                        f"{step_id}: foreach.max_items {fe['max_items']} exceeds schema maxItems {schema_max}"
+                    )
     if step.get("join"):
         for mid in step["join"]:
             if mid not in declared:

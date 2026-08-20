@@ -79,9 +79,7 @@
             "properties": {
               "path": { "type": "string" },
               "item_schema": { "type": "string" },
-              "tools": { "type": "array", "items": { "type": "string" } },
               "max_items": { "type": "integer" },
-              "collect": { "type": "string" },
               "item_schema_object": { "type": "object" }
             }
           },
@@ -105,8 +103,7 @@
           "edges": { "type": "array" },
           "path": { "type": "string" },
           "max_items": { "type": "integer" },
-          "item_schema": { "type": "string" },
-          "tools": { "type": "array", "items": { "type": "string" } }
+          "item_schema": { "type": "string" }
         }
       }
     },

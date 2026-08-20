@@ -339,6 +339,8 @@ def generate_v3_flow(
         if spec.get("foreach"):
             fe = dict(spec["foreach"])
             item["_item_schema_object"] = fe.pop("item_schema_object", None)
+            fe.pop("tools", None)
+            fe.pop("collect", None)
             item["foreach"] = fe
         if spec.get("join"):
             item["join"] = spec["join"]
@@ -683,11 +685,7 @@ def yaml_dump_v3(flow: dict[str, Any]) -> str:
             lines.append("    foreach:")
             lines.append(f"      path: {fe['path']}")
             lines.append(f"      item_schema: {fe['item_schema']}")
-            if fe.get("tools"):
-                lines.append(f"      tools: [{', '.join(fe['tools'])}]")
             lines.append(f"      max_items: {fe['max_items']}")
-            if fe.get("collect"):
-                lines.append(f"      collect: {fe['collect']}")
         if item.get("join"):
             lines.append(f"    join: [{', '.join(item['join'])}]")
     lines.append("")

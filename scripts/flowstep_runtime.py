@@ -323,12 +323,13 @@ def _load_flow_v3(skill_dir: Path, path: Path, raw: dict[str, Any]) -> dict[str,
         if foreach is not None:
             if not isinstance(foreach, dict):
                 raise FlowError(f"{step_id}: foreach must be a mapping")
+            foreach = dict(foreach)
             foreach.setdefault("path", "items")
             foreach.setdefault("item_schema", f"schemas/{step_id}_item_v1.json")
-            foreach.setdefault("tools", list(tools))
             foreach.setdefault("max_items", 8)
-            if not isinstance(foreach.get("tools"), list):
-                foreach["tools"] = []
+            foreach.pop("tools", None)
+            foreach.pop("collect", None)
+            item["foreach"] = foreach
         join = item.get("join")
         if join is not None and (not isinstance(join, list) or not join):
             raise FlowError(f"{step_id}: join must be a non-empty list of milestone ids")

@@ -9,7 +9,7 @@ description: >
 license: MIT
 metadata:
   author: dse120071750
-  version: "1.4"
+  version: "1.5"
 ---
 
 # M8M harness builder
@@ -22,6 +22,7 @@ identify milestones
   → list FlowSteps inside each (atomic; prefer ONE tool)
   → develop that tool (existing / promote / generate-new stub)
   → write one FlowStep table + one milestone flowchart
+     (if/for attach to the asset check, not to tools)
   → scaffold flow YAML and tool stubs
 ```
 
@@ -57,7 +58,7 @@ Deliverables (this is the product):
 | File | What |
 | --- | --- |
 | `planning/flowstep-audit.md` | Proposed milestones, FlowSteps, tools |
-| `planning/m8m-flowchart.md` | Milestone chart (harness) + FlowStep table (guide) |
+| `planning/m8m-flowchart.md` | Milestone chart (harness) + FlowStep table (guide) + Gates/Loops on this.out |
 | `<repo>/flowsteps/flows/<id>/flow.yaml` | Scaffolded chain |
 | `<repo>/flowsteps/tools/<id>/` | Seeded tools, or stubs marked generate-new |
 | `<repo>/.agents/skills/<name>/SKILL.md` and `.claude/skills/<name>/SKILL.md` | Pointer skill |
@@ -70,8 +71,23 @@ Inside a milestone, follow the FlowStep table as a **guide**: try the
 preferred tool first. If it fails, find a way like a normal agent.
 The flowchart is only the milestone canvas.
 
+## Milestone check (if / for)
+
+if/else and foreach attach to **this.out** after the asset schema PASSes.
+They are not FlowSteps, not tools, not intelligence.
+
+- **if:** `next.when` / `else`. First gate schema that validates this.out
+  picks the next milestone. No match → BLOCKED.
+- **for:** this.out has a typed array (`maxItems` + item schema). That is
+  the check. Assemble still runs once. Do not loop tools.
+
+The chart's Gates and Loops tables name schema paths, not tools. An enum
+on this.out is an if even when every branch then goes to the same next
+milestone. An array with `maxItems` on this.out is a for even when the
+milestone uses intelligence.
+
 `validate_harness.py` is optional. `run_flow.py` is the harness:
-tool fail → agent recovery; no asset → BLOCK.
+tool fail → agent recovery; no asset → BLOCK; failed if/for check → BLOCK.
 
 ## Response
 

@@ -1,4 +1,4 @@
-"""Schema-only if/else and foreach. No expressions. No intelligence."""
+"""Schema-only if/else and foreach on the milestone asset. No tool loops."""
 
 from __future__ import annotations
 
@@ -8,7 +8,6 @@ from typing import Any
 from jsonschema import Draft202012Validator, RefResolver
 
 from flowstep_runtime import FlowError, read_json, sha256_file
-from flowstep_tools import infer_codebase, run_library_tool
 
 
 CONTROL_PREFIXES = ("if_", "loop_", "switch_", "when_", "else_")
@@ -94,11 +93,12 @@ def resolve_next(
     }
 
 
-def run_foreach(
+def check_foreach(
     skill_dir: Path,
     step: dict[str, Any],
-    input_data: dict[str, Any],
-) -> dict[str, Any]:
+    data: dict[str, Any],
+) -> None:
+    """Validate this.out[path] as a typed array. Does not run tools."""
     spec = step.get("foreach") or {}
     path = str(spec.get("path") or "")
     if not path:
@@ -110,31 +110,11 @@ def run_foreach(
     if not item_schema_rel:
         raise FlowError(f"{step['id']}: foreach.item_schema is required")
     item_schema_path = skill_dir / str(item_schema_rel)
-    tools = spec.get("tools") or []
-    if not isinstance(tools, list):
-        tools = []
-    collect = str(spec.get("collect") or path)
-    source = input_data
-    if isinstance(input_data, dict) and len(input_data) == 1:
-        only = next(iter(input_data.values()))
-        if isinstance(only, dict) and path.split(".")[0] in only:
-            source = only
-    items = lookup_path(source, path)
+    items = lookup_path(data, path)
     if not isinstance(items, list):
         raise FlowError(f"{step['id']}: foreach.{path} is not an array")
     if len(items) > max_items:
         raise FlowError(f"{step['id']}: foreach {path} length {len(items)} exceeds max_items {max_items}")
-    codebase = infer_codebase(skill_dir)
-    if tools and codebase is None:
-        raise FlowError(f"{step['id']}: foreach requires a project toolbox at flowsteps/tools")
-    collected: list[Any] = []
     for index, item in enumerate(items):
         if not schema_accepts(item, item_schema_path):
             raise FlowError(f"{step['id']}: foreach item {index} failed {item_schema_rel}")
-        current = item
-        for tool_id in tools:
-            if not isinstance(current, dict):
-                raise FlowError(f"{step['id']}: foreach tool {tool_id} requires an object item")
-            current = run_library_tool(codebase, str(tool_id), current)
-        collected.append(current)
-    return {collect: collected, "item_count": len(collected)}

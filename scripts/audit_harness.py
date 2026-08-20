@@ -557,8 +557,6 @@ def audit_harness(root: Path) -> dict[str, Any]:
                 row["issues"].append("name looks like control (if/loop); still drawn as a checkpoint")
             if item.get("next") and not item.get("else"):
                 row["issues"].append("next without else; writer defaults BLOCKED")
-            if item.get("foreach") and intel not in {None, "none"}:
-                row["issues"].append("foreach on an intelligence milestone; still drawn")
         if not item.get("output_contract"):
             row["issues"].append(f"no output_contract; writer will invent {step_id or 'step'}_v1")
         step_reports.append(row)
@@ -722,11 +720,12 @@ def _schema_properties(schema: dict[str, Any] | None) -> dict[str, Any]:
 
 
 def infer_schema_control(milestones: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Emit next/foreach from JSON Schema only. Never from a model verdict."""
+    """Emit next/foreach from this.out JSON Schema only. Never from a model verdict."""
     ids = [str(item["id"]) for item in milestones]
     by_id = {item["id"]: item for item in milestones}
     for index, item in enumerate(milestones):
         later = ids[index + 1 :]
+        next_linear = later[0] if later else None
         if not item.get("next"):
             props = _schema_properties(item.get("output_schema"))
             for field, prop in props.items():
@@ -735,7 +734,7 @@ def infer_schema_control(milestones: list[dict[str, Any]]) -> list[dict[str, Any
                     continue
                 edges = []
                 for value in values:
-                    then = _match_branch(later, value)
+                    then = _match_branch(later, value) or next_linear
                     if not then:
                         edges = []
                         break
@@ -754,40 +753,44 @@ def infer_schema_control(milestones: list[dict[str, Any]]) -> list[dict[str, Any
                             },
                         }
                     )
-                if len(edges) >= 2 and len({edge["then"] for edge in edges}) == len(edges):
+                if len(edges) >= 2:
                     item["next"] = edges
                     item["else"] = "BLOCKED"
                     branch_ids = [edge["then"] for edge in edges]
-                    last_branch = max(ids.index(mid) for mid in branch_ids)
-                    for mid in ids[last_branch + 1 :]:
-                        if mid not in branch_ids and not by_id[mid].get("join"):
-                            by_id[mid]["join"] = branch_ids
-                            break
+                    unique = list(dict.fromkeys(branch_ids))
+                    if len(unique) == len(edges):
+                        last_branch = max(ids.index(mid) for mid in unique)
+                        for mid in ids[last_branch + 1 :]:
+                            if mid not in unique and not by_id[mid].get("join"):
+                                by_id[mid]["join"] = unique
+                                break
                     break
-        if item.get("foreach") or item.get("intelligence") not in {None, "none"}:
+        if item.get("foreach"):
             continue
-        if index == 0:
-            continue
-        prev_props = _schema_properties(milestones[index - 1].get("output_schema"))
+        props = _schema_properties(item.get("output_schema"))
         tokens = _tokens(item["id"])
-        for path, prop in prev_props.items():
+        chosen: dict[str, Any] | None = None
+        fallback: dict[str, Any] | None = None
+        for path, prop in props.items():
             if not isinstance(prop, dict) or prop.get("type") != "array":
                 continue
             if prop.get("maxItems") is None:
                 continue
-            if path not in tokens and path.rstrip("s") not in tokens:
-                continue
             items_schema = prop.get("items") if isinstance(prop.get("items"), dict) else {"type": "object"}
             stem = path.rstrip("s") or path
-            item["foreach"] = {
+            candidate = {
                 "path": path,
                 "item_schema": f"schemas/{stem}_item_v1.json",
-                "tools": list(item.get("tools") or ["hash_bind"]),
                 "max_items": int(prop["maxItems"]),
-                "collect": path,
                 "item_schema_object": items_schema,
             }
-            break
+            if path in tokens or path.rstrip("s") in tokens:
+                chosen = candidate
+                break
+            if fallback is None:
+                fallback = candidate
+        if chosen or fallback:
+            item["foreach"] = chosen or fallback
     return milestones
 
 
@@ -817,7 +820,6 @@ def control_table(milestones: list[dict[str, Any]]) -> list[dict[str, Any]]:
                     "path": fe.get("path"),
                     "max_items": fe.get("max_items"),
                     "item_schema": fe.get("item_schema"),
-                    "tools": list(fe.get("tools") or []),
                 }
             )
     return rows
@@ -1387,7 +1389,7 @@ def render_audit_markdown(report: dict[str, Any]) -> str:
             "",
             "## Schema control",
             "",
-            "If/else and loop are JSON Schema predicates (`schema_validate`), never semantic approval.",
+            "If/else and foreach are JSON Schema checks on this.out, never tools and never semantic approval.",
             "",
         ]
     )
