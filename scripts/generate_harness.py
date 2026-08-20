@@ -271,6 +271,8 @@ def generate_v3_flow(
             listed_tools.add(str(spec["worker"]))
         if spec.get("branch"):
             listed_tools.add(str((spec.get("branch") or {}).get("worker") or spec.get("worker") or "branch_receipt"))
+        if spec.get("cycle"):
+            listed_tools.add(str((spec.get("cycle") or {}).get("worker") or spec.get("worker") or "cycle_receipt"))
         for raw in spec.get("flowsteps") or []:
             if isinstance(raw, dict) and raw.get("tool"):
                 listed_tools.add(str(raw["tool"]))
@@ -361,6 +363,17 @@ def generate_v3_flow(
                 item["tools"].append(item["worker"])
         if spec.get("on_path"):
             item["on_path"] = spec["on_path"]
+        if spec.get("cycle"):
+            cy = dict(spec["cycle"]) if isinstance(spec["cycle"], dict) else {}
+            cy.setdefault("worker", spec.get("worker") or "cycle_receipt")
+            cy.setdefault("receipt_schema", spec.get("receipt_schema") or f"schemas/{mid}_cycle_v1.json")
+            item["cycle"] = cy
+            item["worker"] = cy["worker"]
+            item["receipt_schema"] = cy["receipt_schema"]
+            if item["worker"] not in item["tools"]:
+                item["tools"].append(item["worker"])
+        if spec.get("on_cycle"):
+            item["on_cycle"] = spec["on_cycle"]
         items.append(item)
         previous = item
     flow = {
@@ -477,6 +490,24 @@ def generate_v3_flow(
                     "ok": {"type": "boolean"},
                     "branch": {"type": "string", "enum": paths or ["direct"]},
                     "skipped": {"type": "array", "items": {"type": "string"}},
+                    "reason": {"type": "string"},
+                },
+            }
+            if _write_json(receipt_path, receipt_obj, overwrite=overwrite):
+                created.append(str(receipt_path))
+        if item.get("cycle"):
+            spec = item["cycle"] if isinstance(item["cycle"], dict) else {}
+            receipt_path = harness / str(item.get("receipt_schema") or spec.get("receipt_schema") or f"schemas/{mid}_cycle_v1.json")
+            receipt_obj = {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "$id": f"{mid}.cycle.schema.json",
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["ok", "cycle"],
+                "properties": {
+                    "ok": {"type": "boolean"},
+                    "cycle": {"enum": ["pass", "fail"]},
+                    "row": {"type": "string"},
                     "reason": {"type": "string"},
                 },
             }
@@ -644,6 +675,8 @@ def generate_from_audit(
             "foreach": item.get("foreach"),
             "branch": item.get("branch"),
             "on_path": item.get("on_path"),
+            "cycle": item.get("cycle"),
+            "on_cycle": item.get("on_cycle"),
             "on_tool_fail": item.get("on_tool_fail"),
             "max_model_attempts": item.get("max_model_attempts"),
             "_gate_schemas": {
@@ -770,6 +803,20 @@ def yaml_dump_v3(flow: dict[str, Any]) -> str:
                             lines.append(f"          then: {path.get('then')}")
                     else:
                         lines.append(f"        - {path}")
+        if item.get("on_cycle"):
+            lines.append(f"    on_cycle: {item['on_cycle']}")
+        if item.get("cycle") and isinstance(item["cycle"], dict):
+            cy = item["cycle"]
+            lines.append("    cycle:")
+            for key in ("id", "worker", "ledger", "start", "join", "receipt_schema", "pass"):
+                if cy.get(key):
+                    value = cy[key]
+                    if key == "pass":
+                        lines.append(f"      pass: {json.dumps(str(value), ensure_ascii=False)}")
+                    else:
+                        lines.append(f"      {key}: {value}")
+            if cy.get("max_rounds"):
+                lines.append(f"      max_rounds: {cy.get('max_rounds')}")
     lines.append("")
     return "\n".join(lines)
 

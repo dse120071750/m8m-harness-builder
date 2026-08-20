@@ -49,6 +49,8 @@ def _nodes(items: list[dict[str, Any]], statuses: dict[str, str] | None = None) 
                 "status": str(statuses.get(mid) or item.get("status") or ""),
                 "branch": item.get("branch") if isinstance(item.get("branch"), dict) else None,
                 "on_path": item.get("on_path"),
+                "cycle": item.get("cycle") if isinstance(item.get("cycle"), dict) else None,
+                "on_cycle": item.get("on_cycle"),
             }
         )
     return nodes
@@ -185,7 +187,7 @@ def render_flowchart(
         "One chart. Milestone to milestone. Each node is a required asset",
         "(file, image, json proof, or data). Missing it is BLOCKED.",
         "FlowSteps inside a node are a guide (one preferred tool each), not a compulsory path.",
-        "for = ledger milestone until remaining=0. judge (if) = retry until worker ok.",
+        "cycle = wrap over a frozen ledger (pass preserves, fail purges). judge = retry until worker ok.",
         "The JPEG is the audit copy: portable, human-labeled, native to review.",
         "It is rewritten on generate and on every step edit.",
         "",
@@ -233,6 +235,10 @@ def render_flowchart(
             control = "branch " + " / ".join(paths)
         elif item.get("on_path"):
             control = f"on_path `{item['on_path']}`"
+        elif item.get("cycle"):
+            control = "cycle pass|fail → ledger"
+        elif item.get("on_cycle"):
+            control = f"on_cycle `{item['on_cycle']}`"
         else:
             control = "linear"
         asset = item.get("asset_kind") or "required"
@@ -265,22 +271,26 @@ def render_flowchart(
             )
     if not guide_rows:
         lines.append("| (none) | | | | |")
-    lines.extend(["", "## For (ledger)", ""])
-    fors = [item for item in nodes if item.get("loop") == "for"]
-    if not fors:
-        lines.append("None. No ledger-walking milestone.")
+    lines.extend(["", "## Cycle", ""])
+    cycles = [item for item in nodes if item.get("cycle")]
+    if not cycles:
+        lines.append("None. No cycle wrap. Freeze a ledger first, then wrap milestones.")
     else:
         lines.extend(
             [
-                "| Milestone | Ledger path | Item schema | max_items | Worker |",
-                "| --- | --- | --- | ---: | --- |",
+                "Freeze a ledger, then wrap. `cycle_receipt` writes pass|fail and updates the ledger.",
+                "Finished rounds are preserved. Unfinished residue is purged. The ledger is resumable.",
+                "",
+                "| Last milestone | Ledger | Start | Join | Worker | Pass means |",
+                "| --- | --- | --- | --- | --- | --- |",
             ]
         )
-        for item in fors:
-            fe = item.get("ledger") or {}
+        for item in cycles:
+            cy = item.get("cycle") or {}
             lines.append(
-                f"| `{item['id']}` | `{fe.get('path')}` | `{fe.get('item_schema')}` | "
-                f"{fe.get('max_items')} | `{item.get('worker') or 'ledger_receipt'}` |"
+                f"| `{item['id']}` | `{cy.get('ledger') or '—'}` | `{cy.get('start') or item['id']}` | "
+                f"`{cy.get('join') or '—'}` | `{cy.get('worker') or 'cycle_receipt'}` | "
+                f"{cy.get('pass') or 'semantic pass on this ledger row'} |"
             )
     lines.extend(["", "## Judge (until ok)", ""])
     judges = [item for item in nodes if item.get("loop") == "judge"]

@@ -756,11 +756,20 @@ def infer_schema_control(milestones: list[dict[str, Any]]) -> list[dict[str, Any
                 if fallback is None:
                     fallback = candidate
             picked = chosen or fallback
-            if picked:
-                item["loop"] = "for"
-                item["ledger"] = picked
-                item["worker"] = item.get("worker") or "ledger_receipt"
-                item["receipt_schema"] = item.get("receipt_schema") or f"schemas/{item['id']}_receipt_v1.json"
+            if picked and index > 0:
+                prev = milestones[index - 1]
+                item["on_cycle"] = str(picked.get("path") or item["id"])
+                item["cycle"] = {
+                    "id": item["on_cycle"],
+                    "worker": "cycle_receipt",
+                    "ledger": prev["id"],
+                    "start": item["id"],
+                    "pass": "current ledger row produced its asset; cycle_receipt updates the ledger",
+                    "receipt_schema": f"schemas/{item['id']}_cycle_v1.json",
+                    "max_rounds": int(picked.get("max_items") or 8),
+                }
+                item["worker"] = item.get("worker") or "cycle_receipt"
+                item["receipt_schema"] = item["cycle"]["receipt_schema"]
                 continue
         intel = str(item.get("intelligence") or "none")
         name = str(item.get("id") or "").lower()
@@ -895,6 +904,20 @@ def control_table(milestones: list[dict[str, Any]]) -> list[dict[str, Any]]:
                     "default": br.get("default"),
                     "paths": paths,
                     "join": br.get("join"),
+                }
+            )
+        elif item.get("cycle"):
+            cy = item["cycle"]
+            rows.append(
+                {
+                    "milestone": item["id"],
+                    "kind": "cycle",
+                    "criterion": "cycle_receipt",
+                    "worker": cy.get("worker") or "cycle_receipt",
+                    "start": cy.get("start"),
+                    "join": cy.get("join"),
+                    "ledger": cy.get("ledger"),
+                    "pass": cy.get("pass"),
                 }
             )
     return rows

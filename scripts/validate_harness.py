@@ -124,6 +124,37 @@ def _validate_control(
                     known_paths.add(str(item["id"]))
         if known_paths and on_path not in known_paths:
             errors.append(f"{step_id}: on_path {on_path} is not a declared branch path")
+    cycle = step.get("cycle") if isinstance(step.get("cycle"), dict) else None
+    if cycle:
+        if not (cycle.get("worker") or step.get("worker")):
+            errors.append(f"{step_id}: cycle requires a repo worker tool")
+        start = str(cycle.get("start") or "")
+        if start and start not in declared:
+            errors.append(f"{step_id}: cycle.start {start} is not a milestone")
+        join = str(cycle.get("join") or "")
+        if join and join not in declared:
+            errors.append(f"{step_id}: cycle.join {join} is not a milestone")
+        ledger_id = str(cycle.get("ledger") or "")
+        if ledger_id and ledger_id not in declared:
+            errors.append(f"{step_id}: cycle.ledger {ledger_id} is not a milestone")
+        receipt = skill_dir / str(cycle.get("receipt_schema") or step.get("receipt_schema") or "")
+        if receipt.is_file():
+            try:
+                schema = read_json(receipt)
+            except FlowError as exc:
+                errors.append(str(exc))
+            else:
+                names = schema_required_names(schema)
+                props = schema.get("properties") or {}
+                if "ok" not in names and "ok" not in props:
+                    errors.append(f"{step_id}: cycle receipt schema must require ok")
+                if "cycle" not in names and "cycle" not in props:
+                    errors.append(f"{step_id}: cycle receipt schema must require cycle")
+        on_cycle = str(step.get("on_cycle") or cycle.get("id") or "")
+        if on_cycle:
+            starts = [item["id"] for item in flow["steps"] if str(item.get("on_cycle") or "") == on_cycle]
+            if start and start not in starts and start != step_id:
+                errors.append(f"{step_id}: cycle.start {start} is not on_cycle {on_cycle}")
     if loop in {"for", "judge"} and not step.get("worker"):
         errors.append(f"{step_id}: loop={loop} requires a repo worker tool")
     if loop == "for":

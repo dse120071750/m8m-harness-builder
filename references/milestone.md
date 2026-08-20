@@ -24,11 +24,11 @@ M8M:     node = one milestone (harness)
 ```
 
 The driver advances milestone → milestone. Crop/hash stay FlowSteps
-inside a milestone. A **for loop** and a **judge loop** **are**
-milestones. **Branch** is after a milestone: AI drafts the path, a
-worker writes `{ok, branch}`, the other path is skipped. An internal
-repo worker writes the receipt. Intelligence may draft; it may not
-set `ok` or `branch`. Do not call branch IF.
+inside a milestone. **Judge** is a milestone (retry until ok).
+**Branch** is after a milestone. **Cycle** wraps milestones over a
+frozen ledger: pass preserves the round and updates the ledger; fail
+purges unfinished residue. Intelligence may draft; it may not set
+`ok`, `branch`, or `cycle`. Do not call these FOR or IF.
 
 Intelligence is optional *on* a milestone (`NEED_MODEL`). It is not a
 third canvas node.
@@ -106,25 +106,23 @@ A **tool** is the Python package. A **FlowStep** is the atomic goal that
 `flowsteps/tools/<id>/`, not drawing another milestone. See
 `references/tool-vs-intelligence.md`.
 
-## For (ledger), judge, and branch
+## Cycle, judge, and branch
 
-For and judge are canvas milestones. Branch is **after** a checkpoint.
-No exclusive `next.when`. Skip is not BLOCK.
+Judge is a canvas milestone. Branch is **after** a checkpoint. Cycle
+wraps a stretch of checkpoints over a **frozen ledger**. No exclusive
+`next.when`. Skip is not BLOCK. `remaining == 0` is not the cycle gate.
 
-- **for:** previous.out is a ledger (array + `maxItems` + item schema).
-  This milestone walks remaining items and produces each asset until
-  `remaining == 0`. One canvas box, not one node per item.
+- **cycle:** first freeze a ledger (typed rows, resumable
+  `cycles/<id>/ledger.json`). Wrap milestones. After the last wrap
+  asset PASSes, AI drafts pass|fail. `cycle_receipt` updates the
+  ledger. Pass → preserve `items/NNN`. Fail → purge live `out/`
+  residue; the row stays unfinished so the run can resume.
 - **judge:** retry until the worker receipt is `ok: true`. Image
   generation and spatial alignment always use this.
 - **branch:** after this milestone’s asset PASSes, AI drafts which
-  generation path to take. The worker writes `{ok, branch}`. Milestones
-  with `on_path` not equal to that id are `skipped: true`. Join has no
-  `on_path`. Example: intake_ready → `direct` (default, case_type is
-  not source_case) or `floorplan_source_case` (source record + floor
-  plan, freeze the source title).
+  generation path to take. The worker writes `{ok, branch}`.
 - **worker:** required Python at `flowsteps/tools/<id>/`. Writes a closed
-  receipt. Missing receipt or `ok: false` → BLOCK. `ok: true` still
-  needs the milestone asset. The model must not set `ok` or `branch`.
+  receipt. The model must not set `ok`, `branch`, or `cycle`.
 
 ```yaml
 - id: images_bound

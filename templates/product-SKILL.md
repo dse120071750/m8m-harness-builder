@@ -11,7 +11,9 @@ BLOCKED. FlowSteps inside are a guide: prefer one tool, recover like a
 normal agent if it fails. for is a ledger milestone; judge (if) retries
 until a repo worker receipt is `ok: true`. Branch is after a
 milestone: AI drafts the path, `branch_receipt` writes `{ok, branch}`,
-the other path is skipped.
+the other path is skipped. Cycle wraps milestones over a frozen
+ledger: `cycle_receipt` writes pass|fail and updates the ledger.
+Finished rounds are preserved; unfinished residue is purged.
 
 Put generated images in `address.write_to` on the milestone input.
 Do not invent a folder. Do not leave files in Downloads or `/tmp`.

@@ -75,7 +75,7 @@ class ControlNameTests(unittest.TestCase):
 class WriterSkillTests(unittest.TestCase):
     def test_skill_md_teaches_if_for_on_this_out(self) -> None:
         text = (Path(__file__).resolve().parents[1] / "SKILL.md").read_text(encoding="utf-8")
-        self.assertIn("loop: for", text)
+        self.assertIn("cycle:", text)
         self.assertIn("loop: judge", text)
         self.assertIn("branch:", text)
         self.assertIn("on_path:", text)
@@ -619,7 +619,7 @@ class FlowchartMarkdownTests(unittest.TestCase):
             self.assertIn("```text", text)
             self.assertIn("flowchart TD", text)
             self.assertNotIn("```mermaid", text)
-            self.assertIn("## For (ledger)", text)
+            self.assertIn("## Cycle", text)
             self.assertIn("## Judge (until ok)", text)
             self.assertIn("## Toolbox plan", text)
             audit_md = (root / "planning" / "flowstep-audit.md").read_text(encoding="utf-8")

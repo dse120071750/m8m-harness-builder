@@ -48,7 +48,7 @@ M8M:   节点 = 一个里程碑（护栏）
   → 每个里面列出 FlowStep（原子；优先一支工具）
   → 开发该工具（existing / promote / generate-new）
   → 写一张 FlowStep 表 + 一张里程碑流程图
-     （markdown + 人话 JPEG；for / judge / branch）
+     （markdown + 人话 JPEG；cycle / judge / branch）
   → scaffold flow.yaml 和 tool stub
 ```
 
@@ -102,19 +102,18 @@ request
 | `plan_frozen` | `json` | — | — | `compact_editorial_config` |
 | `release_packaged` | `file` | — | `materialize_package` ← `scripts/package.py` | — |
 
-## for / judge / branch
+## cycle / judge / branch
 
-有的关卡要走完一份 ledger，有的关卡要重复做到合格，有的关卡之后要选一条生成路径。
-
-- **for：** 上一关交出 ledger（typed 数组 + `maxItems`）。这一关按条产出，直到 `remaining=0`。
+- **cycle：** 先冻一份 ledger（关卡 asset）。再包一圈里程碑。最后一关 asset PASS 后，AI 起草这一轮 pass|fail。`cycle_receipt` 写收据并改 ledger。pass 保留 `items/NNN`。fail 清掉这一轮 residue，行仍是 unfinished，可 resume。不要叫 FOR。
 - **judge：** 做到 worker 收据 `{ok: true}` 为止。出图、空间对齐永远走这一关。
-- **branch：** 这一关 asset PASS 之后，AI 起草走哪条路，工具写出 `{ok, branch}`。另一条路上的里程碑 `skipped: true`。Skip 不是 BLOCK。不要叫 IF：IF 太死。例：intake 之后 `direct`（默认，case_type 不是 source_case）或 `floorplan_source_case`（要 source record + 平面图，冻标题）。
+- **branch：** 这一关 asset PASS 之后，AI 起草走哪条路，工具写出 `{ok, branch}`。Skip 不是 BLOCK。不要叫 IF。
 
 内部 worker 是 repo 工具，写出 `{ok: true|false}`。模型不能填 `ok`。收据 ok 仍不能免掉 asset。
 
 | Milestone | 这一关怎么走完 | Worker |
 | --- | --- | --- |
-| `images_bound` | for：ledger `items` max=32 | `ledger_receipt` |
+| `pages_ledger_frozen` | freeze ledger | — |
+| `page_rendered` | cycle pass|fail updates ledger | `cycle_receipt` |
 | `card_aligned` | judge until ok | `alignment_judge` |
 | `intake_ready` | branch after PASS | `branch_receipt` |
 
@@ -264,7 +263,7 @@ identify milestones
   → list FlowSteps inside each (atomic; prefer ONE tool)
   → develop that tool (existing / promote / generate-new)
   → write one FlowStep table + one milestone flowchart
-     (markdown + humanized JPEG; for / judge / branch)
+     (markdown + humanized JPEG; cycle / judge / branch)
   → scaffold flow.yaml and tool stubs
 ```
 
@@ -320,19 +319,18 @@ The origin table says where the Python comes from: existing toolbox, promote a s
 
 A real run on a seven-page article infographic is in [examples/article_infographic/planning/m8m-flowchart.md](examples/article_infographic/planning/m8m-flowchart.md).
 
-## for / judge / branch
+## cycle / judge / branch
 
-Some checkpoints walk a ledger. Some retry until the work is good. Some pick a generation path after the checkpoint.
-
-- **for:** the previous asset is a ledger (typed array + `maxItems`). This milestone produces each item until `remaining=0`.
+- **cycle:** freeze a ledger first (a milestone asset). Wrap milestones around unfinished rows. After the last wrap asset PASSes, AI drafts pass|fail. `cycle_receipt` writes the receipt and updates the ledger. Pass preserves `items/NNN`. Fail purges live residue; the row stays unfinished so the run can resume. Do not call this FOR.
 - **judge:** keep going until the worker receipt is `{ok: true}`. Image generation and spatial alignment always use this.
-- **branch:** after this milestone’s asset PASSes, AI drafts which path to take. The worker writes `{ok, branch}`. The other path’s milestones are `skipped: true`. Skip is not BLOCK. Do not call this IF. Example: after intake, `direct` (default, `case_type` is not `source_case`) or `floorplan_source_case` (source record + floor plan, freeze the source title).
+- **branch:** after this milestone’s asset PASSes, AI drafts which path to take. The worker writes `{ok, branch}`. Skip is not BLOCK. Do not call this IF.
 
 The internal worker is a repo tool. It writes `{ok: true|false}`. The model must not set `ok`. An ok receipt still cannot waive a missing asset.
 
 | Milestone | How this checkpoint finishes | Worker |
 | --- | --- | --- |
-| `images_bound` | for: ledger `items` max=32 | `ledger_receipt` |
+| `pages_ledger_frozen` | freeze ledger | — |
+| `page_rendered` | cycle pass|fail updates ledger | `cycle_receipt` |
 | `card_aligned` | judge until ok | `alignment_judge` |
 | `intake_ready` | branch after PASS | `branch_receipt` |
 

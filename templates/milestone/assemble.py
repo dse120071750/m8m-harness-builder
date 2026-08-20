@@ -146,6 +146,10 @@ def run(input_data: dict[str, Any], draft: dict[str, Any] | None = None, **kwarg
                 receipt_input = dict(payload)
                 if isinstance(draft, dict):
                     receipt_input["draft"] = draft
+            elif WORKER == "cycle_receipt":
+                receipt_input = dict(payload)
+                if isinstance(draft, dict):
+                    receipt_input["draft"] = draft
             receipt = tools.run_library_tool(codebase, WORKER, receipt_input)
             if isinstance(receipt, dict):
                 payload["receipt"] = receipt

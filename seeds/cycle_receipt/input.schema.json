@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "recommended_cycle": { "enum": ["pass", "fail"] },
+    "cycle": { "enum": ["pass", "fail"] },
+    "row": { "type": "string" },
+    "ledger_row": { "type": "string" },
+    "reason": { "type": "string" },
+    "draft": { "type": "object" }
+  }
+}

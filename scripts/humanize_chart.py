@@ -76,6 +76,9 @@ def humanize_milestone(node: dict[str, Any]) -> dict[str, str]:
         extra = f" Walks ledger `{ledger.get('path')}` until remaining is 0."
     elif loop == "judge":
         extra = " Retry until the worker receipt is ok."
+    cycle = node.get("cycle") if isinstance(node.get("cycle"), dict) else None
+    if cycle:
+        extra = (extra + " Then cycle: pass preserves the round and updates the ledger; fail purges residue.").strip()
     branch = node.get("branch") if isinstance(node.get("branch"), dict) else None
     if branch:
         paths = []

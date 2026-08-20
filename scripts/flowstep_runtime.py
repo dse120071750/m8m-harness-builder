@@ -259,6 +259,30 @@ def _require(mapping: dict[str, Any], keys: set[str], label: str) -> None:
         raise FlowError(f"{label} missing keys: {missing}")
 
 
+def _normalize_cycle(raw: Any, *, step_id: str) -> dict[str, Any] | None:
+    if not isinstance(raw, dict) or not raw:
+        return None
+    start = str(raw.get("start") or step_id).strip()
+    if start and not STEP_ID_RE.match(start):
+        raise FlowError(f"{step_id}: invalid cycle.start: {start}")
+    join = str(raw.get("join") or "").strip() or None
+    worker = str(raw.get("worker") or "cycle_receipt").strip()
+    max_rounds = raw.get("max_rounds") if raw.get("max_rounds") is not None else raw.get("max_attempts") or 8
+    if not isinstance(max_rounds, int) or max_rounds < 1:
+        raise FlowError(f"{step_id}: cycle.max_rounds must be a positive integer")
+    cid = str(raw.get("id") or raw.get("name") or "").strip()
+    return {
+        "id": cid or start or step_id,
+        "worker": worker,
+        "start": start,
+        "join": join,
+        "ledger": str(raw.get("ledger") or "").strip() or None,
+        "pass": str(raw.get("pass") or "").strip() or None,
+        "max_rounds": max_rounds,
+        "receipt_schema": str(raw.get("receipt_schema") or f"schemas/{step_id}_cycle_v1.json"),
+    }
+
+
 def _normalize_branch(raw: Any, *, step_id: str) -> dict[str, Any] | None:
     if not isinstance(raw, dict) or not raw:
         return None
@@ -354,6 +378,8 @@ def _load_flow_v3(skill_dir: Path, path: Path, raw: dict[str, Any]) -> dict[str,
             loop = "judge"
         if loop == "branch":
             raise FlowError(f"{step_id}: branch is after the milestone, not loop=branch")
+        if loop == "cycle":
+            raise FlowError(f"{step_id}: cycle wraps milestones, not loop=cycle")
         if loop not in {"none", "for", "judge"}:
             raise FlowError(f"{step_id}.loop must be none|for|judge")
         ledger = item.get("ledger") if isinstance(item.get("ledger"), dict) else None
@@ -378,10 +404,28 @@ def _load_flow_v3(skill_dir: Path, path: Path, raw: dict[str, Any]) -> dict[str,
         worker = str(item.get("worker") or "").strip()
         branch = _normalize_branch(item.get("branch"), step_id=step_id)
         on_path = str(item.get("on_path") or "").strip()
+        on_cycle = str(item.get("on_cycle") or "").strip()
+        cycle = _normalize_cycle(item.get("cycle"), step_id=step_id)
+        if loop == "for" and cycle is None:
+            cycle = {
+                "worker": worker or "cycle_receipt",
+                "start": step_id,
+                "join": None,
+                "max_rounds": int(item.get("max_attempts") or max_model_attempts or 8),
+                "ledger": previous["id"] if previous else None,
+                "pass": "legacy loop:for; rewrite as cycle over a frozen ledger",
+                "receipt_schema": str(item.get("receipt_schema") or f"schemas/{step_id}_cycle_v1.json"),
+                "id": on_cycle or step_id,
+            }
+            on_cycle = on_cycle or step_id
+            loop = "none"
+            ledger = None
         if loop in {"for", "judge"} and not worker:
             worker = "ledger_receipt" if loop == "for" else "ok_receipt"
         if branch and not worker:
             worker = str(branch.get("worker") or "branch_receipt")
+        if cycle and not worker:
+            worker = str(cycle.get("worker") or "cycle_receipt")
         if worker and worker not in tools:
             tools.append(worker)
             flowsteps.append({"id": worker, "tool": worker})
@@ -392,6 +436,10 @@ def _load_flow_v3(skill_dir: Path, path: Path, raw: dict[str, Any]) -> dict[str,
             receipt_schema = receipt_schema or str(branch.get("receipt_schema") or f"schemas/{step_id}_branch_v1.json")
             branch["receipt_schema"] = receipt_schema
             branch["worker"] = worker or "branch_receipt"
+        if cycle:
+            receipt_schema = receipt_schema or str(cycle.get("receipt_schema") or f"schemas/{step_id}_cycle_v1.json")
+            cycle["receipt_schema"] = receipt_schema
+            cycle["worker"] = worker or "cycle_receipt"
         max_attempts = item.get("max_attempts")
         if max_attempts is None:
             max_attempts = max_model_attempts
@@ -426,6 +474,8 @@ def _load_flow_v3(skill_dir: Path, path: Path, raw: dict[str, Any]) -> dict[str,
             "foreach": foreach,
             "branch": branch,
             "on_path": on_path or None,
+            "cycle": cycle,
+            "on_cycle": on_cycle or None,
             "next": [],
             "else": None,
             "join": None,

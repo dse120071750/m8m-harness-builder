@@ -60,6 +60,7 @@ def _judge_assemble(path: Path, fail_first: bool = False) -> None:
     )
 
 
+@unittest.skip("for replaced by cycle over a frozen ledger")
 class ForLedgerTests(unittest.TestCase):
     def test_two_items_complete_eight_block(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -277,9 +278,9 @@ class InferLoopTests(unittest.TestCase):
             {"id": "pages_bound", "intelligence": "none", "tools": ["hash_bind"], "output_schema": {}},
         ]
         infer_schema_control(milestones)
-        self.assertEqual(milestones[1]["loop"], "for")
-        self.assertEqual(milestones[1]["ledger"]["path"], "pages")
-        self.assertEqual(milestones[1]["worker"], "ledger_receipt")
+        self.assertEqual(milestones[1].get("on_cycle"), "pages")
+        self.assertEqual(milestones[1]["cycle"]["ledger"], "source_ready")
+        self.assertEqual(milestones[1]["worker"], "cycle_receipt")
         self.assertNotIn("next", milestones[0])
 
     def test_infer_judge_for_image_milestone(self) -> None:
@@ -299,10 +300,14 @@ class ChartLoopTests(unittest.TestCase):
             {
                 "id": "pages_bound",
                 "intelligence": "none",
-                "tools": ["hash_bind", "ledger_receipt"],
-                "loop": "for",
-                "worker": "ledger_receipt",
-                "ledger": {"path": "pages", "item_schema": "schemas/page_v1.json", "max_items": 7},
+                "tools": ["hash_bind", "cycle_receipt"],
+                "on_cycle": "pages",
+                "cycle": {
+                    "worker": "cycle_receipt",
+                    "ledger": "source_ready",
+                    "start": "pages_bound",
+                    "pass": "row image exists",
+                },
             },
             {
                 "id": "card_aligned",
@@ -313,15 +318,15 @@ class ChartLoopTests(unittest.TestCase):
             },
         ]
         mermaid = render_mermaid(items)
-        self.assertIn("for:pages max=7", mermaid)
         self.assertIn("judge until ok", mermaid)
         self.assertNotIn("else BLOCKED", mermaid)
         text = render_flowchart(items, title="toy", flow_id="toy")
-        self.assertIn("## For (ledger)", text)
+        self.assertIn("## Cycle", text)
         self.assertIn("## Judge (until ok)", text)
         self.assertNotIn("## Gates (if / else)", text)
 
 
+@unittest.skip("for replaced by cycle over a frozen ledger")
 class ValidateLoopTests(unittest.TestCase):
     def test_for_without_maxitems_on_previous_fails(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

@@ -9,7 +9,7 @@ description: >
 license: MIT
 metadata:
   author: dse120071750
-  version: "1.9"
+  version: "1.10"
 ---
 
 # M8M harness builder
@@ -22,7 +22,7 @@ identify milestones
   → list FlowSteps inside each (atomic; prefer ONE tool)
   → develop that tool (existing / promote / generate-new stub)
   → write one FlowStep table + one milestone flowchart
-     (markdown + humanized JPEG; for / judge / branch)
+     (markdown + humanized JPEG; cycle / judge / branch)
   → scaffold flow YAML and tool stubs
 ```
 
@@ -76,29 +76,35 @@ the split. After generate, and after every step edit (`write` /
 `mark`), both `planning/m8m-flowchart.md` and
 `planning/m8m-flowchart.jpg` are rewritten.
 
-## For, judge, and branch
+## Cycle, judge, and branch
 
-A **for loop** and a **judge loop** are canvas milestones. **Branch**
-is after a milestone. Proceed is guarded by an **internal worker**: a
-required repo tool that writes a closed receipt. Intelligence may
-draft. It may not set `ok` or `branch`.
+Proceed is guarded by an **internal worker**. Intelligence may draft.
+It may not set `ok`, `branch`, or `cycle`. Do not use FOR or IF.
 
-- **for:** previous asset is a **ledger** (typed array, `maxItems`). This
-  milestone produces the item asset for each remaining row until
-  `remaining == 0`.
-- **judge:** do the work until the worker says ok. **Image generation**
-  and **spatial alignment** always use this. `ok: false` and budget
-  left → stay. Budget gone → BLOCK.
+- **cycle:** freeze a **ledger** first (a normal milestone asset). Then
+  wrap milestones around each unfinished row. After the last wrap
+  asset PASSes, AI drafts pass|fail. `cycle_receipt` writes the
+  receipt **and updates the ledger**. Pass → preserve `items/NNN`.
+  Fail → purge live residue; the row stays unfinished (resumable).
+  `remaining == 0` is data, not the gate.
+- **judge:** do the work on *this* milestone until the worker says ok.
+  Image generation and spatial alignment always use this.
 - **branch:** after this milestone’s asset PASSes, AI drafts which
-  generation path to take. The worker writes `{ok, branch}`. Other
-  path milestones are `skipped: true`. Skip is not BLOCK. Do not call
-  this IF: IF is a rigid schema fork. URL vs text stays data.
+  path to take. The worker writes `{ok, branch}`. Skip is not BLOCK.
 
 ```yaml
-- id: images_bound
-  loop: for
-  ledger: { path: items, item_schema: schemas/image_item_v1.json, max_items: 32 }
-  worker: ledger_receipt
+- id: pages_ledger_frozen
+  asset: { kind: json }
+- id: page_bound
+  on_cycle: pages
+- id: page_rendered
+  on_cycle: pages
+  cycle:
+    worker: cycle_receipt
+    ledger: pages_ledger_frozen
+    start: page_bound
+    join: release_packaged
+    pass: "current row has a bound image (path + sha256)"
 - id: card_aligned
   loop: judge
   worker: alignment_judge
@@ -134,7 +140,8 @@ Default: `<repo>/flowsteps/runs/<flow_id>/<utc>_<id>/`
   manifest.json
   milestones/<id>/out/files/asset.png     # required bytes
   milestones/<id>/out/asset.json          # envelope
-  milestones/<id>/items/001/files/...     # for-ledger
+  milestones/<id>/items/001/files/...     # finished cycle round (preserved)
+  cycles/<id>/ledger.json                 # resumable cycle ledger
   milestones/<id>/work/attempts/01/...    # judge retries
 ```
 

@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["ok", "cycle"],
+  "properties": {
+    "ok": { "type": "boolean" },
+    "cycle": { "enum": ["pass", "fail", ""] },
+    "row": { "type": "string" },
+    "reason": { "type": "string" }
+  }
+}

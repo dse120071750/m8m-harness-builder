@@ -47,8 +47,12 @@ def ensure_session_tree(run_dir: Path, flow: dict[str, Any]) -> None:
         (run_dir / "milestones" / mid / "in").mkdir(parents=True, exist_ok=True)
         (run_dir / "milestones" / mid / "work" / "attempts").mkdir(parents=True, exist_ok=True)
         (run_dir / "milestones" / mid / "out" / "files").mkdir(parents=True, exist_ok=True)
-        if str(step.get("loop") or "none") == "for":
+        if str(step.get("loop") or "none") == "for" or step.get("on_cycle") or step.get("cycle"):
             (run_dir / "milestones" / mid / "items").mkdir(parents=True, exist_ok=True)
+        cycle = step.get("cycle") if isinstance(step.get("cycle"), dict) else None
+        if cycle:
+            cid = str(cycle.get("id") or step.get("on_cycle") or mid)
+            (run_dir / "cycles" / cid).mkdir(parents=True, exist_ok=True)
     manifest_path = run_dir / "manifest.json"
     if not manifest_path.is_file():
         write_json(
@@ -232,3 +236,135 @@ def copy_envelope_to_slot(run_dir: Path, step: dict[str, Any], envelope_path: Pa
     dest.parent.mkdir(parents=True, exist_ok=True)
     if envelope_path.is_file() and dest.resolve() != envelope_path.resolve():
         shutil.copy2(envelope_path, dest)
+
+
+def cycle_id_of(step: dict[str, Any]) -> str:
+    spec = step.get("cycle") if isinstance(step.get("cycle"), dict) else {}
+    return str(spec.get("id") or step.get("on_cycle") or step.get("id") or "cycle")
+
+
+def cycle_dir(run_dir: Path, cycle_id: str) -> Path:
+    path = Path(run_dir) / "cycles" / cycle_id
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def ledger_path(run_dir: Path, cycle_id: str) -> Path:
+    return cycle_dir(run_dir, cycle_id) / "ledger.json"
+
+
+def load_ledger(run_dir: Path, cycle_id: str) -> dict[str, Any] | None:
+    path = ledger_path(run_dir, cycle_id)
+    if not path.is_file():
+        return None
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def save_ledger(run_dir: Path, cycle_id: str, ledger: dict[str, Any]) -> Path:
+    path = ledger_path(run_dir, cycle_id)
+    ledger = dict(ledger)
+    ledger.setdefault("schema", "m8m_cycle_ledger_v1")
+    ledger["cycle"] = cycle_id
+    ledger["updated_at"] = utc_now()
+    write_json(path, ledger, overwrite=True)
+    return path
+
+
+def ledger_from_asset(asset: dict[str, Any], *, cycle_id: str, max_items: int = 8) -> dict[str, Any]:
+    rows_raw = asset.get("rows")
+    if not isinstance(rows_raw, list):
+        for key in ("items", "pages", "images", "ledger"):
+            candidate = asset.get(key)
+            if isinstance(candidate, list):
+                rows_raw = candidate
+                break
+    if not isinstance(rows_raw, list):
+        rows_raw = []
+    rows: list[dict[str, Any]] = []
+    for index, raw in enumerate(rows_raw, start=1):
+        if isinstance(raw, dict):
+            row = dict(raw)
+            row.setdefault("id", str(row.get("id") or f"{index:03d}"))
+            row.setdefault("status", str(row.get("status") or "unfinished"))
+        else:
+            row = {"id": f"{index:03d}", "status": "unfinished", "value": raw}
+        rows.append(row)
+    if len(rows) > max_items:
+        rows = rows[:max_items]
+    return {
+        "schema": "m8m_cycle_ledger_v1",
+        "cycle": cycle_id,
+        "max_items": max_items,
+        "rows": rows,
+    }
+
+
+def first_unfinished(ledger: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(ledger, dict):
+        return None
+    for row in ledger.get("rows") or []:
+        if isinstance(row, dict) and str(row.get("status") or "unfinished") != "done":
+            return row
+    return None
+
+
+def mark_row(ledger: dict[str, Any], row_id: str, *, status: str, slot: str | None = None) -> dict[str, Any]:
+    out = dict(ledger)
+    rows = []
+    for row in out.get("rows") or []:
+        if not isinstance(row, dict):
+            rows.append(row)
+            continue
+        item = dict(row)
+        if str(item.get("id") or "") == str(row_id):
+            item["status"] = status
+            if slot:
+                item["slot"] = slot
+        rows.append(item)
+    out["rows"] = rows
+    return out
+
+
+def purge_cycle_live(run_dir: Path, steps: list[dict[str, Any]]) -> None:
+    """Delete unfinished live residue. Never touch items/<done>/."""
+    run_dir = Path(run_dir)
+    for step in steps:
+        mid = str(step.get("id") or "")
+        if not mid:
+            continue
+        live = run_dir / "milestones" / mid / "out"
+        work = run_dir / "milestones" / mid / "work"
+        if live.exists():
+            shutil.rmtree(live, ignore_errors=True)
+        if work.exists():
+            shutil.rmtree(work, ignore_errors=True)
+        (run_dir / "milestones" / mid / "out" / "files").mkdir(parents=True, exist_ok=True)
+        (run_dir / "milestones" / mid / "work" / "attempts").mkdir(parents=True, exist_ok=True)
+
+
+def promote_cycle_round(
+    run_dir: Path,
+    flow: dict[str, Any],
+    steps: list[dict[str, Any]],
+    row_id: str,
+) -> str:
+    """Copy live out/ to items/<row>/ and keep it. Returns the slot prefix."""
+    from flowstep_runtime import expected_artifact_path
+
+    run_dir = Path(run_dir)
+    prefix = ""
+    for step in steps:
+        mid = str(step.get("id") or "")
+        dest = run_dir / "milestones" / mid / "items" / str(row_id)
+        dest.mkdir(parents=True, exist_ok=True)
+        live_out = run_dir / "milestones" / mid / "out"
+        if live_out.exists():
+            target = dest / "out"
+            if target.exists():
+                shutil.rmtree(target, ignore_errors=True)
+            shutil.copytree(live_out, target)
+        envelope = expected_artifact_path(run_dir, flow, step)
+        if envelope.is_file():
+            shutil.copy2(envelope, dest / "asset.json")
+        prefix = f"milestones/{mid}/items/{row_id}"
+    return prefix.replace("\\", "/")

@@ -14,11 +14,19 @@ from session_layout import (
     assert_in_run,
     attach_address,
     copy_envelope_to_slot,
+    cycle_id_of,
     default_run_dir,
     ensure_session_tree,
+    first_unfinished,
+    ledger_from_asset,
+    load_ledger,
+    mark_row,
     materialize_bytes_into_slot,
+    promote_cycle_round,
+    purge_cycle_live,
     record_skip,
     record_slot,
+    save_ledger,
 )
 from flowstep_tools import infer_codebase
 from flowstep_runtime import (
@@ -429,6 +437,8 @@ def _pass_artifact(
     _materialize(run_dir, flow, step, artifact, path)
     if step.get("branch"):
         _store_active_branch(run_dir, step, result)
+    if step.get("cycle"):
+        return _apply_cycle(skill_dir, run_dir, flow, step, result, bindings, fingerprint)
     return None
 
 
@@ -481,6 +491,192 @@ def _store_active_branch(run_dir: Path, step: dict[str, Any], result: dict[str, 
     write_json(record_path, record, overwrite=True)
 
 
+def _cycle_wrap(flow: dict[str, Any], cycle_name: str) -> list[dict[str, Any]]:
+    wrapped: list[dict[str, Any]] = []
+    for item in flow["steps"]:
+        spec = item.get("cycle") if isinstance(item.get("cycle"), dict) else {}
+        name = str(item.get("on_cycle") or spec.get("id") or "")
+        if name == cycle_name or (spec and cycle_id_of(item) == cycle_name):
+            wrapped.append(item)
+    return wrapped
+
+
+def _clear_wrap_artifacts(run_dir: Path, flow: dict[str, Any], wrapped: list[dict[str, Any]]) -> None:
+    for item in wrapped:
+        artifact = expected_artifact_path(run_dir, flow, item)
+        if artifact.is_file():
+            artifact.unlink()
+        materialized = Path(run_dir) / "materialized" / f"{item['id']}.runtime_step_result.json"
+        if materialized.is_file():
+            materialized.unlink()
+        task = Path(run_dir) / "runtime-tasks" / f"{item['id']}.json"
+        if task.is_file():
+            task.unlink()
+
+
+def _strip_completed(run_dir: Path, ids: set[str]) -> dict[str, Any]:
+    record = read_json(_execution_path(run_dir))
+    record["steps"] = [item for item in record.get("steps") or [] if item.get("step_id") not in ids]
+    record["updated_at"] = utc_now()
+    write_json(_execution_path(run_dir), record, overwrite=True)
+    return record
+
+
+def _ensure_ledger(
+    run_dir: Path,
+    flow: dict[str, Any],
+    step: dict[str, Any],
+    skill_dir: Path,
+    bindings: list[dict[str, Any]],
+    fingerprint: str,
+) -> dict[str, Any] | dict[str, Any]:
+    spec = step.get("cycle") if isinstance(step.get("cycle"), dict) else {}
+    cid = cycle_id_of(step)
+    existing = load_ledger(run_dir, cid)
+    if existing:
+        return existing
+    source_id = str(spec.get("ledger") or "")
+    data: dict[str, Any] = {}
+    if source_id:
+        source = next((item for item in flow["steps"] if item["id"] == source_id), None)
+        if source is None:
+            return _write_blocked(
+                run_dir, flow, step, bindings, fingerprint, [f"{step['id']}: cycle ledger milestone {source_id} missing"]
+            )
+        path = expected_artifact_path(run_dir, flow, source)
+        if not path.is_file():
+            return _write_blocked(
+                run_dir, flow, step, bindings, fingerprint, [f"{step['id']}: freeze the ledger before the cycle"]
+            )
+        artifact = read_json(path)
+        payload = artifact.get("data") if isinstance(artifact.get("data"), dict) else artifact
+        data = payload if isinstance(payload, dict) else {}
+    ledger = ledger_from_asset(data, cycle_id=cid, max_items=int(spec.get("max_rounds") or 8))
+    if not ledger.get("rows"):
+        return _write_blocked(
+            run_dir, flow, step, bindings, fingerprint, [f"{step['id']}: cycle ledger has no rows"]
+        )
+    save_ledger(run_dir, cid, ledger)
+    return ledger
+
+
+def _apply_cycle(
+    skill_dir: Path,
+    run_dir: Path,
+    flow: dict[str, Any],
+    step: dict[str, Any],
+    result: dict[str, Any],
+    bindings: list[dict[str, Any]],
+    fingerprint: str,
+) -> dict[str, Any] | None:
+    spec = step.get("cycle") if isinstance(step.get("cycle"), dict) else {}
+    cid = cycle_id_of(step)
+    receipt_rel = spec.get("receipt_schema") or step.get("receipt_schema")
+    try:
+        receipt = read_receipt(result, skill_dir=skill_dir, schema_rel=receipt_rel, step_id=step["id"])
+    except FlowError as exc:
+        return _write_blocked(run_dir, flow, step, bindings, fingerprint, [str(exc)])
+    if not receipt.get("ok"):
+        return _write_blocked(
+            run_dir, flow, step, bindings, fingerprint, [f"{step['id']}: cycle receipt not ok"]
+        )
+    chosen = str(receipt.get("cycle") or "")
+    if chosen not in {"pass", "fail"}:
+        return _write_blocked(
+            run_dir, flow, step, bindings, fingerprint, [f"{step['id']}: cycle must be pass or fail"]
+        )
+    ledger = load_ledger(run_dir, cid) or _ensure_ledger(run_dir, flow, step, skill_dir, bindings, fingerprint)
+    if not isinstance(ledger, dict) or ledger.get("schema") == "flow_sequence_action_v2":
+        return ledger if isinstance(ledger, dict) and ledger.get("state") == "BLOCKED" else _write_blocked(
+            run_dir, flow, step, bindings, fingerprint, [f"{step['id']}: cycle ledger missing"]
+        )
+    record = read_json(_execution_path(run_dir))
+    row_id = str(record.get("cycle_row") or receipt.get("row") or "")
+    row = None
+    if row_id:
+        row = next((item for item in ledger.get("rows") or [] if str(item.get("id")) == row_id), None)
+    if row is None:
+        row = first_unfinished(ledger)
+        row_id = str((row or {}).get("id") or "")
+    wrapped = _cycle_wrap(flow, cid)
+    wrap_ids = {item["id"] for item in wrapped}
+    rounds = int(record.get("cycle_round") or 1)
+    max_rounds = int(spec.get("max_rounds") or step.get("max_attempts") or 8)
+    if chosen == "fail":
+        if rounds >= max_rounds:
+            return _write_blocked(
+                run_dir,
+                flow,
+                step,
+                bindings,
+                fingerprint,
+                [f"{step['id']}: cycle budget {max_rounds} exhausted; row {row_id} unfinished"],
+            )
+        purge_cycle_live(run_dir, wrapped)
+        _clear_wrap_artifacts(run_dir, flow, wrapped)
+        ledger = mark_row(ledger, row_id, status="unfinished")
+        save_ledger(run_dir, cid, ledger)
+        record = _strip_completed(run_dir, wrap_ids)
+        record["cycle_id"] = cid
+        record["cycle_row"] = row_id
+        record["cycle_round"] = rounds + 1
+        record["cycle_restart"] = True
+        write_json(_execution_path(run_dir), record, overwrite=True)
+        return None
+    slot = promote_cycle_round(run_dir, flow, wrapped, row_id or f"{rounds:03d}")
+    ledger = mark_row(ledger, row_id, status="done", slot=slot)
+    save_ledger(run_dir, cid, ledger)
+    more = first_unfinished(ledger)
+    if more:
+        purge_cycle_live(run_dir, wrapped)
+        _clear_wrap_artifacts(run_dir, flow, wrapped)
+        record = _strip_completed(run_dir, wrap_ids)
+        record["cycle_id"] = cid
+        record["cycle_row"] = str(more.get("id") or "")
+        record["cycle_round"] = rounds + 1
+        record["cycle_restart"] = True
+        write_json(_execution_path(run_dir), record, overwrite=True)
+        return None
+    record = read_json(_execution_path(run_dir))
+    record["cycle_id"] = cid
+    record["cycle_done"] = True
+    record["updated_at"] = utc_now()
+    write_json(_execution_path(run_dir), record, overwrite=True)
+    return None
+
+
+def _prepare_cycle_start(
+    run_dir: Path,
+    flow: dict[str, Any],
+    step: dict[str, Any],
+    skill_dir: Path,
+    fingerprint: str,
+) -> dict[str, Any] | None:
+    """Init or resume ledger when entering the first wrapped milestone."""
+    owner = next((item for item in flow["steps"] if item.get("cycle") and cycle_id_of(item) == str(step.get("on_cycle") or cycle_id_of(step))), None)
+    if owner is None and step.get("cycle"):
+        owner = step
+    if owner is None:
+        return None
+    bindings: list[dict[str, Any]] = []
+    ledger = _ensure_ledger(run_dir, flow, owner, skill_dir, bindings, fingerprint)
+    if isinstance(ledger, dict) and ledger.get("state") == "BLOCKED":
+        return ledger
+    if not isinstance(ledger, dict):
+        return None
+    unfinished = first_unfinished(ledger)
+    if unfinished is None:
+        return None
+    record = read_json(_execution_path(run_dir))
+    if not record.get("cycle_row"):
+        purge_cycle_live(run_dir, _cycle_wrap(flow, cycle_id_of(owner)))
+        record["cycle_id"] = cycle_id_of(owner)
+        record["cycle_row"] = str(unfinished.get("id") or "")
+        record["cycle_round"] = int(record.get("cycle_round") or 1)
+        write_json(_execution_path(run_dir), record, overwrite=True)
+    return None
+
+
 def _execute_step(
     skill_dir: Path,
     run_dir: Path,
@@ -491,6 +687,10 @@ def _execute_step(
 ) -> dict[str, Any] | None:
     """Run one milestone. Return an action to stop, or None to continue."""
     bindings: list[dict[str, Any]] = []
+    if step.get("on_cycle") or step.get("cycle"):
+        blocked = _prepare_cycle_start(run_dir, flow, step, skill_dir, fingerprint)
+        if blocked is not None:
+            return blocked
     try:
         input_data, bindings = bind_inputs(run_dir, flow, step)
         validate_against_schema(input_data, skill_dir / step["input_schema"])
@@ -514,6 +714,17 @@ def _execute_step(
             except FlowError as exc:
                 return _write_blocked(run_dir, flow, step, bindings, fingerprint, [str(exc)])
         write_json(folder / "draft.json", draft)
+    record = read_json(_execution_path(run_dir))
+    row_id = str(record.get("cycle_row") or "")
+    if row_id:
+        input_data = dict(input_data)
+        input_data["ledger_row"] = row_id
+        input_data["row"] = row_id
+        cid = str(record.get("cycle_id") or step.get("on_cycle") or "")
+        if cid:
+            ledger = load_ledger(run_dir, cid)
+            if ledger:
+                input_data["ledger"] = ledger
     loop = str(step.get("loop") or "none")
     max_attempts = int(step.get("max_attempts") or step.get("max_model_attempts") or 8)
     receipt_rel = step.get("receipt_schema")
@@ -671,66 +882,78 @@ def advance(
     created = record.get("created_at")
     if created and (datetime.now(timezone.utc) - _parse_time(str(created))).total_seconds() > flow["max_run_seconds"]:
         raise FlowError("run exceeded the frozen wall-clock budget; start a fresh run")
-    completed = {item["step_id"] for item in record["steps"]}
-    skipped = {str(item.get("step_id") or "") for item in (record.get("skipped") or [])}
     pending_draft = read_json(draft_path) if draft_path else None
     if draft_path and not isinstance(pending_draft, dict):
         raise FlowError("--draft must contain one JSON object")
-    for step in flow["steps"]:
-        artifact_path = expected_artifact_path(run_dir, flow, step)
-        materialized_path = run_dir / "materialized" / f"{step['id']}.runtime_step_result.json"
-        if step["id"] in skipped:
-            continue
-        on_path = str(step.get("on_path") or "")
-        active = str(record.get("active_branch") or "")
-        if on_path and active and on_path != active:
-            record_skip(run_dir, step, branch=active, reason=f"on_path {on_path} skipped; branch={active}")
-            record = read_json(_execution_path(run_dir))
-            skipped_rows = list(record.get("skipped") or [])
-            skipped_rows.append(
-                {
-                    "step_id": step["id"],
-                    "branch": active,
-                    "skipped": True,
-                    "reason": f"on_path {on_path} != {active}",
-                }
-            )
-            record["skipped"] = skipped_rows
-            record["updated_at"] = utc_now()
-            write_json(_execution_path(run_dir), record, overwrite=True)
-            skipped.add(step["id"])
-            continue
-        if step["id"] in completed:
-            if not artifact_path.is_file() or not materialized_path.is_file():
-                raise FlowError(f"materialized step bytes disappeared: {step['id']}")
-            artifact = read_json(artifact_path)
-            validate_against_schema(artifact, envelope_schema_path())
-            if sha256_file(artifact_path) != read_json(materialized_path).get("artifact_sha256"):
-                raise FlowError(f"completed artifact was mutated: {step['id']}")
-            if artifact["status"] != "PASS":
-                raise FlowError(f"step is terminal BLOCKED: {step['id']}")
-            continue
-        budget = (step.get("params") or {}).get("step_budget_seconds")
-        task_path = run_dir / "runtime-tasks" / f"{step['id']}.json"
-        if budget and task_path.is_file():
-            task = read_json(task_path)
-            if (datetime.now(timezone.utc) - _parse_time(task["created_at"])).total_seconds() > budget:
-                _, bindings = bind_inputs(run_dir, flow, step)
-                return _write_blocked(
-                    run_dir, flow, step, bindings, lock["fingerprint_sha256"], ["STEP_BUDGET_EXCEEDED"]
-                )
-        draft = None
-        if pending_draft is not None:
-            draft = pending_draft
-            pending_draft = None
-        elif step["model"] != "none":
-            existing_draft = work_dir(run_dir, step["id"]) / "draft.json"
-            if existing_draft.is_file():
-                draft = read_json(existing_draft)
-        action = _execute_step(skill_dir, run_dir, flow, step, lock["fingerprint_sha256"], draft)
-        if action is not None:
-            return action
+    restart = True
+    while restart:
+        restart = False
         record = read_json(_execution_path(run_dir))
+        completed = {item["step_id"] for item in record["steps"]}
+        skipped = {str(item.get("step_id") or "") for item in (record.get("skipped") or [])}
+        for step in flow["steps"]:
+            artifact_path = expected_artifact_path(run_dir, flow, step)
+            materialized_path = run_dir / "materialized" / f"{step['id']}.runtime_step_result.json"
+            if step["id"] in skipped:
+                continue
+            if record.get("cycle_done") and step.get("on_cycle") and not step.get("cycle"):
+                continue
+            on_path = str(step.get("on_path") or "")
+            active = str(record.get("active_branch") or "")
+            if on_path and active and on_path != active:
+                record_skip(run_dir, step, branch=active, reason=f"on_path {on_path} skipped; branch={active}")
+                record = read_json(_execution_path(run_dir))
+                skipped_rows = list(record.get("skipped") or [])
+                skipped_rows.append(
+                    {
+                        "step_id": step["id"],
+                        "branch": active,
+                        "skipped": True,
+                        "reason": f"on_path {on_path} != {active}",
+                    }
+                )
+                record["skipped"] = skipped_rows
+                record["updated_at"] = utc_now()
+                write_json(_execution_path(run_dir), record, overwrite=True)
+                skipped.add(step["id"])
+                continue
+            if step["id"] in completed:
+                if not artifact_path.is_file() or not materialized_path.is_file():
+                    raise FlowError(f"materialized step bytes disappeared: {step['id']}")
+                artifact = read_json(artifact_path)
+                validate_against_schema(artifact, envelope_schema_path())
+                if sha256_file(artifact_path) != read_json(materialized_path).get("artifact_sha256"):
+                    raise FlowError(f"completed artifact was mutated: {step['id']}")
+                if artifact["status"] != "PASS":
+                    raise FlowError(f"step is terminal BLOCKED: {step['id']}")
+                continue
+            budget = (step.get("params") or {}).get("step_budget_seconds")
+            task_path = run_dir / "runtime-tasks" / f"{step['id']}.json"
+            if budget and task_path.is_file():
+                task = read_json(task_path)
+                if (datetime.now(timezone.utc) - _parse_time(task["created_at"])).total_seconds() > budget:
+                    _, bindings = bind_inputs(run_dir, flow, step)
+                    return _write_blocked(
+                        run_dir, flow, step, bindings, lock["fingerprint_sha256"], ["STEP_BUDGET_EXCEEDED"]
+                    )
+            draft = None
+            if pending_draft is not None:
+                draft = pending_draft
+                pending_draft = None
+            elif step["model"] != "none":
+                existing_draft = work_dir(run_dir, step["id"]) / "draft.json"
+                if existing_draft.is_file():
+                    draft = read_json(existing_draft)
+            action = _execute_step(skill_dir, run_dir, flow, step, lock["fingerprint_sha256"], draft)
+            if action is not None:
+                return action
+            record = read_json(_execution_path(run_dir))
+            completed = {item["step_id"] for item in record["steps"]}
+            if record.get("cycle_restart"):
+                record["cycle_restart"] = False
+                write_json(_execution_path(run_dir), record, overwrite=True)
+                restart = True
+                break
     record = read_json(_execution_path(run_dir))
     record["status"] = "COMPLETE"
     record["updated_at"] = utc_now()
