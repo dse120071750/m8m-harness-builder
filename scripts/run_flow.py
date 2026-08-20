@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from schema_gate import ELSE_BLOCKED, check_foreach, resolve_next
+from schema_gate import ledger_items, read_receipt, schema_accepts
 from flowstep_runtime import (
     ACTION_SCHEMA,
     NEED_MODEL,
@@ -235,6 +235,163 @@ def _recover_or_block(
     }
 
 
+def _need_model_action(
+    run_dir: Path,
+    step: dict[str, Any],
+    folder: Path,
+    task: dict[str, Any],
+    result: dict[str, Any],
+    bindings: list[dict[str, Any]],
+) -> dict[str, Any]:
+    request = result.get("model_request")
+    request_path = folder / "model_request.json"
+    write_json(request_path, request)
+    draft_path = folder / "draft.json"
+    return {
+        "schema": ACTION_SCHEMA,
+        "state": "ACTION_REQUIRED",
+        "action": "run_model_then_advance",
+        "execution_mode": "tool",
+        "step_id": step["id"],
+        "attempt": int(task.get("attempt") or 1),
+        "model": result.get("model") or recovery_model(step),
+        "task_path": relative_to(run_dir, run_dir / "runtime-tasks" / f"{step['id']}.json"),
+        "model_request_path": relative_to(run_dir, request_path),
+        "draft_path": relative_to(run_dir, draft_path),
+        "draft_schema_path": step.get("draft_schema"),
+        "expected_output_path": task["expected_output_path"],
+        "input_artifacts": bindings,
+        "tools": step.get("tools") or [],
+    }
+
+
+def _run_handler(
+    skill_dir: Path,
+    run_dir: Path,
+    flow: dict[str, Any],
+    step: dict[str, Any],
+    input_data: dict[str, Any],
+    draft: dict[str, Any] | None,
+    task: dict[str, Any],
+    bindings: list[dict[str, Any]],
+    fingerprint: str,
+    folder: Path,
+) -> dict[str, Any]:
+    """Return {'result': dict} or {'action': action}."""
+    try:
+        result = invoke_tool(skill_dir, step, input_data, draft, task)
+    except Exception as exc:
+        return {
+            "action": _recover_or_block(
+                skill_dir,
+                run_dir,
+                flow,
+                step,
+                bindings,
+                fingerprint,
+                draft,
+                [f"{type(exc).__name__}: {exc}"],
+            )
+        }
+    if not isinstance(result, dict):
+        return {
+            "action": _recover_or_block(
+                skill_dir,
+                run_dir,
+                flow,
+                step,
+                bindings,
+                fingerprint,
+                draft,
+                ["tool must return a JSON object"],
+            )
+        }
+    if result.get("_flowstep") == "BLOCKED":
+        blockers = [str(item) for item in result.get("blockers") or ["tool returned BLOCKED"]]
+        return {
+            "action": _recover_or_block(skill_dir, run_dir, flow, step, bindings, fingerprint, draft, blockers)
+        }
+    if result.get("_flowstep") == NEED_MODEL:
+        if step.get("on_tool_fail") == "BLOCKED":
+            return {
+                "action": _write_blocked(
+                    run_dir,
+                    flow,
+                    step,
+                    bindings,
+                    fingerprint,
+                    [f"{step['id']} requested a model but on_tool_fail is BLOCKED"],
+                )
+            }
+        if step.get("model") == "none" and step.get("on_tool_fail") != "need_model":
+            return {
+                "action": _write_blocked(
+                    run_dir,
+                    flow,
+                    step,
+                    bindings,
+                    fingerprint,
+                    [f"{step['id']} requested a model but model is none"],
+                )
+            }
+        if not isinstance(result.get("model_request"), dict):
+            return {
+                "action": _write_blocked(
+                    run_dir, flow, step, bindings, fingerprint, ["NEED_MODEL requires model_request"]
+                )
+            }
+        return {"action": _need_model_action(run_dir, step, folder, task, result, bindings)}
+    return {"result": result}
+
+
+def _item_payload(result: dict[str, Any], fallback: Any) -> Any:
+    body = {key: value for key, value in result.items() if key != "receipt"}
+    if "item" in body:
+        return body["item"]
+    if "asset" in body:
+        return body["asset"]
+    return body or fallback
+
+
+def _pass_artifact(
+    skill_dir: Path,
+    run_dir: Path,
+    flow: dict[str, Any],
+    step: dict[str, Any],
+    result: dict[str, Any],
+    bindings: list[dict[str, Any]],
+    fingerprint: str,
+    attempt: int,
+) -> dict[str, Any] | None:
+    try:
+        validate_against_schema(result, skill_dir / step["output_schema"])
+    except FlowError as exc:
+        return _write_blocked(
+            run_dir,
+            flow,
+            step,
+            bindings,
+            fingerprint,
+            [f"{step['id']}: milestone asset not produced; {exc}"],
+        )
+    artifact = make_envelope(
+        flow=flow,
+        step=step,
+        run_id=run_dir.name,
+        attempt=attempt,
+        status="PASS",
+        data=result,
+        bindings=bindings,
+        fingerprint=fingerprint,
+        blockers=[],
+    )
+    path = expected_artifact_path(run_dir, flow, step)
+    write_json(path, artifact, overwrite=False)
+    validate_against_schema(artifact, envelope_schema_path())
+    _materialize(run_dir, flow, step, artifact, path)
+    return None
+
+
 def _execute_step(
     skill_dir: Path,
     run_dir: Path,
@@ -243,7 +400,7 @@ def _execute_step(
     fingerprint: str,
     draft: dict[str, Any] | None,
 ) -> dict[str, Any] | None:
-    """Run one tool. Return an action to stop, or None to continue."""
+    """Run one milestone. Return an action to stop, or None to continue."""
     bindings: list[dict[str, Any]] = []
     try:
         input_data, bindings = bind_inputs(run_dir, flow, step)
@@ -268,103 +425,126 @@ def _execute_step(
             except FlowError as exc:
                 return _write_blocked(run_dir, flow, step, bindings, fingerprint, [str(exc)])
         write_json(folder / "draft.json", draft)
-    try:
-        result = invoke_tool(skill_dir, step, input_data, draft, task)
-    except Exception as exc:
-        return _recover_or_block(
-            skill_dir,
-            run_dir,
-            flow,
-            step,
-            bindings,
-            fingerprint,
-            draft,
-            [f"{type(exc).__name__}: {exc}"],
-        )
-    if not isinstance(result, dict):
-        return _recover_or_block(
-            skill_dir,
-            run_dir,
-            flow,
-            step,
-            bindings,
-            fingerprint,
-            draft,
-            ["tool must return a JSON object"],
-        )
-    if result.get("_flowstep") == "BLOCKED":
-        blockers = [str(item) for item in result.get("blockers") or ["tool returned BLOCKED"]]
-        return _recover_or_block(skill_dir, run_dir, flow, step, bindings, fingerprint, draft, blockers)
-    if result.get("_flowstep") == NEED_MODEL:
-        if step.get("on_tool_fail") == "BLOCKED":
+    loop = str(step.get("loop") or "none")
+    max_attempts = int(step.get("max_attempts") or step.get("max_model_attempts") or 8)
+    receipt_rel = step.get("receipt_schema")
+
+    if loop == "for":
+        ledger = step.get("ledger") or {}
+        path = str(ledger.get("path") or "items")
+        try:
+            items = ledger_items(input_data, path)
+        except FlowError as exc:
+            return _write_blocked(run_dir, flow, step, bindings, fingerprint, [str(exc)])
+        max_items = ledger.get("max_items")
+        if isinstance(max_items, int) and len(items) > max_items:
             return _write_blocked(
-                run_dir, flow, step, bindings, fingerprint, [f"{step['id']} requested a model but on_tool_fail is BLOCKED"]
+                run_dir,
+                flow,
+                step,
+                bindings,
+                fingerprint,
+                [f"{step['id']}: ledger {path} length {len(items)} exceeds max_items {max_items}"],
             )
-        if step.get("model") == "none" and step.get("on_tool_fail") != "need_model":
-            return _write_blocked(
-                run_dir, flow, step, bindings, fingerprint, [f"{step['id']} requested a model but model is none"]
+        item_schema = ledger.get("item_schema")
+        item_schema_path = skill_dir / str(item_schema) if item_schema else None
+        state_path = folder / "ledger_state.json"
+        state = read_json(state_path) if state_path.is_file() else {"index": 0, "done": []}
+        done: list[Any] = list(state.get("done") or [])
+        index = int(state.get("index") or 0)
+        attempts = int(state.get("attempts") or 0)
+        current_draft = draft
+        while index < len(items):
+            attempts += 1
+            if attempts > max_attempts:
+                return _write_blocked(
+                    run_dir,
+                    flow,
+                    step,
+                    bindings,
+                    fingerprint,
+                    [f"{step['id']}: for-ledger budget {max_attempts} exhausted; remaining {len(items) - index}"],
+                )
+            item = items[index]
+            if item_schema_path is not None and item_schema_path.is_file() and not schema_accepts(item, item_schema_path):
+                return _write_blocked(
+                    run_dir,
+                    flow,
+                    step,
+                    bindings,
+                    fingerprint,
+                    [f"{step['id']}: ledger item {index} failed {item_schema}"],
+                )
+            item_input = dict(input_data)
+            item_input["item"] = item
+            item_input["ledger"] = items
+            item_input["done"] = done
+            outcome = _run_handler(
+                skill_dir, run_dir, flow, step, item_input, current_draft, task, bindings, fingerprint, folder
             )
-        request = result.get("model_request")
-        if not isinstance(request, dict):
-            return _write_blocked(run_dir, flow, step, bindings, fingerprint, ["NEED_MODEL requires model_request"])
-        request_path = folder / "model_request.json"
-        write_json(request_path, request)
-        draft_path = folder / "draft.json"
-        return {
-            "schema": ACTION_SCHEMA,
-            "state": "ACTION_REQUIRED",
-            "action": "run_model_then_advance",
-            "execution_mode": "tool",
-            "step_id": step["id"],
-            "attempt": 1,
-            "model": result.get("model") or recovery_model(step),
-            "task_path": relative_to(run_dir, run_dir / "runtime-tasks" / f"{step['id']}.json"),
-            "model_request_path": relative_to(run_dir, request_path),
-            "draft_path": relative_to(run_dir, draft_path),
-            "draft_schema_path": step.get("draft_schema"),
-            "expected_output_path": task["expected_output_path"],
-            "input_artifacts": bindings,
-            "tools": step.get("tools") or [],
+            current_draft = None
+            if outcome.get("action") is not None:
+                write_json(state_path, {"index": index, "done": done, "attempts": attempts}, overwrite=True)
+                return outcome["action"]
+            result = outcome["result"]
+            try:
+                receipt = read_receipt(result, skill_dir=skill_dir, schema_rel=receipt_rel, step_id=step["id"])
+            except FlowError as exc:
+                return _write_blocked(run_dir, flow, step, bindings, fingerprint, [str(exc)])
+            if not receipt["ok"]:
+                write_json(state_path, {"index": index, "done": done, "attempts": attempts}, overwrite=True)
+                continue
+            done.append(_item_payload(result, item))
+            index += 1
+            write_json(state_path, {"index": index, "done": done, "attempts": attempts}, overwrite=True)
+        final = {
+            path: done,
+            "receipt": {"ok": True, "remaining": 0, "done": len(done)},
         }
-    try:
-        validate_against_schema(result, skill_dir / step["output_schema"])
-    except FlowError as exc:
+        if len(done) == 1 and isinstance(done[0], dict) and "path" in done[0] and "sha256" in done[0]:
+            final["asset"] = {"path": done[0]["path"], "sha256": done[0]["sha256"]}
+        return _pass_artifact(skill_dir, run_dir, flow, step, final, bindings, fingerprint, attempts)
+
+    if loop == "judge":
+        state_path = folder / "judge_state.json"
+        state = read_json(state_path) if state_path.is_file() else {"attempts": 0}
+        attempts = int(state.get("attempts") or 0)
+        current_draft = draft
+        last: dict[str, Any] | None = None
+        while True:
+            attempts += 1
+            if attempts > max_attempts:
+                return _write_blocked(
+                    run_dir,
+                    flow,
+                    step,
+                    bindings,
+                    fingerprint,
+                    [f"{step['id']}: judge budget {max_attempts} exhausted; receipt not ok"],
+                )
+            write_json(state_path, {"attempts": attempts}, overwrite=True)
+            outcome = _run_handler(
+                skill_dir, run_dir, flow, step, input_data, current_draft, task, bindings, fingerprint, folder
+            )
+            current_draft = None
+            if outcome.get("action") is not None:
+                return outcome["action"]
+            result = outcome["result"]
+            last = result
+            try:
+                receipt = read_receipt(result, skill_dir=skill_dir, schema_rel=receipt_rel, step_id=step["id"])
+            except FlowError as exc:
+                return _write_blocked(run_dir, flow, step, bindings, fingerprint, [str(exc)])
+            if receipt["ok"]:
+                return _pass_artifact(skill_dir, run_dir, flow, step, result, bindings, fingerprint, attempts)
         return _write_blocked(
-            run_dir,
-            flow,
-            step,
-            bindings,
-            fingerprint,
-            [f"{step['id']}: milestone asset not produced; {exc}"],
+            run_dir, flow, step, bindings, fingerprint, [f"{step['id']}: judge ended without ok receipt"]
         )
-    try:
-        if step.get("foreach"):
-            check_foreach(skill_dir, step, result)
-    except FlowError as exc:
-        return _write_blocked(
-            run_dir,
-            flow,
-            step,
-            bindings,
-            fingerprint,
-            [f"{step['id']}: milestone check failed; {exc}"],
-        )
-    artifact = make_envelope(
-        flow=flow,
-        step=step,
-        run_id=run_dir.name,
-        attempt=1,
-        status="PASS",
-        data=result,
-        bindings=bindings,
-        fingerprint=fingerprint,
-        blockers=[],
-    )
-    path = expected_artifact_path(run_dir, flow, step)
-    write_json(path, artifact, overwrite=False)
-    validate_against_schema(artifact, envelope_schema_path())
-    _materialize(run_dir, flow, step, artifact, path)
-    return None
+
+    outcome = _run_handler(skill_dir, run_dir, flow, step, input_data, draft, task, bindings, fingerprint, folder)
+    if outcome.get("action") is not None:
+        return outcome["action"]
+    return _pass_artifact(skill_dir, run_dir, flow, step, outcome["result"], bindings, fingerprint, 1)
 
 
 def advance(
@@ -387,13 +567,10 @@ def advance(
     if created and (datetime.now(timezone.utc) - _parse_time(str(created))).total_seconds() > flow["max_run_seconds"]:
         raise FlowError("run exceeded the frozen wall-clock budget; start a fresh run")
     completed = {item["step_id"] for item in record["steps"]}
-    skip: set[str] = set(record.get("skipped") or [])
     pending_draft = read_json(draft_path) if draft_path else None
     if draft_path and not isinstance(pending_draft, dict):
         raise FlowError("--draft must contain one JSON object")
     for step in flow["steps"]:
-        if step["id"] in skip:
-            continue
         artifact_path = expected_artifact_path(run_dir, flow, step)
         materialized_path = run_dir / "materialized" / f"{step['id']}.runtime_step_result.json"
         if step["id"] in completed:
@@ -426,25 +603,6 @@ def advance(
         action = _execute_step(skill_dir, run_dir, flow, step, lock["fingerprint_sha256"], draft)
         if action is not None:
             return action
-        if step.get("next"):
-            artifact = read_json(expected_artifact_path(run_dir, flow, step))
-            chosen, evidence = resolve_next(step, artifact.get("data") or {}, skill_dir)
-            record = read_json(_execution_path(run_dir))
-            record.setdefault("gates", []).append(
-                {"from": step["id"], **(evidence or {}), "chosen": chosen}
-            )
-            if chosen == ELSE_BLOCKED or chosen == "BLOCKED":
-                record["status"] = "BLOCKED"
-                record["skipped"] = sorted(skip)
-                record["blockers"] = [f"{step['id']}: no gate matched (else BLOCKED)"]
-                record["updated_at"] = utc_now()
-                write_json(_execution_path(run_dir), record)
-                return _blocked_action(step["id"], [f"{step['id']}: no gate matched (else BLOCKED)"])
-            for edge in step.get("next") or []:
-                if edge.get("then") != chosen:
-                    skip.add(str(edge["then"]))
-            record["skipped"] = sorted(skip)
-            write_json(_execution_path(run_dir), record)
     record = read_json(_execution_path(run_dir))
     record["status"] = "COMPLETE"
     record["updated_at"] = utc_now()

@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["ledger", "done"],
+  "properties": {
+    "ledger": { "type": "array" },
+    "done": { "type": "array" },
+    "item_id": { "type": "string" }
+  }
+}

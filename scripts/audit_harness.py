@@ -555,8 +555,8 @@ def audit_harness(root: Path) -> dict[str, Any]:
                 row["issues"].append("intelligence has no model_justification; writer fills a default")
             if any(step_id.lower().startswith(prefix) for prefix in ("if_", "loop_", "switch_", "when_", "else_")):
                 row["issues"].append("name looks like control (if/loop); still drawn as a checkpoint")
-            if item.get("next") and not item.get("else"):
-                row["issues"].append("next without else; writer defaults BLOCKED")
+            if str(item.get("loop") or "none") in {"for", "judge"} and not item.get("worker"):
+                row["issues"].append("for/judge milestone needs a repo worker for the ok/not-ok receipt")
         if not item.get("output_contract"):
             row["issues"].append(f"no output_contract; writer will invent {step_id or 'step'}_v1")
         step_reports.append(row)
@@ -719,107 +719,86 @@ def _schema_properties(schema: dict[str, Any] | None) -> dict[str, Any]:
     return props if isinstance(props, dict) else {}
 
 
+JUDGE_HINTS = ("generate", "align", "render", "image", "card", "spatial", "judge")
+
+
 def infer_schema_control(milestones: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Emit next/foreach from this.out JSON Schema only. Never from a model verdict."""
-    ids = [str(item["id"]) for item in milestones]
-    by_id = {item["id"]: item for item in milestones}
+    """Mark for (ledger) and judge (until ok) milestones. Never exclusive next.when."""
     for index, item in enumerate(milestones):
-        later = ids[index + 1 :]
-        next_linear = later[0] if later else None
-        if not item.get("next"):
-            props = _schema_properties(item.get("output_schema"))
-            for field, prop in props.items():
-                values = _enum_values(prop)
-                if len(values) < 2:
-                    continue
-                edges = []
-                for value in values:
-                    then = _match_branch(later, value) or next_linear
-                    if not then:
-                        edges = []
-                        break
-                    gate_rel = f"schemas/gates/{field}_{value}.schema.json"
-                    edges.append(
-                        {
-                            "when": gate_rel,
-                            "then": then,
-                            "schema": {
-                                "$schema": "https://json-schema.org/draft/2020-12/schema",
-                                "$id": f"{field}_{value}.gate.schema.json",
-                                "type": "object",
-                                "additionalProperties": True,
-                                "required": [field],
-                                "properties": {field: {"const": value}},
-                            },
-                        }
-                    )
-                if len(edges) >= 2:
-                    item["next"] = edges
-                    item["else"] = "BLOCKED"
-                    branch_ids = [edge["then"] for edge in edges]
-                    unique = list(dict.fromkeys(branch_ids))
-                    if len(unique) == len(edges):
-                        last_branch = max(ids.index(mid) for mid in unique)
-                        for mid in ids[last_branch + 1 :]:
-                            if mid not in unique and not by_id[mid].get("join"):
-                                by_id[mid]["join"] = unique
-                                break
-                    break
-        if item.get("foreach"):
+        loop = str(item.get("loop") or "none")
+        if loop in {"for", "judge"}:
+            if loop == "for" and not item.get("worker"):
+                item["worker"] = "ledger_receipt"
+            if loop == "judge" and not item.get("worker"):
+                item["worker"] = "ok_receipt"
             continue
-        props = _schema_properties(item.get("output_schema"))
-        tokens = _tokens(item["id"])
-        chosen: dict[str, Any] | None = None
-        fallback: dict[str, Any] | None = None
-        for path, prop in props.items():
-            if not isinstance(prop, dict) or prop.get("type") != "array":
+        if index > 0:
+            prev_props = _schema_properties(milestones[index - 1].get("output_schema"))
+            tokens = _tokens(item["id"])
+            chosen: dict[str, Any] | None = None
+            fallback: dict[str, Any] | None = None
+            for path, prop in prev_props.items():
+                if not isinstance(prop, dict) or prop.get("type") != "array":
+                    continue
+                if prop.get("maxItems") is None:
+                    continue
+                items_schema = prop.get("items") if isinstance(prop.get("items"), dict) else {"type": "object"}
+                stem = path.rstrip("s") or path
+                candidate = {
+                    "path": path,
+                    "item_schema": f"schemas/{stem}_item_v1.json",
+                    "max_items": int(prop["maxItems"]),
+                    "item_schema_object": items_schema,
+                }
+                if path in tokens or path.rstrip("s") in tokens:
+                    chosen = candidate
+                    break
+                if fallback is None:
+                    fallback = candidate
+            picked = chosen or fallback
+            if picked:
+                item["loop"] = "for"
+                item["ledger"] = picked
+                item["worker"] = item.get("worker") or "ledger_receipt"
+                item["receipt_schema"] = item.get("receipt_schema") or f"schemas/{item['id']}_receipt_v1.json"
                 continue
-            if prop.get("maxItems") is None:
-                continue
-            items_schema = prop.get("items") if isinstance(prop.get("items"), dict) else {"type": "object"}
-            stem = path.rstrip("s") or path
-            candidate = {
-                "path": path,
-                "item_schema": f"schemas/{stem}_item_v1.json",
-                "max_items": int(prop["maxItems"]),
-                "item_schema_object": items_schema,
-            }
-            if path in tokens or path.rstrip("s") in tokens:
-                chosen = candidate
-                break
-            if fallback is None:
-                fallback = candidate
-        if chosen or fallback:
-            item["foreach"] = chosen or fallback
+        intel = str(item.get("intelligence") or "none")
+        name = str(item.get("id") or "").lower()
+        if intel in {"image", "judge"} or any(hint in name for hint in JUDGE_HINTS):
+            item["loop"] = "judge"
+            item["worker"] = item.get("worker") or "ok_receipt"
+            item["receipt_schema"] = item.get("receipt_schema") or f"schemas/{item['id']}_receipt_v1.json"
+        item.pop("next", None)
+        item.pop("else", None)
+        item.pop("join", None)
     return milestones
 
 
 def control_table(milestones: list[dict[str, Any]]) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for item in milestones:
-        if item.get("next"):
+        loop = str(item.get("loop") or "none")
+        if loop == "for":
+            ledger = item.get("ledger") or {}
             rows.append(
                 {
                     "milestone": item["id"],
-                    "kind": "gate",
-                    "criterion": "json_schema",
-                    "else": item.get("else") or "BLOCKED",
-                    "edges": [
-                        {"when": edge.get("when"), "then": edge.get("then")}
-                        for edge in item["next"]
-                    ],
+                    "kind": "for",
+                    "criterion": "ledger_receipt",
+                    "path": ledger.get("path"),
+                    "max_items": ledger.get("max_items"),
+                    "item_schema": ledger.get("item_schema"),
+                    "worker": item.get("worker") or "ledger_receipt",
                 }
             )
-        if item.get("foreach"):
-            fe = item["foreach"]
+        elif loop == "judge":
             rows.append(
                 {
                     "milestone": item["id"],
-                    "kind": "foreach",
-                    "criterion": "json_schema",
-                    "path": fe.get("path"),
-                    "max_items": fe.get("max_items"),
-                    "item_schema": fe.get("item_schema"),
+                    "kind": "judge",
+                    "criterion": "ok_receipt",
+                    "worker": item.get("worker") or "ok_receipt",
+                    "receipt_schema": item.get("receipt_schema"),
                 }
             )
     return rows
@@ -1389,13 +1368,14 @@ def render_audit_markdown(report: dict[str, Any]) -> str:
             "",
             "## Schema control",
             "",
-            "If/else and foreach are JSON Schema checks on this.out, never tools and never semantic approval.",
+            "for = ledger milestone until remaining=0. judge (if) = retry until worker ok.",
+            "Proceed only on a repo worker receipt `{ok: true}` plus the asset.",
             "",
         ]
     )
     control = report.get("control") or []
     if not control:
-        lines.append("None. Linear chain; no enum/array gate on the proposed output schemas.")
+        lines.append("None. Linear chain; no for-ledger or judge-until-ok milestone.")
     else:
         lines.extend(
             [
@@ -1404,16 +1384,13 @@ def render_audit_markdown(report: dict[str, Any]) -> str:
             ]
         )
         for item in control:
-            if item.get("kind") == "gate":
-                detail = "; ".join(
-                    f"{edge.get('when')} → `{edge.get('then')}`" for edge in item.get("edges") or []
-                )
-                detail = f"{detail}; else `{item.get('else')}`"
-            else:
+            if item.get("kind") == "for":
                 detail = (
-                    f"path `{item.get('path')}` max_items={item.get('max_items')} "
-                    f"item_schema `{item.get('item_schema')}`"
+                    f"ledger `{item.get('path')}` max_items={item.get('max_items')} "
+                    f"worker `{item.get('worker')}`"
                 )
+            else:
+                detail = f"worker `{item.get('worker')}` receipt `{item.get('receipt_schema') or 'ok'}`"
             lines.append(
                 f"| `{item.get('milestone')}` | `{item.get('kind')}` | `{item.get('criterion')}` | {detail} |"
             )

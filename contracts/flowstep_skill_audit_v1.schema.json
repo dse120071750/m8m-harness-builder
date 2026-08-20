@@ -61,20 +61,11 @@
           "inputs": { "type": "object" },
           "input_schema": { "type": "object" },
           "output_schema": { "type": "object" },
-          "next": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "required": ["when", "then"],
-              "properties": {
-                "when": { "type": "string", "minLength": 1 },
-                "then": { "type": "string", "minLength": 1 },
-                "schema": { "type": "object" }
-              }
-            }
-          },
-          "else": { "type": "string" },
-          "foreach": {
+          "loop": { "enum": ["none", "for", "judge"] },
+          "worker": { "type": "string" },
+          "receipt_schema": { "type": "string" },
+          "max_attempts": { "type": "integer", "minimum": 1 },
+          "ledger": {
             "type": "object",
             "properties": {
               "path": { "type": "string" },
@@ -83,7 +74,15 @@
               "item_schema_object": { "type": "object" }
             }
           },
-          "join": { "type": "array", "items": { "type": "string" } }
+          "foreach": {
+            "type": "object",
+            "properties": {
+              "path": { "type": "string" },
+              "item_schema": { "type": "string" },
+              "max_items": { "type": "integer" },
+              "item_schema_object": { "type": "object" }
+            }
+          }
         }
       }
     },
@@ -97,13 +96,13 @@
         "required": ["milestone", "kind", "criterion"],
         "properties": {
           "milestone": { "type": "string", "minLength": 1 },
-          "kind": { "enum": ["gate", "foreach"] },
-          "criterion": { "const": "json_schema" },
-          "else": { "type": "string" },
-          "edges": { "type": "array" },
+          "kind": { "enum": ["for", "judge"] },
+          "criterion": { "type": "string" },
           "path": { "type": "string" },
           "max_items": { "type": "integer" },
-          "item_schema": { "type": "string" }
+          "item_schema": { "type": "string" },
+          "worker": { "type": "string" },
+          "receipt_schema": { "type": "string" }
         }
       }
     },

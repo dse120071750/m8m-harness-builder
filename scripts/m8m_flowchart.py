@@ -23,21 +23,21 @@ def _nodes(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
         mid = str(item.get("id") or "")
         if not mid:
             continue
-        foreach = item.get("foreach") if isinstance(item.get("foreach"), dict) else None
-        join = item.get("join")
+        ledger = item.get("ledger") if isinstance(item.get("ledger"), dict) else None
+        if ledger is None and isinstance(item.get("foreach"), dict):
+            ledger = item["foreach"]
         nodes.append(
             {
                 "id": mid,
                 "intelligence": item.get("intelligence") or item.get("model") or "none",
                 "tools": [str(tool) for tool in (item.get("tools") or []) if tool],
-                "next": [
-                    edge
-                    for edge in (item.get("next") or [])
-                    if isinstance(edge, dict) and edge.get("then")
-                ],
-                "else": item.get("else"),
-                "foreach": foreach,
-                "join": [str(src) for src in join] if isinstance(join, list) else None,
+                "loop": str(item.get("loop") or "none"),
+                "ledger": ledger,
+                "worker": item.get("worker"),
+                "receipt_schema": item.get("receipt_schema"),
+                "next": [],
+                "else": None,
+                "join": None,
                 "output_contract": str(item.get("output_contract") or ""),
                 "asset_kind": str(((item.get("asset") or {}).get("kind") if isinstance(item.get("asset"), dict) else "") or ""),
                 "flowsteps": normalize_flowsteps(
@@ -89,19 +89,16 @@ def render_mermaid(items: list[dict[str, Any]]) -> str:
         tool_line = f"<br/>{tools}" if tools else ""
         asset_kind = item.get("asset_kind") or ""
         asset_line = f"<br/>asset:{asset_kind}" if asset_kind else ""
-        fe = item.get("foreach")
-        for_line = ""
-        if fe:
-            for_line = f"<br/>for:{fe.get('path')} max={fe.get('max_items')}"
-        if item["next"]:
-            lines.append(f"    {mid}{{{mid}{asset_line}{for_line}{tool_line}}}")
-        else:
-            extra = ""
-            if item["intelligence"] not in {None, "none"}:
-                extra = f"<br/>intel:{item['intelligence']}"
-            lines.append(f'    {mid}["{mid}{extra}{asset_line}{for_line}{tool_line}"]')
-        if item["next"] and (item.get("else") or ELSE_BLOCKED) in {None, ELSE_BLOCKED, "BLOCKED"}:
-            lines.append(f"    {_blocked_id(mid)}{{{{{ELSE_BLOCKED}}}}}")
+        loop_line = ""
+        if item.get("loop") == "for" and item.get("ledger"):
+            fe = item["ledger"]
+            loop_line = f"<br/>for:{fe.get('path')} max={fe.get('max_items')}"
+        elif item.get("loop") == "judge":
+            loop_line = "<br/>judge until ok"
+        extra = ""
+        if item["intelligence"] not in {None, "none"}:
+            extra = f"<br/>intel:{item['intelligence']}"
+        lines.append(f'    {mid}["{mid}{extra}{asset_line}{loop_line}{tool_line}"]')
     if ids:
         lines.append(f"    request --> {ids[0]}")
     for item in nodes:
@@ -156,7 +153,8 @@ def render_flowchart(
         "One chart. Milestone to milestone. Each node is a required asset",
         "(file, image, json proof, or data). Missing it is BLOCKED.",
         "FlowSteps inside a node are a guide (one preferred tool each), not a compulsory path.",
-        "If/else and foreach are JSON Schema checks on this.out, not tools and not semantic approval.",
+        "for = ledger milestone until remaining=0. judge (if) = retry until worker ok.",
+        "GitHub publishes a JPEG, not a mermaid rich display.",
         "",
         f"- flow_id: `{flow_id or title}`",
         f"- source: `{source}`",
@@ -186,13 +184,11 @@ def render_flowchart(
         lines.append("| (none) | | | | |")
     for item in nodes:
         tools = ", ".join(f"`{tool}`" for tool in item["tools"]) or "none"
-        if item["next"]:
-            control = "gate"
-        elif item.get("join"):
-            control = "join"
-        elif item.get("foreach"):
-            fe = item["foreach"]
+        if item.get("loop") == "for" and item.get("ledger"):
+            fe = item["ledger"]
             control = f"for `{fe.get('path')}` max={fe.get('max_items')}"
+        elif item.get("loop") == "judge":
+            control = "judge until ok"
         else:
             control = "linear"
         asset = item.get("asset_kind") or "required"
@@ -221,46 +217,43 @@ def render_flowchart(
             )
     if not guide_rows:
         lines.append("| (none) | | | |")
-    lines.extend(["", "## Gates (if / else)", ""])
-    gate_rows = [item for item in nodes if item["next"]]
-    if not gate_rows:
-        lines.append("None. Linear chain; no `next.when`.")
+    lines.extend(["", "## For (ledger)", ""])
+    fors = [item for item in nodes if item.get("loop") == "for"]
+    if not fors:
+        lines.append("None. No ledger-walking milestone.")
     else:
         lines.extend(
             [
-                "| From | When (JSON Schema) | Then |",
+                "| Milestone | Ledger path | Item schema | max_items | Worker |",
+                "| --- | --- | --- | ---: | --- |",
+            ]
+        )
+        for item in fors:
+            fe = item.get("ledger") or {}
+            lines.append(
+                f"| `{item['id']}` | `{fe.get('path')}` | `{fe.get('item_schema')}` | "
+                f"{fe.get('max_items')} | `{item.get('worker') or 'ledger_receipt'}` |"
+            )
+    lines.extend(["", "## Judge (until ok)", ""])
+    judges = [item for item in nodes if item.get("loop") == "judge"]
+    if not judges:
+        lines.append("None. No judge-until-ok milestone.")
+    else:
+        lines.extend(
+            [
+                "| Milestone | Worker | Receipt schema |",
                 "| --- | --- | --- |",
             ]
         )
-        for item in gate_rows:
-            for edge in item["next"]:
-                lines.append(
-                    f"| `{item['id']}` | `{edge.get('when')}` `{_when_label(edge)}` | `{edge['then']}` |"
-                )
+        for item in judges:
             lines.append(
-                f"| `{item['id']}` | else | `{item.get('else') or ELSE_BLOCKED}` |"
-            )
-    lines.extend(["", "## Loops (foreach)", ""])
-    loops = [item for item in nodes if item.get("foreach")]
-    if not loops:
-        lines.append("None. No typed array with `maxItems` on a milestone output.")
-    else:
-        lines.extend(
-            [
-                "| Milestone | Path on this.out | Item schema | max_items |",
-                "| --- | --- | --- | ---: |",
-            ]
-        )
-        for item in loops:
-            fe = item["foreach"]
-            lines.append(
-                f"| `{item['id']}` | `{fe.get('path')}` | `{fe.get('item_schema')}` | "
-                f"{fe.get('max_items')} |"
+                f"| `{item['id']}` | `{item.get('worker') or 'ok_receipt'}` | "
+                f"`{item.get('receipt_schema') or 'schemas/ok_receipt.json'}` |"
             )
     lines.extend(
         [
             "",
-            "Criterion is `schema_validate` (Draft 2020-12). There is no loop-until-the-model-is-happy.",
+            "Proceed only when the worker receipt is `ok: true` and the milestone asset PASSes.",
             "",
         ]
     )

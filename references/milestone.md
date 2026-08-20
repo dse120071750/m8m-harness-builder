@@ -24,9 +24,9 @@ M8M:     node = one milestone (harness)
 ```
 
 The driver advances milestone → milestone. Crop/hash stay FlowSteps
-inside a milestone. n8n IF/loop are **schema gates on the milestone
-check** (`next.when` / `foreach` against **this.out**), not canvas
-nodes, not FlowSteps, not tools, and not intelligence.
+inside a milestone. A **for loop** and a **judge loop (if)** **are**
+milestones. An internal repo worker writes `{ok: true|false}`. That
+receipt guards proceed. Intelligence may draft; it may not set `ok`.
 
 Intelligence is optional *on* a milestone (`NEED_MODEL`). It is not a
 third canvas node.
@@ -104,32 +104,39 @@ A **tool** is the Python package. A **FlowStep** is the atomic goal that
 `flowsteps/tools/<id>/`, not drawing another milestone. See
 `references/tool-vs-intelligence.md`.
 
-## Schema gates (if/else and loop)
+## For (ledger) and judge (if)
 
-Criterion is JSON Schema validity on **this.out**, never a model, never
-a tool fan-out.
+Both are canvas milestones. Linear next. No exclusive `next.when`.
 
-- **if:** `next[].when` + `else`. After the asset PASSes, the first gate
-  schema that validates `this.out` picks the next milestone.
-  `else: BLOCKED` is allowed. If an enum on this.out does not match later
-  ids, every `then` is the next linear milestone — still an if on the
-  asset check.
-- **for:** `foreach.path` + `item_schema` + `max_items`. This.out has a
-  typed array (`maxItems` required). That is the check. Assemble still
-  runs once. There is no `foreach.tools`.
-- Join after a real fork: `join: [url_ready, file_ready]` binds the PASS
-  branch. Downstream input is still a schema (`oneOf` / open object).
+- **for:** previous.out is a ledger (array + `maxItems` + item schema).
+  This milestone walks remaining items and produces each asset until
+  `remaining == 0`. One canvas box, not one node per item.
+- **judge (if):** retry until the worker receipt is `ok: true`. Image
+  generation and spatial alignment always use this.
+- **worker:** required Python at `flowsteps/tools/<id>/`. Writes a closed
+  receipt with `ok`. Missing receipt or `ok: false` with no budget →
+  BLOCK. `ok: true` still needs the milestone asset.
 
-Audit infers `next` from `enum`/`const` fields on this.out, and
-`foreach` from an array on **this** output schema that already declares
-`maxItems`. Intelligence on the milestone does not skip the for-check.
-Generate writes the gate and item schemas. The model does not approve
-the branch.
+```yaml
+- id: images_bound
+  loop: for
+  ledger:
+    path: items
+    item_schema: schemas/image_item_v1.json
+    max_items: 32
+  worker: ledger_receipt
+- id: card_aligned
+  loop: judge
+  worker: alignment_judge
+  intelligence: image
+```
 
-The one chart is `planning/m8m-flowchart.md` (Gates table + Loops table
-of schema paths; GitHub publishes a JPEG, not a mermaid rich display).
-Audit and generate both write that file. It is not embedded in the
-audit report or the instruction.
+Audit infers `loop: for` from a previous array with `maxItems`, and
+`loop: judge` from image/align/generate names or `intelligence: image|judge`.
+The model does not approve proceed.
+
+The one chart is `planning/m8m-flowchart.md` (For table + Judge table;
+GitHub publishes a JPEG, not a mermaid rich display).
 
 Teaching contracts (`references/*.md` on a Codex or Claude skill) belong
 on the flow: `<repo>/flowsteps/flows/<id>/references/`. Same ownership as

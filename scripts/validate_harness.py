@@ -73,76 +73,48 @@ def _validate_control(
     attempts = step.get("max_model_attempts")
     if attempts is not None and (not isinstance(attempts, int) or attempts < 1):
         errors.append(f"{step_id}: max_model_attempts must be a positive integer")
-    if step.get("next"):
-        if not step.get("else"):
-            errors.append(f"{step_id}: next requires else")
-        elif step["else"] != "BLOCKED" and step["else"] not in declared:
-            errors.append(f"{step_id}: else references unknown milestone {step['else']}")
-        prev = _previous_output_schema(skill_dir, flow, {"inputs": {step_id: f"{step_id}.{step['output_contract']}"}, "id": "_gate"})
-        # gates apply to THIS milestone's output, not previous
-        out_path = skill_dir / step["output_schema"]
-        out_names: set[str] = set()
-        if out_path.is_file():
-            try:
-                out_names = schema_property_names(read_json(out_path))
-            except FlowError as exc:
-                errors.append(str(exc))
-        for edge in step["next"]:
-            extra_keys = set(edge) - {"when", "then"}
-            if extra_keys:
-                errors.append(f"{step_id}: gate edge has extra fields {sorted(extra_keys)}; only when/then")
-            then = str(edge.get("then") or "")
-            if then not in declared:
-                errors.append(f"{step_id}: next.then unknown milestone {then}")
-            when = skill_dir / str(edge.get("when") or "")
-            if not when.is_file():
-                errors.append(f"{step_id}: missing gate schema {edge.get('when')}")
-                continue
-            try:
-                gate = read_json(when)
-            except FlowError as exc:
-                errors.append(str(exc))
-                continue
-            extra = schema_required_names(gate) - out_names
-            if extra and out_names:
-                errors.append(f"{step_id}: gate {when.name} uses fields not on output schema: {sorted(extra)}")
-    if step.get("foreach"):
-        fe = step["foreach"]
-        if not isinstance(fe.get("max_items"), int) or fe["max_items"] < 1:
-            errors.append(f"{step_id}: foreach.max_items must be a positive integer")
-        item_schema = skill_dir / str(fe.get("item_schema") or "")
+    loop = str(step.get("loop") or "none")
+    if step.get("next") or step.get("else") or step.get("join"):
+        errors.append(f"{step_id}: exclusive next.when/else/join is removed; if is the judge loop")
+    if loop in {"for", "judge"} and not step.get("worker"):
+        errors.append(f"{step_id}: loop={loop} requires a repo worker tool")
+    if loop == "for":
+        ledger = step.get("ledger") or {}
+        if not isinstance(ledger, dict) or not ledger.get("path"):
+            errors.append(f"{step_id}: loop=for requires ledger.path")
+        if not isinstance(ledger.get("max_items"), int) or ledger.get("max_items", 0) < 1:
+            errors.append(f"{step_id}: ledger.max_items must be a positive integer")
+        item_schema = skill_dir / str(ledger.get("item_schema") or "")
         if not item_schema.is_file():
-            errors.append(f"{step_id}: missing foreach.item_schema {fe.get('item_schema')}")
-        out_path = skill_dir / step["output_schema"]
-        out = None
-        if out_path.is_file():
-            try:
-                out = read_json(out_path)
-            except FlowError as exc:
-                errors.append(str(exc))
-        if out:
-            props = out.get("properties") or {}
-            root = str(fe.get("path") or "").split(".", 1)[0]
+            errors.append(f"{step_id}: missing ledger.item_schema {ledger.get('item_schema')}")
+        prev = _previous_output_schema(skill_dir, flow, step)
+        if prev:
+            props = prev.get("properties") or {}
+            root = str(ledger.get("path") or "").split(".", 1)[0]
             field = props.get(root)
             if not isinstance(field, dict) or field.get("type") != "array":
-                errors.append(
-                    f"{step_id}: foreach.path {fe.get('path')} is not an array on this output schema"
-                )
+                errors.append(f"{step_id}: ledger.path {ledger.get('path')} is not an array on the previous output schema")
             else:
                 schema_max = field.get("maxItems")
                 if schema_max is None:
-                    errors.append(f"{step_id}: output {root} must declare maxItems")
-                elif isinstance(fe.get("max_items"), int) and fe["max_items"] > int(schema_max):
+                    errors.append(f"{step_id}: previous output {root} must declare maxItems")
+                elif isinstance(ledger.get("max_items"), int) and ledger["max_items"] > int(schema_max):
                     errors.append(
-                        f"{step_id}: foreach.max_items {fe['max_items']} exceeds schema maxItems {schema_max}"
+                        f"{step_id}: ledger.max_items {ledger['max_items']} exceeds schema maxItems {schema_max}"
                     )
-    if step.get("join"):
-        for mid in step["join"]:
-            if mid not in declared:
-                errors.append(f"{step_id}: join references unknown milestone {mid}")
-            source_index = next((i for i, item in enumerate(flow["steps"]) if item["id"] == mid), -1)
-            if source_index >= index:
-                errors.append(f"{step_id}: join {mid} must be an earlier milestone")
+    if loop in {"for", "judge"}:
+        receipt = skill_dir / str(step.get("receipt_schema") or "")
+        if not receipt.is_file():
+            errors.append(f"{step_id}: missing receipt_schema {step.get('receipt_schema')}")
+        else:
+            try:
+                schema = read_json(receipt)
+            except FlowError as exc:
+                errors.append(str(exc))
+            else:
+                names = schema_required_names(schema)
+                if "ok" not in names and "ok" not in (schema.get("properties") or {}):
+                    errors.append(f"{step_id}: receipt schema must require ok")
 
 
 def validate_harness(
@@ -216,7 +188,7 @@ def validate_harness(
                 errors.append(f"{step_id}: milestone output is not a required asset (closed schema with required fields)")
             errors.extend(lint_file_payload_schema(schema, label=f"{step_id}.{schema_key}"))
         if is_control_name(step_id) and not flow.get("_v3"):
-            errors.append(f"{step_id}: if/loop/switch are schema gates, not milestones")
+            errors.append(f"{step_id}: if/loop/switch names are notes; for/judge are milestones")
         _validate_control(skill_dir, flow, step, index, declared, errors)
         contract = step["output_contract"]
         owner = seen_contracts.get(contract)

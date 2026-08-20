@@ -267,6 +267,8 @@ def generate_v3_flow(
         for tool_id in spec.get("tools") or []:
             if tool_id:
                 listed_tools.add(str(tool_id))
+        if spec.get("worker"):
+            listed_tools.add(str(spec["worker"]))
         for raw in spec.get("flowsteps") or []:
             if isinstance(raw, dict) and raw.get("tool"):
                 listed_tools.add(str(raw["tool"]))
@@ -325,29 +327,26 @@ def generate_v3_flow(
             item["draft_schema"] = f"milestones/{mid}/draft.schema.json"
         if spec.get("max_model_attempts"):
             item["max_model_attempts"] = spec["max_model_attempts"]
-        if spec.get("next"):
-            edges = []
-            gate_schemas: dict[str, Any] = dict(spec.get("_gate_schemas") or {})
-            for edge in spec["next"]:
-                public_edge = {"when": edge["when"], "then": edge["then"]}
-                edges.append(public_edge)
-                if edge.get("schema"):
-                    gate_schemas[str(edge["when"])] = edge["schema"]
-            item["next"] = edges
-            item["else"] = spec.get("else") or "BLOCKED"
-            item["_gate_schemas"] = gate_schemas
-        if spec.get("foreach"):
-            fe = dict(spec["foreach"])
-            item["_item_schema_object"] = fe.pop("item_schema_object", None)
-            fe.pop("tools", None)
-            fe.pop("collect", None)
-            item["foreach"] = fe
-        if spec.get("join"):
-            item["join"] = spec["join"]
-            item["_input_schema_object"] = {
-                "$schema": "https://json-schema.org/draft/2020-12/schema",
-                "type": "object",
-                "additionalProperties": True,
+        loop = str(spec.get("loop") or "none")
+        if loop in {"for", "judge"}:
+            item["loop"] = loop
+            item["worker"] = spec.get("worker") or ("ledger_receipt" if loop == "for" else "ok_receipt")
+            item["receipt_schema"] = spec.get("receipt_schema") or f"schemas/{mid}_receipt_v1.json"
+            if spec.get("max_attempts"):
+                item["max_attempts"] = spec["max_attempts"]
+        if spec.get("ledger") or spec.get("foreach"):
+            ledger = dict(spec.get("ledger") or spec.get("foreach") or {})
+            item["_item_schema_object"] = ledger.pop("item_schema_object", None)
+            ledger.pop("tools", None)
+            ledger.pop("collect", None)
+            if loop == "none":
+                item["loop"] = "for"
+                item["worker"] = item.get("worker") or "ledger_receipt"
+                item["receipt_schema"] = item.get("receipt_schema") or f"schemas/{mid}_receipt_v1.json"
+            item["ledger"] = {
+                "path": ledger.get("path") or "items",
+                "item_schema": ledger.get("item_schema") or f"schemas/{mid}_item_v1.json",
+                "max_items": ledger.get("max_items") or 8,
             }
         items.append(item)
         previous = item
@@ -405,6 +404,8 @@ def generate_v3_flow(
             "INTELLIGENCE": item["intelligence"],
             "IS_LAST": "True" if item["_is_last"] else "False",
             "ASSET_KIND": item.get("_asset_kind") or "file",
+            "WORKER": item.get("worker") or "",
+            "LOOP": item.get("loop") or "none",
         }
         assemble = harness / "milestones" / mid / "assemble.py"
         if _write_text(assemble, _render("milestone/assemble.py", mapping), overwrite=overwrite):
@@ -421,13 +422,29 @@ def generate_v3_flow(
         }
         if _write_json(draft, open_draft, overwrite=overwrite):
             created.append(str(draft))
-        for rel, schema_obj in (item.get("_gate_schemas") or {}).items():
-            if isinstance(schema_obj, dict) and _write_json(harness / rel, schema_obj, overwrite=overwrite):
-                created.append(str(harness / rel))
-        if item.get("foreach") and isinstance(item.get("_item_schema_object"), dict):
-            item_schema_path = harness / str(item["foreach"]["item_schema"])
+        if item.get("ledger") and isinstance(item.get("_item_schema_object"), dict):
+            item_schema_path = harness / str(item["ledger"]["item_schema"])
             if _write_json(item_schema_path, item["_item_schema_object"], overwrite=overwrite):
                 created.append(str(item_schema_path))
+        if item.get("loop") in {"for", "judge"}:
+            receipt_path = harness / str(item.get("receipt_schema") or f"schemas/{mid}_receipt_v1.json")
+            receipt_obj = {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "$id": f"{mid}.receipt.schema.json",
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["ok"],
+                "properties": {
+                    "ok": {"type": "boolean"},
+                    "remaining": {"type": "integer", "minimum": 0},
+                    "done": {"type": "integer", "minimum": 0},
+                    "code": {"type": "string"},
+                    "attempt": {"type": "integer", "minimum": 1},
+                    "item_id": {"type": "string"},
+                },
+            }
+            if _write_json(receipt_path, receipt_obj, overwrite=overwrite):
+                created.append(str(receipt_path))
         previous_id = mid
     loaded = load_flow(harness, flow_path)
     plan = toolbox_plan or build_toolbox_plan(
@@ -562,6 +579,8 @@ def generate_from_audit(
     for item in proposed:
         for tool_id in item.get("tools") or []:
             tool_ids.append(str(tool_id))
+        if item.get("worker"):
+            tool_ids.append(str(item["worker"]))
     unique_tools: list[str] = []
     for tool_id in tool_ids:
         if tool_id and tool_id not in unique_tools:
@@ -581,12 +600,14 @@ def generate_from_audit(
             "asset": item.get("asset") if isinstance(item.get("asset"), dict) else None,
             "inputs": item.get("inputs"),
             "model_justification": item.get("model_justification"),
-            "next": item.get("next"),
-            "else": item.get("else"),
+            "loop": item.get("loop"),
+            "ledger": item.get("ledger"),
+            "worker": item.get("worker"),
+            "receipt_schema": item.get("receipt_schema"),
+            "max_attempts": item.get("max_attempts"),
             "foreach": item.get("foreach"),
             "on_tool_fail": item.get("on_tool_fail"),
             "max_model_attempts": item.get("max_model_attempts"),
-            "join": item.get("join"),
             "_gate_schemas": {
                 str(edge["when"]): edge["schema"]
                 for edge in (item.get("next") or [])
@@ -674,20 +695,20 @@ def yaml_dump_v3(flow: dict[str, Any]) -> str:
         if item.get("draft_schema"):
             lines.append(f"    draft_schema: {item['draft_schema']}")
         lines.append(f"    handler: {item['handler']}")
-        if item.get("next"):
-            lines.append("    next:")
-            for edge in item["next"]:
-                lines.append(f"      - when: {edge['when']}")
-                lines.append(f"        then: {edge['then']}")
-            lines.append(f"    else: {item.get('else') or 'BLOCKED'}")
-        if item.get("foreach"):
-            fe = item["foreach"]
-            lines.append("    foreach:")
+        if item.get("loop") in {"for", "judge"}:
+            lines.append(f"    loop: {item['loop']}")
+            if item.get("worker"):
+                lines.append(f"    worker: {item['worker']}")
+            if item.get("receipt_schema"):
+                lines.append(f"    receipt_schema: {item['receipt_schema']}")
+            if item.get("max_attempts"):
+                lines.append(f"    max_attempts: {item['max_attempts']}")
+        if item.get("ledger"):
+            fe = item["ledger"]
+            lines.append("    ledger:")
             lines.append(f"      path: {fe['path']}")
             lines.append(f"      item_schema: {fe['item_schema']}")
             lines.append(f"      max_items: {fe['max_items']}")
-        if item.get("join"):
-            lines.append(f"    join: [{', '.join(item['join'])}]")
     lines.append("")
     return "\n".join(lines)
 

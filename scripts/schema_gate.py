@@ -1,4 +1,4 @@
-"""Schema-only if/else and foreach on the milestone asset. No tool loops."""
+"""Receipt guard for for/judge milestones. Schema-only ok / not-ok."""
 
 from __future__ import annotations
 
@@ -118,3 +118,47 @@ def check_foreach(
     for index, item in enumerate(items):
         if not schema_accepts(item, item_schema_path):
             raise FlowError(f"{step['id']}: foreach item {index} failed {item_schema_rel}")
+
+
+def unwrap_source(data: dict[str, Any], path: str) -> dict[str, Any]:
+    if not isinstance(data, dict):
+        return data
+    if path.split(".")[0] in data:
+        return data
+    if len(data) == 1:
+        only = next(iter(data.values()))
+        if isinstance(only, dict) and path.split(".")[0] in only:
+            return only
+    return data
+
+
+def ledger_items(data: dict[str, Any], path: str) -> list[Any]:
+    source = unwrap_source(data, path)
+    items = lookup_path(source, path)
+    if not isinstance(items, list):
+        raise FlowError(f"ledger {path} is not an array")
+    return items
+
+
+def read_receipt(
+    data: dict[str, Any],
+    *,
+    skill_dir: Path | None = None,
+    schema_rel: str | None = None,
+    step_id: str = "milestone",
+) -> dict[str, Any]:
+    """Require a worker receipt with boolean ok. Model output is not enough."""
+    receipt: dict[str, Any] | None = None
+    if isinstance(data.get("receipt"), dict):
+        receipt = dict(data["receipt"])
+    elif isinstance(data.get("ok"), bool):
+        receipt = {key: data[key] for key in ("ok", "remaining", "done", "item_id", "code", "attempt") if key in data}
+    if not isinstance(receipt, dict) or "ok" not in receipt:
+        raise FlowError(f"{step_id}: worker receipt missing (need ok true|false)")
+    if not isinstance(receipt["ok"], bool):
+        raise FlowError(f"{step_id}: receipt.ok must be a boolean")
+    if skill_dir is not None and schema_rel:
+        path = skill_dir / str(schema_rel)
+        if path.is_file() and not schema_accepts(receipt, path):
+            raise FlowError(f"{step_id}: receipt failed {schema_rel}")
+    return receipt

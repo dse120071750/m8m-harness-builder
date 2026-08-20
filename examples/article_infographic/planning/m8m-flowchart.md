@@ -3,7 +3,7 @@
 One chart. Milestone to milestone. Each node is a required asset
 (file, image, json proof, or data). Missing it is BLOCKED.
 FlowSteps inside a node are a guide (one preferred tool each), not a compulsory path.
-If/else and foreach are JSON Schema checks on this.out, not tools and not semantic approval.
+for = ledger milestone until remaining=0. judge (if) = retry until worker ok.
 
 - flow_id: `article_infographic_zh_hant_v2`
 - source: `audit`
@@ -11,7 +11,7 @@ If/else and foreach are JSON Schema checks on this.out, not tools and not semant
 
 ## Chart
 
-![article infographic M8M chart: request to source_ready (kind=url or kind=text, else BLOCKED), then plan_frozen (for: pages max=7), prompts_frozen, assets_bound, cards_rendered, release_packaged](m8m-flowchart.jpg)
+![article infographic M8M chart: linear milestones, for-ledger on pages, judge-until-ok on cards](m8m-flowchart.jpg)
 
 ## Toolbox plan
 
@@ -33,11 +33,11 @@ develop this tool; a stub is a successful sketch.
 
 | Milestone | Asset | Intelligence | Tools | Control |
 | --- | --- | --- | --- | --- |
-| `source_ready` | `file` | `none` | `normalize_source_blocks`, `hash_bind` | gate |
-| `plan_frozen` | `file` | `completion` | `hash_bind`, `schema_validate` | for `pages` max=7 |
+| `source_ready` | `file` | `none` | `normalize_source_blocks`, `hash_bind` | linear |
+| `plan_frozen` | `file` | `completion` | `hash_bind`, `schema_validate` | linear (emits pages ledger) |
 | `prompts_frozen` | `file` | `completion` | `hash_bind`, `schema_validate` | linear |
-| `assets_bound` | `file` | `image` | `hash_bind`, `image_size_check` | linear |
-| `cards_rendered` | `image` | `none` | `render_html_shell`, `footer_geometry_qa`, `hash_bind` | linear |
+| `assets_bound` | `file` | `image` | `hash_bind`, `image_size_check`, `ledger_receipt` | for `pages` max=7 |
+| `cards_rendered` | `image` | `none` | `render_html_shell`, `footer_geometry_qa`, `hash_bind`, `ok_receipt` | judge until ok |
 | `release_packaged` | `file` | `judge` | `footer_geometry_qa`, `hash_bind`, `materialize_package`, `io_manifest` | linear |
 
 ## FlowSteps (guide)
@@ -63,22 +63,20 @@ If it fails, recover like a normal agent. The milestone asset is still compulsor
 | `release_packaged` | 3 | `materialize_package` | `materialize_package` |
 | `release_packaged` | 4 | `io_manifest` | `io_manifest` |
 
-## Gates (if / else)
+## For (ledger)
 
-| From | When (JSON Schema) | Then |
+| Milestone | Ledger path | Item schema | max_items | Worker |
+| --- | --- | --- | ---: | --- |
+| `assets_bound` | `pages` | `schemas/page_item_v1.json` | 7 | `ledger_receipt` |
+
+`plan_frozen` freezes the page ledger. `assets_bound` walks it until remaining=0. One canvas node, not one node per page.
+
+## Judge (until ok)
+
+| Milestone | Worker | Receipt schema |
 | --- | --- | --- |
-| `source_ready` | `schemas/gates/kind_url.schema.json` `kind=url` | `plan_frozen` |
-| `source_ready` | `schemas/gates/kind_text.schema.json` `kind=text` | `plan_frozen` |
-| `source_ready` | else | `BLOCKED` |
+| `cards_rendered` | `ok_receipt` | `schemas/cards_rendered_receipt_v1.json` |
 
-Intake is URL or text. That enum is on `source_ready.out`. Both branches then go to `plan_frozen`. The model does not pick the next milestone.
+Render and spatial alignment stay on this milestone until the worker receipt is `ok: true`. Budget gone → BLOCK.
 
-## Loops (foreach)
-
-| Milestone | Path on this.out | Item schema | max_items |
-| --- | --- | --- | ---: |
-| `plan_frozen` | `pages` | `schemas/page_item_v1.json` | 7 |
-
-The plan asset is a typed array of at most seven pages. That is the milestone check. Assemble still runs once. Tools are not looped.
-
-Criterion is `schema_validate` (Draft 2020-12). There is no loop-until-the-model-is-happy.
+Proceed only when the worker receipt is `ok: true` and the milestone asset PASSes.

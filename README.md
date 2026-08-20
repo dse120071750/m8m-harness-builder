@@ -48,7 +48,7 @@ M8M:   节点 = 一个里程碑（护栏）
   → 每个里面列出 FlowStep（原子；优先一支工具）
   → 开发该工具（existing / promote / generate-new）
   → 写一张 FlowStep 表 + 一张里程碑流程图
-     （if/for 挂在产出检查上，不挂在工具上）
+     （for = ledger 里程碑；if = judge until ok）
   → scaffold flow.yaml 和 tool stub
 ```
 
@@ -81,7 +81,7 @@ FlowStep 按表的顺序走。别把这条路径当成 production lock。别跳�
 
 一张图。节点是里程碑，不是 crop。每个节点标必交的 asset。没有就 BLOCKED。FlowStep 不是额外节点，它们在上面的表里。GitHub 上用 PNG/JPEG，不用 mermaid 富文本。
 
-![M8M 里程碑图：request 到 source_ready（if: kind=url 或 kind=text，else BLOCKED），再到 plan_frozen（for: pages max=7）和 release_packaged](docs/m8m-chart.jpg)
+![M8M 里程碑图：source_ready → for ledger → judge until ok → release_packaged](docs/m8m-chart.jpg)
 
 | 种类 | 里程碑上的证明 |
 | --- | --- |
@@ -90,20 +90,16 @@ FlowStep 按表的顺序走。别把这条路径当成 production lock。别跳�
 | `json` | 封闭对象，必填字段 |
 | `data` | 同上：typed 必填字段 |
 
-if/else 和 foreach 挂在 **this.out** 上，是里程碑产出检查，不是工具循环，也不是模型批准。
+**for** 和 **judge（if）** 都是里程碑。内部 worker（repo 工具）写出 `{ok: true|false}` 收据，才能往下走。模型不能填 `ok`。
 
-- **if：** 产出 PASSes 之后，第一个能验证 this.out 的 `next.when` 选下一关。对不上就 BLOCK。
-- **for：** this.out 里有带 `maxItems` 的 typed 数组。这就是检查。Assemble 仍跑一次。不要按条跑工具。
+- **for：** 上一关交出 ledger（typed 数组 + `maxItems`）。这一关按 ledger 逐条产出，直到 `remaining=0`。例如从数据库拉图片列表 → 待办 ledger → 绑完每一张。
+- **judge（if）：** 做到 worker 说 ok 为止。出图、空间对齐永远走这一关。`ok: false` 还有预算就停在本关重做；预算用完 BLOCK。
+- 没有 exclusive `next.when`。url / text 只是产出上的字段。
 
-| From | When | Then |
+| Milestone | loop | Worker |
 | --- | --- | --- |
-| `source_ready` | `kind=url` | `plan_frozen` |
-| `source_ready` | `kind=text` | `plan_frozen` |
-| `source_ready` | else | BLOCKED |
-
-| Milestone | Path on this.out | max_items |
-| --- | --- | ---: |
-| `plan_frozen` | `pages` | 7 |
+| `images_bound` | for（ledger `items` max=32） | `ledger_receipt` |
+| `card_aligned` | judge until ok | `alignment_judge` |
 
 `--milestone` 写成 `crop_4x5` 只是备注：看起来像工具。不是拒绝画图。
 
@@ -113,7 +109,9 @@ if/else 和 foreach 挂在 **this.out** 上，是里程碑产出检查，不是�
 | --- | --- |
 | 首选 FlowStep 工具失败 | 像普通 agent 找路（`on_tool_fail: need_model`）。先用工具。 |
 | 里程碑产出缺失或不合格 | BLOCK。下一关不开始。 |
-| if/for 检查没过（this.out） | BLOCK。不是工具失败，不走 agent 找路。 |
+| Worker 收据 `ok: false`，还有预算 | 停在本关（for 下一条 / judge 重做）。 |
+| Worker 收据 `ok: false`，预算用完 | BLOCK。 |
+| 收据 `ok: true` 但产出不合格 | BLOCK。收据不能免产出。 |
 | Generate-new / stub `tool.py` | Writer PASS。稍后填。 |
 | 里程碑上的 intelligence | 可选，用来做出产出。不能跳过首选工具。不能挑选下一个里程碑。不能取消 for 检查。 |
 
@@ -147,12 +145,12 @@ python scripts/generate_harness.py --codebase <repo> --from-audit <skill>/planni
 会写出：
 
 - `planning/flowstep-audit.md`
-- `planning/m8m-flowchart.md`：图（护栏）+ FlowStep 表（指引）+ 来源表 + Gates/Loops（this.out）
+- `planning/m8m-flowchart.md`：图（护栏）+ FlowStep 表（指引）+ For/Judge 表
 - `<repo>/flowsteps/flows/<flow_id>/`
 - `<repo>/flowsteps/tools/<id>/`（seed 或 stub）
 - `<repo>/.agents/skills/<name>/SKILL.md` 和 `<repo>/.claude/skills/<name>/SKILL.md`
 
-图、表、stub、每个里程碑的 asset schema 都在，factory 就 PASS。`validate_harness.py` 可选，用来把工具填实。`run_flow.py` 是护栏：工具失败走 agent，没有产出或 if/for 检查没过就 BLOCK。
+图、表、stub、每个里程碑的 asset schema 都在，factory 就 PASS。`validate_harness.py` 可选，用来把工具填实。`run_flow.py` 是护栏：工具失败走 agent；没有产出或 worker 收据不是 ok 就 BLOCK。
 
 真实样本（一篇文章做成七页 infographic）：[examples/article_infographic/planning/m8m-flowchart.md](examples/article_infographic/planning/m8m-flowchart.md)
 
@@ -248,7 +246,7 @@ identify milestones
   → list FlowSteps inside each (atomic; prefer ONE tool)
   → develop that tool (existing / promote / generate-new)
   → write one FlowStep table + one milestone flowchart
-     (if/for attach to the asset check, not to tools)
+     (for = ledger milestone; if = judge until ok)
   → scaffold flow.yaml and tool stubs
 ```
 
@@ -283,7 +281,7 @@ A real run on a seven-page article infographic skill is in [examples/article_inf
 
 One chart. Nodes are milestones, not crops. Each node names the required asset. If it is missing, the run is BLOCKED. FlowSteps are not extra nodes. They live in the table above. On GitHub this is a JPEG, not a mermaid rich display.
 
-![M8M milestone chart: request to source_ready (if: kind=url or kind=text, else BLOCKED), then plan_frozen (for: pages max=7) and release_packaged](docs/m8m-chart.jpg)
+![M8M milestone chart: source_ready then for-ledger then judge-until-ok then release_packaged](docs/m8m-chart.jpg)
 
 | Kind | Proof on the milestone |
 | --- | --- |
@@ -292,20 +290,16 @@ One chart. Nodes are milestones, not crops. Each node names the required asset. 
 | `json` | closed object with required fields |
 | `data` | same: typed required fields |
 
-if/else and foreach attach to **this.out**. They are the milestone check, not a tool loop, and not a model verdict.
+**for** and **judge (if)** are milestones. An internal worker (repo tool) writes `{ok: true|false}`. That receipt is the only proceed guard. The model must not set `ok`.
 
-- **if:** after the asset PASSes, the first `next.when` schema that validates this.out picks the next milestone. No match → BLOCK.
-- **for:** this.out has a typed array with `maxItems`. That is the check. Assemble still runs once. Do not loop tools.
+- **for:** the previous asset is a ledger (typed array + `maxItems`). This milestone produces each item's asset until `remaining=0`. Example: fetch image rows from a DB → freeze the todo list → bind every image.
+- **judge (if):** keep going until the worker says ok. Image generation and spatial alignment always use this. `ok: false` with budget left → stay and retry. Budget gone → BLOCK.
+- No exclusive `next.when`. url / text is a field on the asset.
 
-| From | When | Then |
+| Milestone | loop | Worker |
 | --- | --- | --- |
-| `source_ready` | `kind=url` | `plan_frozen` |
-| `source_ready` | `kind=text` | `plan_frozen` |
-| `source_ready` | else | BLOCKED |
-
-| Milestone | Path on this.out | max_items |
-| --- | --- | ---: |
-| `plan_frozen` | `pages` | 7 |
+| `images_bound` | for (ledger `items` max=32) | `ledger_receipt` |
+| `card_aligned` | judge until ok | `alignment_judge` |
 
 A name like `crop_4x5` on `--milestone` is a note that it looks like a tool. It is not a refusal to draw.
 
@@ -315,7 +309,9 @@ A name like `crop_4x5` on `--milestone` is a note that it looks like a tool. It 
 | --- | --- |
 | Preferred FlowStep tool fails | Recover like a normal agent (`on_tool_fail: need_model`). Try the tool first. |
 | Milestone asset missing or invalid | BLOCK. The next milestone does not start. |
-| if/for check on this.out fails | BLOCK. This is not a tool failure. Do not recover as an agent. |
+| Worker receipt `ok: false`, budget left | Stay on this milestone (next ledger item / retry judge). |
+| Worker receipt `ok: false`, budget gone | BLOCK. |
+| Receipt `ok: true` but asset missing/invalid | BLOCK. The receipt cannot waive the asset. |
 | Generate-new / stub `tool.py` | Writer PASS. Fill it in later. |
 | Intelligence on a milestone | Optional judgment for producing the asset. Must not skip the preferred tool. Must not pick the next milestone. Must not cancel the for-check. |
 
@@ -349,12 +345,12 @@ python scripts/generate_harness.py --codebase <repo> --from-audit <skill>/planni
 This writes:
 
 - `planning/flowstep-audit.md`
-- `planning/m8m-flowchart.md`: chart (harness), FlowStep table (guide), origin table, Gates/Loops on this.out
+- `planning/m8m-flowchart.md`: chart (harness), FlowStep table (guide), origin table, For/Judge tables
 - `<repo>/flowsteps/flows/<flow_id>/`
 - `<repo>/flowsteps/tools/<id>/` (seed or stub)
 - `<repo>/.agents/skills/<name>/SKILL.md` and `<repo>/.claude/skills/<name>/SKILL.md`
 
-The factory PASSes when the chart, tables, stubs, and each milestone's asset schema exist. `validate_harness.py` is optional. Use it when you fill in tools. `run_flow.py` is the harness: a failed tool goes to the agent; a missing asset or a failed if/for check BLOCKs.
+The factory PASSes when the chart, tables, stubs, and each milestone's asset schema exist. `validate_harness.py` is optional. Use it when you fill in tools. `run_flow.py` is the harness: a failed tool goes to the agent; a missing asset or a not-ok worker receipt BLOCKs.
 
 ## Install
 

@@ -25,5 +25,5 @@ Tools live in that codebase tree, not in this C: skill.
 Every step is `class: tool` or `class: intelligence`. Fetch, crop, hash,
 render, and package are tools. Do not write those on the fly.
 
-if/else (`next.when`) and foreach are JSON Schema checks on this.out
-after the asset PASSes. They do not loop tools.
+for is a ledger milestone (walk items until remaining=0). judge (if)
+retries until the worker receipt is ok. The worker is a repo tool.

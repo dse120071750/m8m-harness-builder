@@ -9,7 +9,7 @@ description: >
 license: MIT
 metadata:
   author: dse120071750
-  version: "1.5"
+  version: "1.6"
 ---
 
 # M8M harness builder
@@ -22,7 +22,7 @@ identify milestones
   → list FlowSteps inside each (atomic; prefer ONE tool)
   → develop that tool (existing / promote / generate-new stub)
   → write one FlowStep table + one milestone flowchart
-     (if/for attach to the asset check, not to tools)
+     (for = ledger milestone; if = judge-until-ok milestone)
   → scaffold flow YAML and tool stubs
 ```
 
@@ -58,7 +58,7 @@ Deliverables (this is the product):
 | File | What |
 | --- | --- |
 | `planning/flowstep-audit.md` | Proposed milestones, FlowSteps, tools |
-| `planning/m8m-flowchart.md` | Milestone chart (harness) + FlowStep table (guide) + Gates/Loops on this.out |
+| `planning/m8m-flowchart.md` | Milestone chart (harness) + FlowStep table (guide) + For/Judge tables |
 | `<repo>/flowsteps/flows/<id>/flow.yaml` | Scaffolded chain |
 | `<repo>/flowsteps/tools/<id>/` | Seeded tools, or stubs marked generate-new |
 | `<repo>/.agents/skills/<name>/SKILL.md` and `.claude/skills/<name>/SKILL.md` | Pointer skill |
@@ -71,23 +71,37 @@ Inside a milestone, follow the FlowStep table as a **guide**: try the
 preferred tool first. If it fails, find a way like a normal agent.
 The flowchart is only the milestone canvas.
 
-## Milestone check (if / for)
+## For and judge (if) are milestones
 
-if/else and foreach attach to **this.out** after the asset schema PASSes.
-They are not FlowSteps, not tools, not intelligence.
+A **for loop** and a **judge loop (if)** are canvas milestones. Proceed is
+guarded by an **internal worker**: a required repo tool that writes
+`{ok: true|false}`. Intelligence may draft. It may not set `ok`.
 
-- **if:** `next.when` / `else`. First gate schema that validates this.out
-  picks the next milestone. No match → BLOCKED.
-- **for:** this.out has a typed array (`maxItems` + item schema). That is
-  the check. Assemble still runs once. Do not loop tools.
+- **for:** previous asset is a **ledger** (typed array, `maxItems`). This
+  milestone produces the item asset for each remaining row until
+  `remaining == 0`. Example: fetch image rows from a DB → freeze the
+  todo list → for-milestone binds every image.
+- **judge (if):** do the work until the worker says ok. **Image
+  generation** and **spatial alignment** always use this. `ok: false`
+  and budget left → stay on this milestone. Budget gone → BLOCK.
+- No exclusive `next.when`. URL vs text is data on the asset, not a fork.
 
-The chart's Gates and Loops tables name schema paths, not tools. An enum
-on this.out is an if even when every branch then goes to the same next
-milestone. An array with `maxItems` on this.out is a for even when the
-milestone uses intelligence.
+```yaml
+- id: images_bound
+  loop: for
+  ledger: { path: items, item_schema: schemas/image_item_v1.json, max_items: 32 }
+  worker: ledger_receipt
+- id: card_aligned
+  loop: judge
+  worker: alignment_judge
+  intelligence: image
+```
+
+Receipt `ok: true` **and** the milestone asset schema PASS → next
+milestone. Receipt cannot waive a missing asset.
 
 `validate_harness.py` is optional. `run_flow.py` is the harness:
-tool fail → agent recovery; no asset → BLOCK; failed if/for check → BLOCK.
+tool fail → agent recovery; no asset → BLOCK; worker not ok / no receipt → stay or BLOCK.
 
 ## Response
 

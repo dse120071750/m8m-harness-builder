@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["ok", "remaining", "done"],
+  "properties": {
+    "ok": { "type": "boolean" },
+    "remaining": { "type": "integer", "minimum": 0 },
+    "done": { "type": "integer", "minimum": 0 },
+    "item_id": { "type": "string" }
+  }
+}

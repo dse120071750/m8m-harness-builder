@@ -39,6 +39,27 @@ def _ok_test(path: Path) -> None:
     _write(path, "def test_ok():\n    assert True\n")
 
 
+def _receipt_assemble(path: Path, *, ok: str = "True") -> None:
+    _write(
+        path,
+        "def run(input_data, draft=None, **_):\n"
+        "    payload = dict(input_data)\n"
+        "    if len(payload) == 1:\n"
+        "        only = next(iter(payload.values()))\n"
+        "        if isinstance(only, dict):\n"
+        "            payload = dict(only)\n"
+        "    item = payload.get('item')\n"
+        "    if isinstance(item, dict):\n"
+        "        out = dict(item)\n"
+        "    else:\n"
+        "        out = dict(payload)\n"
+        f"    out['receipt'] = {{'ok': {ok}, 'code': 'pass' if {ok} else 'fail', 'remaining': 0, 'done': 1}}\n"
+        "    if 'path' in out and 'sha256' not in out:\n"
+        "        out['sha256'] = 'a' * 64\n"
+        "    return out\n",
+    )
+
+
 class ControlNameTests(unittest.TestCase):
     def test_if_loop_names_still_draw(self) -> None:
         self.assertTrue(is_control_name("if_ready"))
@@ -54,10 +75,10 @@ class ControlNameTests(unittest.TestCase):
 class WriterSkillTests(unittest.TestCase):
     def test_skill_md_teaches_if_for_on_this_out(self) -> None:
         text = (Path(__file__).resolve().parents[1] / "SKILL.md").read_text(encoding="utf-8")
-        self.assertIn("next.when", text)
-        self.assertIn("this.out", text)
-        self.assertIn("foreach", text)
-        self.assertIn("Do not loop tools", text)
+        self.assertIn("loop: for", text)
+        self.assertIn("loop: judge", text)
+        self.assertIn("ledger", text)
+        self.assertIn("worker", text)
 
     def test_github_docs_use_images_not_mermaid(self) -> None:
         root = Path(__file__).resolve().parents[1]
@@ -75,6 +96,7 @@ class WriterSkillTests(unittest.TestCase):
         )
 
 
+@unittest.skip("exclusive next.when replaced by judge/for milestones")
 class GateTests(unittest.TestCase):
     def test_schema_gate_selects_url_branch(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -200,6 +222,7 @@ class GateTests(unittest.TestCase):
             self.assertIn("no gate matched", blocked["blockers"][0])
 
 
+@unittest.skip("foreach-as-this.out-check replaced by ledger for-milestone")
 class ForeachTests(unittest.TestCase):
     def test_foreach_two_items_pass_eight_block(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -310,6 +333,7 @@ class ForeachTests(unittest.TestCase):
             self.assertTrue(any("foreach item" in str(item) for item in blocked.get("blockers") or []))
 
 
+@unittest.skip("foreach validate replaced by ledger on previous.out")
 class ValidateControlTests(unittest.TestCase):
     def test_foreach_without_maxitems_on_schema_fails(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -346,6 +370,7 @@ class ValidateControlTests(unittest.TestCase):
             self.assertIn("maxItems", str(ctx.exception))
 
 
+@unittest.skip("gate inference replaced by for/judge inference")
 class SkillWriterControlTests(unittest.TestCase):
     def test_infer_gate_from_enum_not_from_model(self) -> None:
         milestones = [
@@ -522,6 +547,7 @@ class SkillWriterControlTests(unittest.TestCase):
 
 
 class FlowchartMarkdownTests(unittest.TestCase):
+    @unittest.skip("chart no longer draws exclusive gates")
     def test_chart_draws_gate_and_foreach(self) -> None:
         items = [
             {
@@ -590,8 +616,8 @@ class FlowchartMarkdownTests(unittest.TestCase):
             self.assertIn("```text", text)
             self.assertIn("flowchart TD", text)
             self.assertNotIn("```mermaid", text)
-            self.assertIn("## Loops (foreach)", text)
-            self.assertIn("## Gates (if / else)", text)
+            self.assertIn("## For (ledger)", text)
+            self.assertIn("## Judge (until ok)", text)
             self.assertIn("## Toolbox plan", text)
             audit_md = (root / "planning" / "flowstep-audit.md").read_text(encoding="utf-8")
             self.assertNotIn("```mermaid", audit_md)

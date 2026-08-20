@@ -140,7 +140,7 @@ path; add a model only when a fixture test cannot express the work.
 - Skipping the milestone asset because a tool failed or a model “approved”
 - Marking fetch, crop, hash, render, package, or schema-validate as the
   *first* move of a FlowStep when a repo tool exists
-- Intelligence choosing the next **milestone** (schema gates own that)
+- Intelligence choosing the next **milestone** or writing `ok` on a for/judge receipt (the worker tool owns that)
 
 Not forbidden: recovering like a normal agent **inside** a milestone after
 the preferred tool failed, as long as the asset schema still PASSes.

@@ -310,29 +310,46 @@ def _load_flow_v3(skill_dir: Path, path: Path, raw: dict[str, Any]) -> dict[str,
                 inputs = {"request": "user.request"}
             else:
                 inputs = {previous["id"]: f"{previous['id']}.{previous['output_contract']}"}
-        next_edges = item.get("next") or []
-        if next_edges:
-            if not isinstance(next_edges, list):
-                raise FlowError(f"{step_id}: next must be a list of {{when, then}}")
-            for edge in next_edges:
-                if not isinstance(edge, dict) or not edge.get("when") or not edge.get("then"):
-                    raise FlowError(f"{step_id}: each next edge needs when (schema) and then (milestone id)")
-            if not item.get("else"):
-                item["else"] = "BLOCKED"
-        foreach = item.get("foreach")
-        if foreach is not None:
-            if not isinstance(foreach, dict):
-                raise FlowError(f"{step_id}: foreach must be a mapping")
-            foreach = dict(foreach)
-            foreach.setdefault("path", "items")
-            foreach.setdefault("item_schema", f"schemas/{step_id}_item_v1.json")
-            foreach.setdefault("max_items", 8)
-            foreach.pop("tools", None)
-            foreach.pop("collect", None)
-            item["foreach"] = foreach
-        join = item.get("join")
-        if join is not None and (not isinstance(join, list) or not join):
-            raise FlowError(f"{step_id}: join must be a non-empty list of milestone ids")
+        loop = str(item.get("loop") or "none").strip().lower()
+        if loop in {"foreach", "for"}:
+            loop = "for"
+        if loop in {"if", "judge"}:
+            loop = "judge"
+        if loop not in {"none", "for", "judge"}:
+            raise FlowError(f"{step_id}.loop must be none|for|judge")
+        ledger = item.get("ledger") if isinstance(item.get("ledger"), dict) else None
+        foreach = item.get("foreach") if isinstance(item.get("foreach"), dict) else None
+        if loop == "for" and ledger is None and foreach:
+            ledger = {
+                "path": foreach.get("path") or "items",
+                "item_schema": foreach.get("item_schema") or f"schemas/{step_id}_item_v1.json",
+                "max_items": foreach.get("max_items") or 8,
+            }
+        if loop == "for":
+            if not isinstance(ledger, dict):
+                raise FlowError(f"{step_id}: loop=for requires ledger")
+            ledger = dict(ledger)
+            ledger.setdefault("path", "items")
+            ledger.setdefault("item_schema", f"schemas/{step_id}_item_v1.json")
+            ledger.setdefault("max_items", 8)
+            if not isinstance(ledger.get("max_items"), int) or ledger["max_items"] < 1:
+                raise FlowError(f"{step_id}: ledger.max_items must be a positive integer")
+        else:
+            ledger = None
+        worker = str(item.get("worker") or "").strip()
+        if loop in {"for", "judge"} and not worker:
+            worker = "ledger_receipt" if loop == "for" else "ok_receipt"
+        if worker and worker not in tools:
+            tools.append(worker)
+            flowsteps.append({"id": worker, "tool": worker})
+        receipt_schema = item.get("receipt_schema")
+        if loop in {"for", "judge"}:
+            receipt_schema = receipt_schema or f"schemas/{step_id}_receipt_v1.json"
+        max_attempts = item.get("max_attempts")
+        if max_attempts is None:
+            max_attempts = max_model_attempts
+        if not isinstance(max_attempts, int) or max_attempts < 1:
+            raise FlowError(f"{step_id}.max_attempts must be a positive integer")
         asset = item.get("asset") if isinstance(item.get("asset"), dict) else {}
         asset_kind = str(asset.get("kind") or "").strip().lower()
         if asset_kind not in ASSET_KINDS:
@@ -354,10 +371,15 @@ def _load_flow_v3(skill_dir: Path, path: Path, raw: dict[str, Any]) -> dict[str,
             "params": item.get("params") or {},
             "on_tool_fail": on_tool_fail,
             "max_model_attempts": max_model_attempts,
-            "next": list(next_edges),
-            "else": item.get("else"),
+            "max_attempts": max_attempts,
+            "loop": loop,
+            "ledger": ledger,
+            "worker": worker or None,
+            "receipt_schema": receipt_schema,
             "foreach": foreach,
-            "join": list(join) if isinstance(join, list) else None,
+            "next": [],
+            "else": None,
+            "join": None,
             "asset": {"kind": asset_kind} if asset_kind else dict(asset),
         }
         if intel != "none" or on_tool_fail == "need_model":

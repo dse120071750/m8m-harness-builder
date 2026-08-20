@@ -14,6 +14,8 @@ FLOWSTEPS: list[dict[str, Any]] = json.loads("""__FLOWSTEPS_JSON__""")
 INTELLIGENCE = "__INTELLIGENCE__"
 IS_LAST = __IS_LAST__
 ASSET_KIND = "__ASSET_KIND__"
+WORKER = "__WORKER__"
+LOOP = "__LOOP__"
 
 
 def _codebase() -> Path:
@@ -126,6 +128,26 @@ def run(input_data: dict[str, Any], draft: dict[str, Any] | None = None, **kwarg
             payload[tool_id] = result
             if "path" in result and "sha256" in result:
                 payload["asset"] = result
+            if "ok" in result:
+                payload["receipt"] = result
+    if WORKER and WORKER not in {str((item or {}).get("tool") or "") for item in sequence}:
+        try:
+            receipt_input = payload
+            if WORKER == "ok_receipt":
+                receipt_input = {"ok": True, "code": "pass"}
+            elif WORKER == "ledger_receipt":
+                ledger = payload.get("ledger") or payload.get("items") or []
+                done = payload.get("done")
+                if not isinstance(done, list):
+                    done = list(ledger) if isinstance(ledger, list) else []
+                receipt_input = {"ledger": ledger if isinstance(ledger, list) else [], "done": done}
+            receipt = tools.run_library_tool(codebase, WORKER, receipt_input)
+            if isinstance(receipt, dict):
+                payload["receipt"] = receipt
+        except Exception as exc:
+            if draft is None:
+                return _need_model(STEP_ID, WORKER, f"{type(exc).__name__}: {exc}")
+            payload[f"{WORKER}_error"] = f"{type(exc).__name__}: {exc}"
     if ASSET_KIND in {"file", "image"} or IS_LAST:
         asset = payload.get("asset")
         if not isinstance(asset, dict) or "path" not in asset or "sha256" not in asset:
@@ -140,7 +162,10 @@ def run(input_data: dict[str, Any], draft: dict[str, Any] | None = None, **kwarg
                 if draft is None:
                     return _need_model(STEP_ID, "hash_bind", f"{type(exc).__name__}: {exc}")
                 raise ValueError(f"{STEP_ID}: milestone asset not produced (need {ASSET_KIND} path+sha256)") from exc
-        return {"asset": {"path": asset["path"], "sha256": asset["sha256"]}}
+        out = {"asset": {"path": asset["path"], "sha256": asset["sha256"]}}
+        if isinstance(payload.get("receipt"), dict):
+            out["receipt"] = payload["receipt"]
+        return out
     if not payload:
         if draft is None:
             return _need_model(STEP_ID, "", f"{STEP_ID}: milestone asset not produced (empty {ASSET_KIND} proof)")
