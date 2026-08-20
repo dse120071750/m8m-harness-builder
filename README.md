@@ -106,6 +106,8 @@ request
 
 n8n 的画布是动作。M8M 的画布是关卡。人话来自 humanizer（`source_ready` → 来源已就绪）。不要把下面三件事叫 FOR / IF。
 
+开源部署，像 n8n：公司在内部自托管一套可审计、标准化的 agent 工作流。节点是关卡，不是一次 HTTP。来源已就绪必须交出文件；卡片已对齐会重试，直到 worker 收据 ok。n8n 是动作。Skill 是 prompt。OpenClaw 是 agent。缺的是 chat 写成 skill，再真把公司的活干完并留下证明。Codex SDK 就是那份智力：用聊天写出 M8M skill，再跑公司的活。公开仓库：m8m-harness-builder。
+
 | n8n | M8M |
 | --- | --- |
 | 节点 = 一次 HTTP / 一次 crop | 节点 = 一个里程碑。动作在关卡**里面**（FlowStep + 工具） |
@@ -366,6 +368,8 @@ A real run on a seven-page article infographic is in [examples/article_infograph
 ## cycle / judge / branch
 
 n8n’s canvas is actions. M8M’s canvas is checkpoints. Labels come from the humanizer (`source_ready` → Source is ready). Do not call the three rows below FOR / IF.
+
+Deploy as open source, like n8n: companies self-host a standardized, auditable agent workflow internally. Node is a checkpoint, not one HTTP call. Source is ready must produce a file; Card is aligned retries until the worker receipt is ok. n8n is actions. Skills are prompts. OpenClaw is an agent. The missing piece is chat-to-skill plus actually doing the job with proof. Codex SDK is that intelligence: write the M8M skill in chat, then run the company's work. Public repo: m8m-harness-builder.
 
 | n8n | M8M |
 | --- | --- |
