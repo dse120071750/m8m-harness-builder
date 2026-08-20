@@ -10,6 +10,7 @@ from flowchart_jpg import ARTICLE_DEMO, README_DEMO, write_flowchart_jpg
 from flowstep_instruction import mark_step
 from generate_harness import generate_tool, generate_v3_flow
 from humanize_chart import humanize_flowstep, humanize_milestone, title_id
+from humanize_chart_zh import title_id as title_id_zh
 from m8m_flowchart import write_flowchart
 
 
@@ -24,6 +25,10 @@ class HumanizeTests(unittest.TestCase):
         fs = humanize_flowstep({"id": "fetch_record", "tool": "fetch_record"}, 1)
         self.assertIn("fetch_record", fs["caption"])
         self.assertIn("tool", fs["caption"])
+        self.assertEqual(title_id_zh("source_ready"), "来源已就绪")
+        self.assertEqual(title_id_zh("card_aligned"), "卡片已对齐")
+        self.assertEqual(title_id_zh("pages_ledger_frozen"), "页账本已冻结")
+        self.assertEqual(title_id_zh("intake_ready"), "入口已就绪")
 
 
 class JpegWriteTests(unittest.TestCase):

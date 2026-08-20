@@ -104,44 +104,87 @@ request
 
 ## cycle / judge / branch
 
-- **cycle：** 先冻一份 ledger（关卡 asset）。再包一圈里程碑。最后一关 asset PASS 后，AI 起草这一轮 pass|fail。`cycle_receipt` 写收据并改 ledger。pass 保留 `items/NNN`。fail 清掉这一轮 residue，行仍是 unfinished，可 resume。不要叫 FOR。
-- **judge：** 做到 worker 收据 `{ok: true}` 为止。出图、空间对齐永远走这一关。
-- **branch：** 这一关 asset PASS 之后，AI 起草走哪条路，工具写出 `{ok, branch}`。Skip 不是 BLOCK。不要叫 IF。
+画布上这三件事不是 FOR / IF。人话来自 humanizer（`source_ready` → 来源已就绪）。
 
-内部 worker 是 repo 工具，写出 `{ok: true|false}`。模型不能填 `ok`。收据 ok 仍不能免掉 asset。
-
-| Milestone | 这一关怎么走完 | Worker |
-| --- | --- | --- |
-| `pages_ledger_frozen` | freeze ledger | — |
-| `page_rendered` | cycle pass|fail updates ledger | `cycle_receipt` |
-| `card_aligned` | judge until ok | `alignment_judge` |
-| `intake_ready` | branch after PASS | `branch_receipt` |
-
-`--milestone` 写成 `crop_4x5` 只是备注：看起来像工具。不是拒绝画图。
-
-## 什么硬，什么不硬
-
-| 事件 | 结果 |
+| 词 | 粒度 |
 | --- | --- |
-| 首选 FlowStep 工具失败 | 像普通 agent 找路（`on_tool_fail: need_model`）。先用工具。 |
-| 里程碑产出缺失或不合格 | BLOCK。下一关不开始。 |
-| Worker 收据 `ok: false`，还有预算 | 停在本关（for 下一条 / judge 重做）。 |
-| Worker 收据 `ok: false`，预算用完 | BLOCK。 |
-| 收据 `ok: true` 但产出不合格 | BLOCK。收据不能免产出。 |
-| Generate-new / stub `tool.py` | Writer PASS。稍后填。 |
-| 里程碑上的 intelligence | 可选，用来做出产出。不能跳过首选工具。不能挑选下一个里程碑。不能取消 for 检查。 |
+| **judge** | **这一关里面**重试，直到 asset 合格。收据 `{ok}`。 |
+| **branch** | **这一关之后**选路。AI 起草，工具写出 `{ok, branch}`。另一条路 skipped。 |
+| **cycle** | **包一圈关卡**，先冻 ledger。每一轮 AI 起草 pass/fail，工具改账本。pass 保留；fail 清 residual，可 resume。 |
+
+模型不能填 `ok` / `branch` / `cycle`。收据 ok 仍不能免掉 asset。
+
+### judge — 卡片已对齐
+
+出图、空间对齐永远走 judge。停在 **卡片已对齐**，直到 worker 说 ok。
+
+```text
+来源已就绪  →  卡片已对齐（judge，直到 ok）  →  发布包已打包
+```
 
 ```yaml
-- id: source_ready
-  asset:
-    kind: file
-  flowsteps:
-    - id: fetch_record
-      tool: fetch_record
-    - id: hash_bind
-      tool: hash_bind
-  on_tool_fail: need_model
+- id: card_aligned
+  loop: judge
+  worker: alignment_judge
+  intelligence: image
 ```
+
+### branch — 入口已就绪
+
+入口 asset PASS 之后，AI 起草走哪条生成路。不要叫 IF。
+
+```text
+入口已就绪
+  ├─ branch=直接改款（默认，case_type 不是 source_case）
+  │     平面图来源案 skipped: true
+  │     → 直接改款 → 改款已就绪
+  └─ branch=平面图来源案
+        要 source record + 平面图，冻标题
+        → 平面图来源已就绪 → 来源标题已冻结 → 改款已就绪
+```
+
+```yaml
+- id: intake_ready
+  intelligence: completion
+  branch:
+    worker: branch_receipt
+    default: direct
+    paths:
+      - { id: direct, then: restyle_direct }
+      - { id: floorplan_source_case, then: floorplan_source_ready }
+    join: restyle_ready
+```
+
+### cycle — 页账本已冻结
+
+先冻账本，再包一圈。不要叫 FOR。`remaining == 0` 只是数据，不是闸门。
+
+```text
+页账本已冻结
+  → [cycle pages]
+        页已绑定
+        页已渲染     ← asset PASS，然后 cycle_receipt
+            pass → 保留 items/001，账本该行走 done
+            fail → 清掉这一轮 out/，行仍 unfinished，可再做
+  → 发布包已打包
+```
+
+```yaml
+- id: pages_ledger_frozen
+  asset: { kind: json }
+- id: page_bound
+  on_cycle: pages
+- id: page_rendered
+  on_cycle: pages
+  cycle:
+    worker: cycle_receipt
+    ledger: pages_ledger_frozen
+    start: page_bound
+    join: release_packaged
+    pass: "这一行走完：页图 path + sha256"
+```
+
+`--milestone` 写成 `crop_4x5` 只是备注：看起来像工具。不是拒绝画图。
 
 工具在 `<repo>/flowsteps/tools/`，不在 `~/.codex/skills` 或 `~/.claude/skills`。教学合约在 flow 上：`<repo>/flowsteps/flows/<id>/references/`。
 
@@ -161,7 +204,7 @@ python scripts/generate_harness.py --codebase <repo> --from-audit <skill>/planni
 会写出：
 
 - `planning/flowstep-audit.md`
-- `planning/m8m-flowchart.md`：图（护栏）+ FlowStep 表（指引）+ For/Judge 表
+- `planning/m8m-flowchart.md`：图（护栏）+ FlowStep 表（指引）+ Cycle / Judge / Branch 表
 - `planning/m8m-flowchart.jpg`：人话审计 JPEG（生成时写，改一步就重写）
 - `<repo>/flowsteps/flows/<flow_id>/`
 - `<repo>/flowsteps/tools/<id>/`（seed 或 stub）
@@ -321,44 +364,87 @@ A real run on a seven-page article infographic is in [examples/article_infograph
 
 ## cycle / judge / branch
 
-- **cycle:** freeze a ledger first (a milestone asset). Wrap milestones around unfinished rows. After the last wrap asset PASSes, AI drafts pass|fail. `cycle_receipt` writes the receipt and updates the ledger. Pass preserves `items/NNN`. Fail purges live residue; the row stays unfinished so the run can resume. Do not call this FOR.
-- **judge:** keep going until the worker receipt is `{ok: true}`. Image generation and spatial alignment always use this.
-- **branch:** after this milestone’s asset PASSes, AI drafts which path to take. The worker writes `{ok, branch}`. Skip is not BLOCK. Do not call this IF.
+These three are not FOR / IF. Labels come from the humanizer (`source_ready` → Source is ready).
 
-The internal worker is a repo tool. It writes `{ok: true|false}`. The model must not set `ok`. An ok receipt still cannot waive a missing asset.
-
-| Milestone | How this checkpoint finishes | Worker |
-| --- | --- | --- |
-| `pages_ledger_frozen` | freeze ledger | — |
-| `page_rendered` | cycle pass|fail updates ledger | `cycle_receipt` |
-| `card_aligned` | judge until ok | `alignment_judge` |
-| `intake_ready` | branch after PASS | `branch_receipt` |
-
-A name like `crop_4x5` on `--milestone` is a note that it looks like a tool. It is not a refusal to draw.
-
-## What is rigid, and what is not
-
-| Event | Result |
+| Word | Grain |
 | --- | --- |
-| Preferred FlowStep tool fails | Recover like a normal agent (`on_tool_fail: need_model`). Try the tool first. |
-| Milestone asset missing or invalid | BLOCK. The next milestone does not start. |
-| Worker receipt `ok: false`, budget left | Stay on this milestone (next ledger item / retry judge). |
-| Worker receipt `ok: false`, budget gone | BLOCK. |
-| Receipt `ok: true` but asset missing/invalid | BLOCK. The receipt cannot waive the asset. |
-| Generate-new / stub `tool.py` | Writer PASS. Fill it in later. |
-| Intelligence on a milestone | Optional judgment for producing the asset. Must not skip the preferred tool. Must not pick the next milestone. Must not cancel the for-check. |
+| **judge** | Retry **inside this milestone** until the asset is good. Receipt `{ok}`. |
+| **branch** | **After this milestone**, pick a path. AI drafts; the tool writes `{ok, branch}`. The other path is skipped. |
+| **cycle** | **Wrap a stretch of milestones** over a frozen ledger. Each round, AI drafts pass/fail; the tool updates the ledger. Pass preserves; fail purges residue so the run can resume. |
+
+The model must not set `ok` / `branch` / `cycle`. An ok receipt still cannot waive a missing asset.
+
+### judge — Card is aligned
+
+Image generation and spatial alignment always use judge. Stay on **Card is aligned** until the worker says ok.
+
+```text
+Source is ready  →  Card is aligned (judge until ok)  →  Release is packaged
+```
 
 ```yaml
-- id: source_ready
-  asset:
-    kind: file
-  flowsteps:
-    - id: fetch_record
-      tool: fetch_record
-    - id: hash_bind
-      tool: hash_bind
-  on_tool_fail: need_model
+- id: card_aligned
+  loop: judge
+  worker: alignment_judge
+  intelligence: image
 ```
+
+### branch — Intake is ready
+
+After the intake asset PASSes, AI drafts which generation path to take. Do not call this IF.
+
+```text
+Intake is ready
+  ├─ branch=direct (default, case_type is not source_case)
+  │     floorplan source case skipped: true
+  │     → Restyle direct → Restyle is ready
+  └─ branch=floorplan source case
+        source record + floor plan required, freeze the title
+        → Floorplan source is ready → Source title is frozen → Restyle is ready
+```
+
+```yaml
+- id: intake_ready
+  intelligence: completion
+  branch:
+    worker: branch_receipt
+    default: direct
+    paths:
+      - { id: direct, then: restyle_direct }
+      - { id: floorplan_source_case, then: floorplan_source_ready }
+    join: restyle_ready
+```
+
+### cycle — Pages ledger is frozen
+
+Freeze the ledger first, then wrap. Do not call this FOR. `remaining == 0` is data, not the gate.
+
+```text
+Pages ledger is frozen
+  → [cycle pages]
+        Page is bound
+        Page is rendered     ← asset PASS, then cycle_receipt
+            pass → keep items/001, mark the ledger row done
+            fail → purge this round’s out/, row stays unfinished, can redo
+  → Release is packaged
+```
+
+```yaml
+- id: pages_ledger_frozen
+  asset: { kind: json }
+- id: page_bound
+  on_cycle: pages
+- id: page_rendered
+  on_cycle: pages
+  cycle:
+    worker: cycle_receipt
+    ledger: pages_ledger_frozen
+    start: page_bound
+    join: release_packaged
+    pass: "this row is done: page image path + sha256"
+```
+
+A name like `crop_4x5` on `--milestone` is a note that it looks like a tool. It is not a refusal to draw.
 
 Tools belong in `<repo>/flowsteps/tools/`, not in `~/.codex/skills` or `~/.claude/skills`. Teaching contracts belong on the flow: `<repo>/flowsteps/flows/<id>/references/`.
 
@@ -378,7 +464,7 @@ python scripts/generate_harness.py --codebase <repo> --from-audit <skill>/planni
 This writes:
 
 - `planning/flowstep-audit.md`
-- `planning/m8m-flowchart.md`: chart (harness), FlowStep table (guide), origin table, For/Judge tables
+- `planning/m8m-flowchart.md`: chart (harness), FlowStep table (guide), Cycle / Judge / Branch tables
 - `planning/m8m-flowchart.jpg`: humanized audit JPEG (written on generate, rewritten on every step edit)
 - `<repo>/flowsteps/flows/<flow_id>/`
 - `<repo>/flowsteps/tools/<id>/` (seed or stub)
