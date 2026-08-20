@@ -106,12 +106,12 @@ request
 
 n8n 的画布是动作。M8M 的画布是关卡。人话来自 humanizer（`source_ready` → 来源已就绪）。不要把下面三件事叫 FOR / IF。
 
-| n8n | 不要当成 | M8M | 人话例子 |
-| --- | --- | --- | --- |
-| 节点 = 一次 HTTP / 一次 crop | 画布上堆动作 | 节点 = 一个里程碑。动作在关卡**里面**（FlowStep + 工具） | 来源已就绪 |
-| Retry 同一节点 | 同一 HTTP 再打一次 | **judge**：停在**这一关里面**，直到 asset 合格。收据 `{ok}` | 卡片已对齐 |
-| IF / Switch 节点 | 再画一个 IF 盒子 | **branch**：**这一关之后**选路。AI 起草，工具写 `{ok, branch}`。另一条路 skipped | 入口已就绪 |
-| Loop Over Items / Split in Batches | for 数组，机械 remaining=0 | **cycle**：先冻账本，再**包一圈关卡**。每一轮 AI 起草 pass/fail，工具改账本。pass 保留；fail 清 residual，可 resume | 页账本已冻结 |
+| n8n | M8M |
+| --- | --- |
+| 节点 = 一次 HTTP / 一次 crop | 节点 = 一个里程碑。动作在关卡**里面**（FlowStep + 工具） |
+| Retry 同一节点 | **judge**：停在**这一关里面**，直到 asset 合格。收据 `{ok}` |
+| IF / Switch 节点 | **branch**：**这一关之后**选路。AI 起草，工具写 `{ok, branch}`。另一条路 skipped |
+| Loop Over Items / Split in Batches | **cycle**：先冻账本，再**包一圈关卡**。每一轮 AI 起草 pass/fail，工具改账本。pass 保留；fail 清 residual，可 resume |
 
 模型不能填 `ok` / `branch` / `cycle`。收据 ok 仍不能免掉 asset。
 
@@ -367,12 +367,12 @@ A real run on a seven-page article infographic is in [examples/article_infograph
 
 n8n’s canvas is actions. M8M’s canvas is checkpoints. Labels come from the humanizer (`source_ready` → Source is ready). Do not call the three rows below FOR / IF.
 
-| n8n | Don't treat it as | M8M | Human label |
-| --- | --- | --- | --- |
-| Node = one HTTP call / one crop | A pile of action nodes | Node = one milestone. Actions sit **inside** it (FlowStep + tool) | Source is ready |
-| Retry the same node | Hit the same HTTP again | **judge**: stay **inside this milestone** until the asset is good. Receipt `{ok}` | Card is aligned |
-| IF / Switch node | Another IF box on the canvas | **branch**: pick a path **after this milestone**. AI drafts; the tool writes `{ok, branch}`. The other path is skipped | Intake is ready |
-| Loop Over Items / Split in Batches | A for-array until remaining=0 | **cycle**: freeze a ledger, then **wrap a stretch of milestones**. Each round AI drafts pass/fail; the tool updates the ledger. Pass preserves; fail purges residue so you can resume | Pages ledger is frozen |
+| n8n | M8M |
+| --- | --- |
+| Node = one HTTP call / one crop | Node = one milestone. Actions sit **inside** it (FlowStep + tool) |
+| Retry the same node | **judge**: stay **inside this milestone** until the asset is good. Receipt `{ok}` |
+| IF / Switch node | **branch**: pick a path **after this milestone**. AI drafts; the tool writes `{ok, branch}`. The other path is skipped |
+| Loop Over Items / Split in Batches | **cycle**: freeze a ledger, then **wrap a stretch of milestones**. Each round AI drafts pass/fail; the tool updates the ledger. Pass preserves; fail purges residue so you can resume |
 
 The model must not set `ok` / `branch` / `cycle`. An ok receipt still cannot waive a missing asset.
 
