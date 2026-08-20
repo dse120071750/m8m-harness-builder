@@ -771,7 +771,84 @@ def infer_schema_control(milestones: list[dict[str, Any]]) -> list[dict[str, Any
         item.pop("next", None)
         item.pop("else", None)
         item.pop("join", None)
+    _infer_branch(milestones)
     return milestones
+
+
+BRANCH_HINTS = ("direct", "source_case", "when_")
+
+
+def _infer_branch(milestones: list[dict[str, Any]]) -> None:
+    ids = [str(item.get("id") or "") for item in milestones]
+    for index, item in enumerate(milestones):
+        existing = item.get("branch") if isinstance(item.get("branch"), dict) else None
+        if existing and existing.get("paths"):
+            existing.setdefault("worker", "branch_receipt")
+            existing.setdefault("receipt_schema", f"schemas/{item['id']}_branch_v1.json")
+            item["worker"] = item.get("worker") or existing["worker"]
+            item["receipt_schema"] = item.get("receipt_schema") or existing["receipt_schema"]
+            continue
+        alts: list[dict[str, str]] = []
+        join = ""
+        for later in milestones[index + 1 :]:
+            lid = str(later.get("id") or "")
+            tokens = set(_tokens(lid))
+            if later.get("on_path"):
+                alts.append({"id": str(later["on_path"]), "then": lid})
+                continue
+            if any(hint in lid or hint in tokens for hint in BRANCH_HINTS):
+                pid = lid
+                for hint in BRANCH_HINTS:
+                    if hint in lid:
+                        pid = hint if hint != "when_" else lid
+                        if "source_case" in lid:
+                            pid = "floorplan_source_case" if "floorplan" in lid or "source_case" in lid else hint
+                        break
+                if "source_case" in lid:
+                    pid = "floorplan_source_case"
+                elif "direct" in lid:
+                    pid = "direct"
+                alts.append({"id": pid, "then": lid})
+                continue
+            if alts:
+                join = lid
+                break
+        unique: list[dict[str, str]] = []
+        seen: set[str] = set()
+        for path in alts:
+            if path["id"] in seen:
+                continue
+            seen.add(path["id"])
+            unique.append(path)
+        if len(unique) < 2:
+            continue
+        intel = str(item.get("intelligence") or "none")
+        if intel == "none" and not existing:
+            item["intelligence"] = "completion"
+            item["model_justification"] = item.get("model_justification") or "draft which branch to take"
+        item["branch"] = {
+            "worker": "branch_receipt",
+            "default": unique[0]["id"],
+            "paths": unique,
+            "join": join or None,
+            "receipt_schema": f"schemas/{item['id']}_branch_v1.json",
+        }
+        item["worker"] = item.get("worker") or "branch_receipt"
+        item["receipt_schema"] = item["branch"]["receipt_schema"]
+        taken = {path["then"] for path in unique}
+        for later in milestones[index + 1 :]:
+            lid = later.get("id")
+            if lid == join:
+                break
+            for path in unique:
+                if later.get("id") == path["then"] or later.get("on_path"):
+                    later.setdefault("on_path", path["id"] if later.get("id") == path["then"] else later.get("on_path"))
+                    break
+            if lid in taken:
+                continue
+            # milestones between then and join inherit nearest path
+            if unique and not later.get("on_path") and lid != join:
+                later["on_path"] = unique[-1]["id"]
 
 
 def control_table(milestones: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -799,6 +876,25 @@ def control_table(milestones: list[dict[str, Any]]) -> list[dict[str, Any]]:
                     "criterion": "ok_receipt",
                     "worker": item.get("worker") or "ok_receipt",
                     "receipt_schema": item.get("receipt_schema"),
+                }
+            )
+        elif item.get("branch"):
+            br = item["branch"]
+            paths = []
+            for path in br.get("paths") or []:
+                if isinstance(path, dict):
+                    paths.append(str(path.get("id") or ""))
+                else:
+                    paths.append(str(path))
+            rows.append(
+                {
+                    "milestone": item["id"],
+                    "kind": "branch",
+                    "criterion": "branch_receipt",
+                    "worker": br.get("worker") or "branch_receipt",
+                    "default": br.get("default"),
+                    "paths": paths,
+                    "join": br.get("join"),
                 }
             )
     return rows

@@ -142,6 +142,10 @@ def run(input_data: dict[str, Any], draft: dict[str, Any] | None = None, **kwarg
                 if not isinstance(done, list):
                     done = list(ledger) if isinstance(ledger, list) else []
                 receipt_input = {"ledger": ledger if isinstance(ledger, list) else [], "done": done}
+            elif WORKER == "branch_receipt":
+                receipt_input = dict(payload)
+                if isinstance(draft, dict):
+                    receipt_input["draft"] = draft
             receipt = tools.run_library_tool(codebase, WORKER, receipt_input)
             if isinstance(receipt, dict):
                 payload["receipt"] = receipt

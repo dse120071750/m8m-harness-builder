@@ -269,6 +269,8 @@ def generate_v3_flow(
                 listed_tools.add(str(tool_id))
         if spec.get("worker"):
             listed_tools.add(str(spec["worker"]))
+        if spec.get("branch"):
+            listed_tools.add(str((spec.get("branch") or {}).get("worker") or spec.get("worker") or "branch_receipt"))
         for raw in spec.get("flowsteps") or []:
             if isinstance(raw, dict) and raw.get("tool"):
                 listed_tools.add(str(raw["tool"]))
@@ -348,6 +350,17 @@ def generate_v3_flow(
                 "item_schema": ledger.get("item_schema") or f"schemas/{mid}_item_v1.json",
                 "max_items": ledger.get("max_items") or 8,
             }
+        if spec.get("branch"):
+            br = dict(spec["branch"]) if isinstance(spec["branch"], dict) else {}
+            br.setdefault("worker", spec.get("worker") or "branch_receipt")
+            br.setdefault("receipt_schema", spec.get("receipt_schema") or f"schemas/{mid}_branch_v1.json")
+            item["branch"] = br
+            item["worker"] = br["worker"]
+            item["receipt_schema"] = br["receipt_schema"]
+            if item["worker"] not in item["tools"]:
+                item["tools"].append(item["worker"])
+        if spec.get("on_path"):
+            item["on_path"] = spec["on_path"]
         items.append(item)
         previous = item
     flow = {
@@ -441,6 +454,30 @@ def generate_v3_flow(
                     "code": {"type": "string"},
                     "attempt": {"type": "integer", "minimum": 1},
                     "item_id": {"type": "string"},
+                },
+            }
+            if _write_json(receipt_path, receipt_obj, overwrite=overwrite):
+                created.append(str(receipt_path))
+        if item.get("branch"):
+            spec = item["branch"] if isinstance(item["branch"], dict) else {}
+            paths = []
+            for raw in spec.get("paths") or []:
+                if isinstance(raw, dict) and raw.get("id"):
+                    paths.append(str(raw["id"]))
+                elif isinstance(raw, str) and raw:
+                    paths.append(raw)
+            receipt_path = harness / str(item.get("receipt_schema") or spec.get("receipt_schema") or f"schemas/{mid}_branch_v1.json")
+            receipt_obj = {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "$id": f"{mid}.branch.schema.json",
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["ok", "branch"],
+                "properties": {
+                    "ok": {"type": "boolean"},
+                    "branch": {"type": "string", "enum": paths or ["direct"]},
+                    "skipped": {"type": "array", "items": {"type": "string"}},
+                    "reason": {"type": "string"},
                 },
             }
             if _write_json(receipt_path, receipt_obj, overwrite=overwrite):
@@ -578,6 +615,8 @@ def generate_from_audit(
             tool_ids.append(str(tool_id))
         if item.get("worker"):
             tool_ids.append(str(item["worker"]))
+        if isinstance(item.get("branch"), dict) and item["branch"].get("worker"):
+            tool_ids.append(str(item["branch"]["worker"]))
     unique_tools: list[str] = []
     for tool_id in tool_ids:
         if tool_id and tool_id not in unique_tools:
@@ -603,6 +642,8 @@ def generate_from_audit(
             "receipt_schema": item.get("receipt_schema"),
             "max_attempts": item.get("max_attempts"),
             "foreach": item.get("foreach"),
+            "branch": item.get("branch"),
+            "on_path": item.get("on_path"),
             "on_tool_fail": item.get("on_tool_fail"),
             "max_model_attempts": item.get("max_model_attempts"),
             "_gate_schemas": {
@@ -707,6 +748,28 @@ def yaml_dump_v3(flow: dict[str, Any]) -> str:
             lines.append(f"      path: {fe['path']}")
             lines.append(f"      item_schema: {fe['item_schema']}")
             lines.append(f"      max_items: {fe['max_items']}")
+        if item.get("on_path"):
+            lines.append(f"    on_path: {item['on_path']}")
+        if item.get("branch") and isinstance(item["branch"], dict):
+            br = item["branch"]
+            lines.append("    branch:")
+            if br.get("worker"):
+                lines.append(f"      worker: {br.get('worker')}")
+            if br.get("default"):
+                lines.append(f"      default: {br.get('default')}")
+            if br.get("join"):
+                lines.append(f"      join: {br.get('join')}")
+            if br.get("receipt_schema"):
+                lines.append(f"      receipt_schema: {br.get('receipt_schema')}")
+            if br.get("paths"):
+                lines.append("      paths:")
+                for path in br["paths"]:
+                    if isinstance(path, dict):
+                        lines.append(f"        - id: {path.get('id')}")
+                        if path.get("then"):
+                            lines.append(f"          then: {path.get('then')}")
+                    else:
+                        lines.append(f"        - {path}")
     lines.append("")
     return "\n".join(lines)
 

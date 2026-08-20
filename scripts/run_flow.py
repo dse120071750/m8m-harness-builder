@@ -17,6 +17,7 @@ from session_layout import (
     default_run_dir,
     ensure_session_tree,
     materialize_bytes_into_slot,
+    record_skip,
     record_slot,
 )
 from flowstep_tools import infer_codebase
@@ -405,6 +406,10 @@ def _pass_artifact(
             fingerprint,
             [f"{step['id']}: milestone asset not produced; {exc}"],
         )
+    if step.get("branch"):
+        blocked = _check_branch(skill_dir, run_dir, flow, step, result, bindings, fingerprint)
+        if blocked is not None:
+            return blocked
     artifact = make_envelope(
         flow=flow,
         step=step,
@@ -422,7 +427,58 @@ def _pass_artifact(
     copy_envelope_to_slot(run_dir, step, path)
     record_slot(run_dir, step, result)
     _materialize(run_dir, flow, step, artifact, path)
+    if step.get("branch"):
+        _store_active_branch(run_dir, step, result)
     return None
+
+
+def _check_branch(
+    skill_dir: Path,
+    run_dir: Path,
+    flow: dict[str, Any],
+    step: dict[str, Any],
+    result: dict[str, Any],
+    bindings: list[dict[str, Any]],
+    fingerprint: str,
+) -> dict[str, Any] | None:
+    spec = step.get("branch") if isinstance(step.get("branch"), dict) else {}
+    path_ids = [str(item.get("id") or "") for item in (spec.get("paths") or []) if item]
+    receipt_rel = spec.get("receipt_schema") or step.get("receipt_schema")
+    try:
+        receipt = read_receipt(result, skill_dir=skill_dir, schema_rel=receipt_rel, step_id=step["id"])
+    except FlowError as exc:
+        return _write_blocked(run_dir, flow, step, bindings, fingerprint, [str(exc)])
+    if not receipt.get("ok"):
+        return _write_blocked(
+            run_dir,
+            flow,
+            step,
+            bindings,
+            fingerprint,
+            [f"{step['id']}: branch receipt not ok (could not decide)"],
+        )
+    chosen = str(receipt.get("branch") or "")
+    if not chosen or (path_ids and chosen not in path_ids):
+        return _write_blocked(
+            run_dir,
+            flow,
+            step,
+            bindings,
+            fingerprint,
+            [f"{step['id']}: unknown branch {chosen or '(empty)'}"],
+        )
+    return None
+
+
+def _store_active_branch(run_dir: Path, step: dict[str, Any], result: dict[str, Any]) -> None:
+    receipt = result.get("receipt") if isinstance(result.get("receipt"), dict) else {}
+    chosen = str(receipt.get("branch") or "")
+    record_path = _execution_path(run_dir)
+    record = read_json(record_path)
+    record["active_branch"] = chosen
+    record["branch_from"] = step["id"]
+    record["updated_at"] = utc_now()
+    write_json(record_path, record, overwrite=True)
 
 
 def _execute_step(
@@ -616,12 +672,34 @@ def advance(
     if created and (datetime.now(timezone.utc) - _parse_time(str(created))).total_seconds() > flow["max_run_seconds"]:
         raise FlowError("run exceeded the frozen wall-clock budget; start a fresh run")
     completed = {item["step_id"] for item in record["steps"]}
+    skipped = {str(item.get("step_id") or "") for item in (record.get("skipped") or [])}
     pending_draft = read_json(draft_path) if draft_path else None
     if draft_path and not isinstance(pending_draft, dict):
         raise FlowError("--draft must contain one JSON object")
     for step in flow["steps"]:
         artifact_path = expected_artifact_path(run_dir, flow, step)
         materialized_path = run_dir / "materialized" / f"{step['id']}.runtime_step_result.json"
+        if step["id"] in skipped:
+            continue
+        on_path = str(step.get("on_path") or "")
+        active = str(record.get("active_branch") or "")
+        if on_path and active and on_path != active:
+            record_skip(run_dir, step, branch=active, reason=f"on_path {on_path} skipped; branch={active}")
+            record = read_json(_execution_path(run_dir))
+            skipped_rows = list(record.get("skipped") or [])
+            skipped_rows.append(
+                {
+                    "step_id": step["id"],
+                    "branch": active,
+                    "skipped": True,
+                    "reason": f"on_path {on_path} != {active}",
+                }
+            )
+            record["skipped"] = skipped_rows
+            record["updated_at"] = utc_now()
+            write_json(_execution_path(run_dir), record, overwrite=True)
+            skipped.add(step["id"])
+            continue
         if step["id"] in completed:
             if not artifact_path.is_file() or not materialized_path.is_file():
                 raise FlowError(f"materialized step bytes disappeared: {step['id']}")
@@ -652,6 +730,7 @@ def advance(
         action = _execute_step(skill_dir, run_dir, flow, step, lock["fingerprint_sha256"], draft)
         if action is not None:
             return action
+        record = read_json(_execution_path(run_dir))
     record = read_json(_execution_path(run_dir))
     record["status"] = "COMPLETE"
     record["updated_at"] = utc_now()

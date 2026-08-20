@@ -77,6 +77,8 @@ class WriterSkillTests(unittest.TestCase):
         text = (Path(__file__).resolve().parents[1] / "SKILL.md").read_text(encoding="utf-8")
         self.assertIn("loop: for", text)
         self.assertIn("loop: judge", text)
+        self.assertIn("branch:", text)
+        self.assertIn("on_path:", text)
         self.assertIn("ledger", text)
         self.assertIn("worker", text)
 

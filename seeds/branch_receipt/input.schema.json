@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "paths": {
+      "type": "array",
+      "items": { "type": "string" },
+      "minItems": 2
+    },
+    "default": { "type": "string" },
+    "recommended_branch": { "type": "string" },
+    "case_type": { "type": "string" },
+    "draft": { "type": "object" },
+    "reason": { "type": "string" }
+  }
+}

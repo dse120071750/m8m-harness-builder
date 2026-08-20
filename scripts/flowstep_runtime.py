@@ -259,6 +259,43 @@ def _require(mapping: dict[str, Any], keys: set[str], label: str) -> None:
         raise FlowError(f"{label} missing keys: {missing}")
 
 
+def _normalize_branch(raw: Any, *, step_id: str) -> dict[str, Any] | None:
+    if not isinstance(raw, dict) or not raw:
+        return None
+    paths_raw = raw.get("paths")
+    if not isinstance(paths_raw, list) or len(paths_raw) < 2:
+        raise FlowError(f"{step_id}: branch requires at least two paths")
+    paths: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for index, item in enumerate(paths_raw):
+        if isinstance(item, str) and item.strip():
+            pid = item.strip()
+            then = pid
+        elif isinstance(item, dict) and item.get("id"):
+            pid = str(item["id"]).strip()
+            then = str(item.get("then") or pid).strip()
+        else:
+            raise FlowError(f"{step_id}: branch path {index} needs id")
+        if not STEP_ID_RE.match(pid):
+            raise FlowError(f"{step_id}: invalid branch path id: {pid}")
+        if pid in seen:
+            raise FlowError(f"{step_id}: duplicate branch path {pid}")
+        seen.add(pid)
+        paths.append({"id": pid, "then": then})
+    default = str(raw.get("default") or paths[0]["id"])
+    if default not in seen:
+        raise FlowError(f"{step_id}: branch.default {default} is not a path")
+    join = str(raw.get("join") or "").strip()
+    worker = str(raw.get("worker") or "branch_receipt").strip()
+    return {
+        "worker": worker,
+        "default": default,
+        "paths": paths,
+        "join": join or None,
+        "receipt_schema": str(raw.get("receipt_schema") or f"schemas/{step_id}_branch_v1.json"),
+    }
+
+
 def _load_flow_v3(skill_dir: Path, path: Path, raw: dict[str, Any]) -> dict[str, Any]:
     _require(raw, {"schema", "flow_id", "version", "milestones"}, "flow")
     if not isinstance(raw["flow_id"], str) or not FLOW_ID_RE.match(raw["flow_id"]):
@@ -315,6 +352,8 @@ def _load_flow_v3(skill_dir: Path, path: Path, raw: dict[str, Any]) -> dict[str,
             loop = "for"
         if loop in {"if", "judge"}:
             loop = "judge"
+        if loop == "branch":
+            raise FlowError(f"{step_id}: branch is after the milestone, not loop=branch")
         if loop not in {"none", "for", "judge"}:
             raise FlowError(f"{step_id}.loop must be none|for|judge")
         ledger = item.get("ledger") if isinstance(item.get("ledger"), dict) else None
@@ -337,14 +376,22 @@ def _load_flow_v3(skill_dir: Path, path: Path, raw: dict[str, Any]) -> dict[str,
         else:
             ledger = None
         worker = str(item.get("worker") or "").strip()
+        branch = _normalize_branch(item.get("branch"), step_id=step_id)
+        on_path = str(item.get("on_path") or "").strip()
         if loop in {"for", "judge"} and not worker:
             worker = "ledger_receipt" if loop == "for" else "ok_receipt"
+        if branch and not worker:
+            worker = str(branch.get("worker") or "branch_receipt")
         if worker and worker not in tools:
             tools.append(worker)
             flowsteps.append({"id": worker, "tool": worker})
         receipt_schema = item.get("receipt_schema")
         if loop in {"for", "judge"}:
             receipt_schema = receipt_schema or f"schemas/{step_id}_receipt_v1.json"
+        if branch:
+            receipt_schema = receipt_schema or str(branch.get("receipt_schema") or f"schemas/{step_id}_branch_v1.json")
+            branch["receipt_schema"] = receipt_schema
+            branch["worker"] = worker or "branch_receipt"
         max_attempts = item.get("max_attempts")
         if max_attempts is None:
             max_attempts = max_model_attempts
@@ -377,6 +424,8 @@ def _load_flow_v3(skill_dir: Path, path: Path, raw: dict[str, Any]) -> dict[str,
             "worker": worker or None,
             "receipt_schema": receipt_schema,
             "foreach": foreach,
+            "branch": branch,
+            "on_path": on_path or None,
             "next": [],
             "else": None,
             "join": None,
@@ -582,6 +631,33 @@ def load_tool(skill_dir: Path, step: dict[str, Any]) -> Any:
     return module
 
 
+def _last_pass_source(
+    run_dir: Path, flow: dict[str, Any], step: dict[str, Any]
+) -> tuple[dict[str, Any], Path, dict[str, Any]] | None:
+    by_id = {item["id"]: item for item in flow["steps"]}
+    ids = [item["id"] for item in flow["steps"]]
+    if step["id"] not in ids:
+        return None
+    skipped: set[str] = set()
+    record_path = Path(run_dir) / "flow-execution-record.json"
+    if record_path.is_file():
+        record = read_json(record_path)
+        skipped = {str(item.get("step_id") or "") for item in (record.get("skipped") or [])}
+    for prev_id in reversed(ids[: ids.index(step["id"])]):
+        if prev_id in skipped:
+            continue
+        source = by_id.get(prev_id)
+        if not source:
+            continue
+        path = expected_artifact_path(run_dir, flow, source)
+        if not path.is_file():
+            continue
+        artifact = read_json(path)
+        if artifact.get("status") == "PASS":
+            return source, path, artifact
+    return None
+
+
 def bind_inputs(run_dir: Path, flow: dict[str, Any], step: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     by_id = {item["id"]: item for item in flow["steps"]}
     payload: dict[str, Any] = {}
@@ -640,10 +716,18 @@ def bind_inputs(run_dir: Path, flow: dict[str, Any], step: dict[str, Any]) -> tu
             raise FlowError(f"{step['id']} input {name} contract mismatch: expected {source['output_contract']}")
         path = expected_artifact_path(run_dir, flow, source)
         if not path.is_file():
-            raise FlowError(f"missing upstream artifact: {source_id}")
-        artifact = read_json(path)
+            fallback = _last_pass_source(run_dir, flow, step)
+            if fallback is None:
+                raise FlowError(f"missing upstream artifact: {source_id}")
+            source, path, artifact = fallback
+        else:
+            artifact = read_json(path)
         if artifact.get("status") != "PASS":
-            raise FlowError(f"upstream step is not PASS: {source_id}")
+            fallback = _last_pass_source(run_dir, flow, step)
+            if fallback is None:
+                raise FlowError(f"upstream step is not PASS: {source_id}")
+            source, path, artifact = fallback
+        contract = source["output_contract"]
         payload[name] = artifact.get("data")
         bindings.append(
             {

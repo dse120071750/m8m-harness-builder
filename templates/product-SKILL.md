@@ -9,7 +9,9 @@ Written by `$m8m-harness-builder`. Each milestone is a harness checkpoint
 with a required asset (file, image, json proof, or data). Missing it is
 BLOCKED. FlowSteps inside are a guide: prefer one tool, recover like a
 normal agent if it fails. for is a ledger milestone; judge (if) retries
-until a repo worker receipt is `ok: true`.
+until a repo worker receipt is `ok: true`. Branch is after a
+milestone: AI drafts the path, `branch_receipt` writes `{ok, branch}`,
+the other path is skipped.
 
 Put generated images in `address.write_to` on the milestone input.
 Do not invent a folder. Do not leave files in Downloads or `/tmp`.

@@ -115,6 +115,8 @@ def _nodes(items: list[dict[str, Any]], statuses: dict[str, str] | None = None) 
                 "asset_kind": kind,
                 "flowsteps": flowsteps,
                 "status": str(statuses.get(mid) or item.get("status") or ""),
+                "branch": item.get("branch") if isinstance(item.get("branch"), dict) else None,
+                "on_path": item.get("on_path"),
             }
         )
     return nodes
@@ -181,9 +183,13 @@ def render_flowchart_image(
         _text(draw, (bx + 16, y + 12), head[: 36], small_font, GRAY)
         title_lines = _wrap(draw, human["title"], h2_font, box_w - 32)[:1]
         _text(draw, (bx + 16, y + 36), title_lines[0], h2_font)
+        if node.get("branch"):
+            _text(draw, (bx + 16, y + 56), "then branch", small_font, BLUE_EDGE)
+        elif node.get("on_path"):
+            _text(draw, (bx + 16, y + 56), f"path: {node['on_path']}"[: 28], small_font, BLUE_EDGE)
         produce = human["asset"].replace("must produce ", "must produce: ")
         produce_lines = _wrap(draw, produce, small_font, box_w - 32)[:2]
-        py = y + 68
+        py = y + 78 if (node.get("branch") or node.get("on_path")) else y + 68
         for line in produce_lines:
             _text(draw, (bx + 16, py), line, small_font, NAVY)
             py += 18

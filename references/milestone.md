@@ -24,9 +24,11 @@ M8M:     node = one milestone (harness)
 ```
 
 The driver advances milestone → milestone. Crop/hash stay FlowSteps
-inside a milestone. A **for loop** and a **judge loop (if)** **are**
-milestones. An internal repo worker writes `{ok: true|false}`. That
-receipt guards proceed. Intelligence may draft; it may not set `ok`.
+inside a milestone. A **for loop** and a **judge loop** **are**
+milestones. **Branch** is after a milestone: AI drafts the path, a
+worker writes `{ok, branch}`, the other path is skipped. An internal
+repo worker writes the receipt. Intelligence may draft; it may not
+set `ok` or `branch`. Do not call branch IF.
 
 Intelligence is optional *on* a milestone (`NEED_MODEL`). It is not a
 third canvas node.
@@ -104,18 +106,25 @@ A **tool** is the Python package. A **FlowStep** is the atomic goal that
 `flowsteps/tools/<id>/`, not drawing another milestone. See
 `references/tool-vs-intelligence.md`.
 
-## For (ledger) and judge (if)
+## For (ledger), judge, and branch
 
-Both are canvas milestones. Linear next. No exclusive `next.when`.
+For and judge are canvas milestones. Branch is **after** a checkpoint.
+No exclusive `next.when`. Skip is not BLOCK.
 
 - **for:** previous.out is a ledger (array + `maxItems` + item schema).
   This milestone walks remaining items and produces each asset until
   `remaining == 0`. One canvas box, not one node per item.
-- **judge (if):** retry until the worker receipt is `ok: true`. Image
+- **judge:** retry until the worker receipt is `ok: true`. Image
   generation and spatial alignment always use this.
+- **branch:** after this milestone’s asset PASSes, AI drafts which
+  generation path to take. The worker writes `{ok, branch}`. Milestones
+  with `on_path` not equal to that id are `skipped: true`. Join has no
+  `on_path`. Example: intake_ready → `direct` (default, case_type is
+  not source_case) or `floorplan_source_case` (source record + floor
+  plan, freeze the source title).
 - **worker:** required Python at `flowsteps/tools/<id>/`. Writes a closed
-  receipt with `ok`. Missing receipt or `ok: false` with no budget →
-  BLOCK. `ok: true` still needs the milestone asset.
+  receipt. Missing receipt or `ok: false` → BLOCK. `ok: true` still
+  needs the milestone asset. The model must not set `ok` or `branch`.
 
 ```yaml
 - id: images_bound

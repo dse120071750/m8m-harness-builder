@@ -9,7 +9,7 @@ description: >
 license: MIT
 metadata:
   author: dse120071750
-  version: "1.8"
+  version: "1.9"
 ---
 
 # M8M harness builder
@@ -22,7 +22,7 @@ identify milestones
   → list FlowSteps inside each (atomic; prefer ONE tool)
   → develop that tool (existing / promote / generate-new stub)
   → write one FlowStep table + one milestone flowchart
-     (markdown + humanized JPEG; for = ledger; if = judge-until-ok)
+     (markdown + humanized JPEG; for / judge / branch)
   → scaffold flow YAML and tool stubs
 ```
 
@@ -76,20 +76,23 @@ the split. After generate, and after every step edit (`write` /
 `mark`), both `planning/m8m-flowchart.md` and
 `planning/m8m-flowchart.jpg` are rewritten.
 
-## For and judge (if) are milestones
+## For, judge, and branch
 
-A **for loop** and a **judge loop (if)** are canvas milestones. Proceed is
-guarded by an **internal worker**: a required repo tool that writes
-`{ok: true|false}`. Intelligence may draft. It may not set `ok`.
+A **for loop** and a **judge loop** are canvas milestones. **Branch**
+is after a milestone. Proceed is guarded by an **internal worker**: a
+required repo tool that writes a closed receipt. Intelligence may
+draft. It may not set `ok` or `branch`.
 
 - **for:** previous asset is a **ledger** (typed array, `maxItems`). This
   milestone produces the item asset for each remaining row until
-  `remaining == 0`. Example: fetch image rows from a DB → freeze the
-  todo list → for-milestone binds every image.
-- **judge (if):** do the work until the worker says ok. **Image
-  generation** and **spatial alignment** always use this. `ok: false`
-  and budget left → stay on this milestone. Budget gone → BLOCK.
-- No exclusive `next.when`. URL vs text is data on the asset, not a fork.
+  `remaining == 0`.
+- **judge:** do the work until the worker says ok. **Image generation**
+  and **spatial alignment** always use this. `ok: false` and budget
+  left → stay. Budget gone → BLOCK.
+- **branch:** after this milestone’s asset PASSes, AI drafts which
+  generation path to take. The worker writes `{ok, branch}`. Other
+  path milestones are `skipped: true`. Skip is not BLOCK. Do not call
+  this IF: IF is a rigid schema fork. URL vs text stays data.
 
 ```yaml
 - id: images_bound
@@ -100,10 +103,23 @@ guarded by an **internal worker**: a required repo tool that writes
   loop: judge
   worker: alignment_judge
   intelligence: image
+- id: intake_ready
+  intelligence: completion
+  branch:
+    worker: branch_receipt
+    default: direct
+    paths:
+      - { id: direct, then: restyle_direct }
+      - { id: floorplan_source_case, then: floorplan_source_ready }
+    join: restyle_ready
+- id: restyle_direct
+  on_path: direct
+- id: floorplan_source_ready
+  on_path: floorplan_source_case
 ```
 
 Receipt `ok: true` **and** the milestone asset schema PASS → next
-milestone. Receipt cannot waive a missing asset.
+(or, for branch, the named path). Receipt cannot waive a missing asset.
 
 ## Session folder (address)
 

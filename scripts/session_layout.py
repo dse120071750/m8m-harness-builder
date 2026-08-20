@@ -193,6 +193,40 @@ def record_slot(run_dir: Path, step: dict[str, Any], result: dict[str, Any]) -> 
     write_json(path, data, overwrite=True)
 
 
+def record_skip(
+    run_dir: Path,
+    step: dict[str, Any],
+    *,
+    branch: str,
+    reason: str,
+) -> Path:
+    dest = Path(run_dir) / "milestones" / step["id"] / "skipped.json"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    write_json(
+        dest,
+        {
+            "schema": "m8m_skipped_v1",
+            "milestone": step["id"],
+            "skipped": True,
+            "branch": branch,
+            "reason": reason,
+            "updated_at": utc_now(),
+        },
+        overwrite=True,
+    )
+    path = Path(run_dir) / "manifest.json"
+    if path.is_file():
+        data = json.loads(path.read_text(encoding="utf-8"))
+    else:
+        data = {"schema": "m8m_run_manifest_v1", "run_id": Path(run_dir).name, "slots": []}
+    skipped = [item for item in (data.get("skipped") or []) if item.get("milestone") != step["id"]]
+    skipped.append({"milestone": step["id"], "branch": branch, "reason": reason, "skipped": True})
+    data["skipped"] = skipped
+    data["updated_at"] = utc_now()
+    write_json(path, data, overwrite=True)
+    return dest
+
+
 def copy_envelope_to_slot(run_dir: Path, step: dict[str, Any], envelope_path: Path) -> None:
     dest = Path(run_dir) / "milestones" / step["id"] / "out" / "asset.json"
     dest.parent.mkdir(parents=True, exist_ok=True)

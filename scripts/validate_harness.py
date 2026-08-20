@@ -75,7 +75,55 @@ def _validate_control(
         errors.append(f"{step_id}: max_model_attempts must be a positive integer")
     loop = str(step.get("loop") or "none")
     if step.get("next") or step.get("else") or step.get("join"):
-        errors.append(f"{step_id}: exclusive next.when/else/join is removed; if is the judge loop")
+        errors.append(f"{step_id}: exclusive next.when/else/join is removed; use branch after the milestone")
+    branch = step.get("branch") if isinstance(step.get("branch"), dict) else None
+    if branch:
+        worker = branch.get("worker") or step.get("worker")
+        if not worker:
+            errors.append(f"{step_id}: branch requires a repo worker tool")
+        paths = branch.get("paths") or []
+        if not isinstance(paths, list) or len(paths) < 2:
+            errors.append(f"{step_id}: branch requires at least two paths")
+        path_ids = [str(item.get("id") or "") for item in paths if isinstance(item, dict)]
+        if len(set(path_ids)) != len(path_ids):
+            errors.append(f"{step_id}: branch path ids must be unique")
+        default = str(branch.get("default") or "")
+        if default and default not in path_ids:
+            errors.append(f"{step_id}: branch.default {default} is not a path")
+        join = str(branch.get("join") or "")
+        if join and join not in declared:
+            errors.append(f"{step_id}: branch.join {join} is not a milestone")
+        for item in paths:
+            if not isinstance(item, dict):
+                continue
+            then = str(item.get("then") or item.get("id") or "")
+            if then and then not in declared:
+                errors.append(f"{step_id}: branch path {item.get('id')} then {then} is not a milestone")
+        receipt = skill_dir / str(branch.get("receipt_schema") or step.get("receipt_schema") or "")
+        if not receipt.is_file():
+            errors.append(f"{step_id}: missing branch receipt_schema")
+        else:
+            try:
+                schema = read_json(receipt)
+            except FlowError as exc:
+                errors.append(str(exc))
+            else:
+                names = schema_required_names(schema)
+                props = schema.get("properties") or {}
+                if "ok" not in names and "ok" not in props:
+                    errors.append(f"{step_id}: branch receipt schema must require ok")
+                if "branch" not in names and "branch" not in props:
+                    errors.append(f"{step_id}: branch receipt schema must require branch")
+    on_path = str(step.get("on_path") or "")
+    if on_path:
+        known_paths: set[str] = set()
+        for other in flow["steps"]:
+            spec = other.get("branch") if isinstance(other.get("branch"), dict) else {}
+            for item in spec.get("paths") or []:
+                if isinstance(item, dict) and item.get("id"):
+                    known_paths.add(str(item["id"]))
+        if known_paths and on_path not in known_paths:
+            errors.append(f"{step_id}: on_path {on_path} is not a declared branch path")
     if loop in {"for", "judge"} and not step.get("worker"):
         errors.append(f"{step_id}: loop={loop} requires a repo worker tool")
     if loop == "for":

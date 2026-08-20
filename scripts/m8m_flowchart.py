@@ -47,6 +47,8 @@ def _nodes(items: list[dict[str, Any]], statuses: dict[str, str] | None = None) 
                     tools=item.get("tools"),
                 )[0],
                 "status": str(statuses.get(mid) or item.get("status") or ""),
+                "branch": item.get("branch") if isinstance(item.get("branch"), dict) else None,
+                "on_path": item.get("on_path"),
             }
         )
     return nodes
@@ -84,6 +86,10 @@ def render_mermaid(items: list[dict[str, Any]]) -> str:
     nodes = _nodes(items)
     ids = [item["id"] for item in nodes]
     then_of = {str(edge["then"]) for item in nodes for edge in item["next"]}
+    for item in nodes:
+        for path in (item.get("branch") or {}).get("paths") or []:
+            if isinstance(path, dict) and path.get("then"):
+                then_of.add(str(path["then"]))
     join_ids = {item["id"] for item in nodes if item.get("join")}
     lines = ["flowchart TD", "    request([request])"]
     for item in nodes:
@@ -98,6 +104,12 @@ def render_mermaid(items: list[dict[str, Any]]) -> str:
             loop_line = f"<br/>for:{fe.get('path')} max={fe.get('max_items')}"
         elif item.get("loop") == "judge":
             loop_line = "<br/>judge until ok"
+        elif item.get("branch"):
+            paths = []
+            for path in (item.get("branch") or {}).get("paths") or []:
+                if isinstance(path, dict) and path.get("id"):
+                    paths.append(str(path["id"]))
+            loop_line = "<br/>branch:" + "/".join(paths[:4])
         extra = ""
         if item["intelligence"] not in {None, "none"}:
             extra = f"<br/>intel:{item['intelligence']}"
@@ -116,6 +128,16 @@ def render_mermaid(items: list[dict[str, Any]]) -> str:
             else:
                 lines.append(f'    {mid} -->|"else"| {else_to}')
             continue
+        br = item.get("branch") if isinstance(item.get("branch"), dict) else None
+        if br and br.get("paths"):
+            for path in br["paths"]:
+                if not isinstance(path, dict):
+                    continue
+                then = str(path.get("then") or "")
+                label = str(path.get("id") or "").replace('"', "")
+                if then:
+                    lines.append(f'    {mid} -->|"{label}"| {then}')
+            continue
     by_id = {item["id"]: item for item in nodes}
     for item in nodes:
         if item.get("join"):
@@ -131,6 +153,12 @@ def render_mermaid(items: list[dict[str, Any]]) -> str:
             if later in then_of:
                 continue
             dest = by_id[later]
+            src_path = item.get("on_path")
+            dest_path = dest.get("on_path")
+            if dest_path and src_path and dest_path != src_path:
+                continue
+            if dest_path and item.get("branch"):
+                continue
             if dest.get("join") and item["id"] in (dest.get("join") or []):
                 break
             if dest.get("join"):
@@ -197,6 +225,14 @@ def render_flowchart(
             control = f"for `{fe.get('path')}` max={fe.get('max_items')}"
         elif item.get("loop") == "judge":
             control = "judge until ok"
+        elif item.get("branch"):
+            paths = []
+            for path in (item.get("branch") or {}).get("paths") or []:
+                if isinstance(path, dict) and path.get("id"):
+                    paths.append(str(path["id"]))
+            control = "branch " + " / ".join(paths)
+        elif item.get("on_path"):
+            control = f"on_path `{item['on_path']}`"
         else:
             control = "linear"
         asset = item.get("asset_kind") or "required"
@@ -262,10 +298,36 @@ def render_flowchart(
                 f"| `{item['id']}` | `{item.get('worker') or 'ok_receipt'}` | "
                 f"`{item.get('receipt_schema') or 'schemas/ok_receipt.json'}` |"
             )
+    lines.extend(["", "## Branch (after the milestone)", ""])
+    branches = [item for item in nodes if item.get("branch")]
+    if not branches:
+        lines.append("None. No branch after a milestone.")
+    else:
+        lines.extend(
+            [
+                "AI drafts the path. The worker writes `{ok, branch}`. Skip is not BLOCK.",
+                "",
+                "| Milestone | Worker | Default | Paths | Join |",
+                "| --- | --- | --- | --- | --- |",
+            ]
+        )
+        for item in branches:
+            br = item.get("branch") or {}
+            paths = []
+            for path in br.get("paths") or []:
+                if isinstance(path, dict):
+                    paths.append(f"`{path.get('id')}`→`{path.get('then') or path.get('id')}`")
+                else:
+                    paths.append(f"`{path}`")
+            lines.append(
+                f"| `{item['id']}` | `{br.get('worker') or item.get('worker') or 'branch_receipt'}` | "
+                f"`{br.get('default') or '—'}` | {', '.join(paths)} | `{br.get('join') or '—'}` |"
+            )
     lines.extend(
         [
             "",
             "Proceed only when the worker receipt is `ok: true` and the milestone asset PASSes.",
+            "Branch is after that PASS. The model drafts; the tool writes `branch`.",
             "",
         ]
     )

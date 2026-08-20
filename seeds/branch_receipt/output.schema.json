@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["ok", "branch"],
+  "properties": {
+    "ok": { "type": "boolean" },
+    "branch": { "type": "string" },
+    "skipped": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "reason": { "type": "string" }
+  }
+}
