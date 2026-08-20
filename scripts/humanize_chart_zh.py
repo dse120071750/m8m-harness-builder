@@ -26,6 +26,9 @@ _PHRASE = {
     "floorplan_source_case": "平面图来源案",
     "fetch_record": "抓取记录",
     "hash_bind": "绑定哈希",
+    "wait_for_response": "等待回复",
+    "response_ready": "回复已就绪",
+    "reply_ready": "回复已就绪",
 }
 
 _HEAD = {
@@ -53,6 +56,10 @@ _HEAD = {
     "fetch": "抓取",
     "hash": "哈希",
     "bind": "绑定",
+    "response": "回复",
+    "reply": "回复",
+    "confirm": "确认",
+    "wait": "等待",
 }
 
 _ASSET = {

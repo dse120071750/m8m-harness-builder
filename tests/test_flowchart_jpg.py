@@ -29,6 +29,9 @@ class HumanizeTests(unittest.TestCase):
         self.assertEqual(title_id_zh("card_aligned"), "卡片已对齐")
         self.assertEqual(title_id_zh("pages_ledger_frozen"), "页账本已冻结")
         self.assertEqual(title_id_zh("intake_ready"), "入口已就绪")
+        self.assertEqual(title_id("response_ready"), "Response is ready")
+        self.assertEqual(title_id_zh("response_ready"), "回复已就绪")
+        self.assertEqual(title_id_zh("wait_for_response"), "等待回复")
         self.assertIn("must produce a file", success_line({"id": "source_ready", "asset_kind": "file"}))
         self.assertEqual(
             success_line({"id": "source_ready", "asset_kind": "file", "success": "Source bytes are bound."}),

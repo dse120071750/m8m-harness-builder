@@ -120,6 +120,23 @@ n8n 的画布是动作。M8M 的画布是关卡。人话来自 humanizer（`sour
 
 模型不能填 `ok` / `branch` / `cycle`。收据 ok 仍不能免掉 asset。
 
+### wait — 回复已就绪
+
+等待回复是**一关**，不是 n8n 的 Wait 节点，也不叫 `loop: wait`。里面仍是 N 个 FlowStep + 一支 judge。judge 读 `references/response_ready.md`：还没有 draft → 暂停（`ACTION_REQUIRED`）；gem 不合格 → 留在这一关继续；pass 收据 → 下一关。人把回复写进 `work/draft.json` 再 `advance()`。因为他们说了什么才选路，那是这一关 **之后** 的 branch。
+
+```text
+问已写下  →  回复已就绪（judge：暂停 / 继续 / pass）  →  下一关
+```
+
+```yaml
+- id: response_ready
+  asset: { kind: json }
+  gem: references/response_ready.md
+  intelligence: completion
+  loop: judge
+  worker: response_ready_judge
+```
+
 ### judge — 卡片已对齐
 
 出图、空间对齐永远走 judge。停在 **卡片已对齐**，直到 worker 说 ok。
@@ -386,6 +403,23 @@ Deploy as open source, like n8n: companies self-host a standardized, auditable a
 Every milestone has a gem and **one worker that looks at that gem**. The gem is not a canvas node. The judge is not a second box. Exist boxes use `hash_bind` / `schema_validate` once. Quality boxes use `loop: judge` plus a named `<id>_judge` (developed separately; not shared `ok_receipt`). Cycle and branch keep their own receipts.
 
 The model must not set `ok` / `branch` / `cycle`. An ok receipt still cannot waive a missing asset.
+
+### wait — Response is ready
+
+Wait-for-response is **one milestone**, not an n8n Wait node, and not `loop: wait`. Inside it is still N FlowSteps + one judge. The judge reads `references/response_ready.md`: no draft yet → pause (`ACTION_REQUIRED`); gem fail → stay and keep working; pass receipt → next. Write the reply to `work/draft.json` and `advance()`. A path because of what they said is **branch after** this box.
+
+```text
+ask is written  →  Response is ready (judge: pause / keep working / pass)  →  next
+```
+
+```yaml
+- id: response_ready
+  asset: { kind: json }
+  gem: references/response_ready.md
+  intelligence: completion
+  loop: judge
+  worker: response_ready_judge
+```
 
 ### judge — Card is aligned
 

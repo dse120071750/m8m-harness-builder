@@ -30,6 +30,8 @@ _COPULA_IS = {
     "file",
     "image",
     "harness",
+    "response",
+    "reply",
 }
 
 _ASSET = {

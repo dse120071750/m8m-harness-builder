@@ -6,6 +6,8 @@ from typing import Any
 
 GENERIC_JUDGE = {"ok_receipt", ""}
 GATE_TOKENS = ("gate", "judge", "evaluate", "alignment")
+WAIT_TOKENS = ("response", "reply", "confirm", "wait")
+QUALITY_TOKENS = {"align", "aligned", "generate", "generated", "spatial", "judge"} | set(WAIT_TOKENS)
 
 
 def gem_path(milestone_id: str) -> str:
@@ -52,7 +54,12 @@ def needs_judge(item: dict[str, Any]) -> bool:
         return True
     name = str(item.get("id") or "").lower().replace("-", "_")
     parts = set(name.split("_"))
-    return bool(parts & {"align", "aligned", "generate", "generated", "spatial", "judge"})
+    return bool(parts & QUALITY_TOKENS)
+
+
+def is_wait_milestone(item: dict[str, Any]) -> bool:
+    name = str(item.get("id") or "").lower().replace("-", "_")
+    return bool(set(name.split("_")) & set(WAIT_TOKENS))
 
 
 def pair_milestone(item: dict[str, Any]) -> dict[str, Any]:
@@ -77,6 +84,12 @@ def pair_milestone(item: dict[str, Any]) -> dict[str, Any]:
     current = str(item.get("worker") or "").strip()
     if needs_judge(item):
         item["loop"] = "judge"
+        if is_wait_milestone(item) and str(item.get("intelligence") or "none") == "none":
+            item["intelligence"] = "completion"
+            item.setdefault(
+                "model_justification",
+                "pause until a usable reply is in the slot; judge reads the gem",
+            )
         if not current or current in GENERIC_JUDGE:
             gate = pick_gate_tool(item.get("tools") or [])
             item["worker"] = gate or judge_worker_id(mid)

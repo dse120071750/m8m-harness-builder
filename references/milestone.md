@@ -114,6 +114,9 @@ box (`<id>_judge` or a listed gate tool), not shared `ok_receipt`.
 
 - Exist boxes: worker `hash_bind` / `schema_validate`. No `loop: judge`.
 - Good boxes: `loop: judge` + named worker. Stay until `{ok}`.
+- Wait-for-response: a **milestone** (`response_ready`), not `loop: wait`.
+  Same inside: N FlowSteps + judge. No draft → pause. Gem fail → keep
+  working. Pass + asset → next. Resume via `work/draft.json`.
 - Cycle / branch keep their own receipts. Not a second milestone
   after the doer.
 

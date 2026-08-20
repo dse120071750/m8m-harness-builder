@@ -82,6 +82,8 @@ class WriterSkillTests(unittest.TestCase):
         self.assertIn("references/<id>.md", text)
         self.assertIn("card_aligned_judge", text)
         self.assertIn("ok_receipt", text)
+        self.assertIn("response_ready", text)
+        self.assertIn("Do not add `loop: wait`", text)
         self.assertIn("on_path:", text)
         self.assertIn("ledger", text)
         self.assertIn("worker", text)

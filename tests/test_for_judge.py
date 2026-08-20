@@ -8,7 +8,7 @@ from pathlib import Path
 import support  # noqa: F401
 
 from audit_harness import infer_schema_control, needs_judge
-from milestone_pair import pair_milestone, pick_gate_tool
+from milestone_pair import is_wait_milestone, pair_milestone, pick_gate_tool
 from flowstep_runtime import FlowError, read_json
 from generate_harness import generate_tool, generate_v3_flow
 from m8m_flowchart import render_flowchart, render_mermaid
@@ -330,6 +330,17 @@ class InferLoopTests(unittest.TestCase):
         self.assertEqual(item["loop"], "judge")
         self.assertEqual(item["worker"], "restyle_alignment_gate")
         self.assertEqual(pick_gate_tool(["hash_bind", "ok_receipt"]), None)
+
+    def test_response_ready_is_wait_judge(self) -> None:
+        item = {"id": "response_ready", "asset": {"kind": "json"}, "tools": []}
+        self.assertTrue(is_wait_milestone(item))
+        self.assertTrue(needs_judge(item))
+        pair_milestone(item)
+        self.assertEqual(item["loop"], "judge")
+        self.assertEqual(item["worker"], "response_ready_judge")
+        self.assertEqual(item["intelligence"], "completion")
+        self.assertEqual(item["gem"], "references/response_ready.md")
+        self.assertNotEqual(item["worker"], "ok_receipt")
 
 
 class ChartLoopTests(unittest.TestCase):

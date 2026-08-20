@@ -6,6 +6,8 @@ import shutil
 from pathlib import Path
 from typing import Any
 
+from milestone_pair import is_wait_milestone
+
 
 TEACHING_DIRNAME = "references"
 EMPTY = "—"
@@ -160,7 +162,13 @@ def write_milestone_gems(
         )
         loop = str(item.get("loop") or "none")
         worker = str(item.get("worker") or "")
-        if loop == "judge":
+        if is_wait_milestone(item):
+            judge_line = (
+                "- Loop: judge (wait). No draft yet → pause (ACTION_REQUIRED). "
+                "Gem fail → keep working on this box. Pass receipt → next. "
+                "Resume by writing work/draft.json."
+            )
+        elif loop == "judge":
             judge_line = "- Loop: judge. Stay on this box until that worker receipt is ok. Exists is not enough."
         elif worker:
             judge_line = "- Loop: none. The worker certifies the gem in one shot (exist). Not a retry loop."
