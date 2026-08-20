@@ -62,13 +62,44 @@ def asset_line(kind: str) -> str:
     return _ASSET.get(str(kind or "").lower(), "must produce the declared asset")
 
 
-def humanize_milestone(node: dict[str, Any]) -> dict[str, str]:
-    mid = str(node.get("id") or "")
-    kind = str(
+def _kind(node: dict[str, Any]) -> str:
+    return str(
         node.get("asset_kind")
         or ((node.get("asset") or {}).get("kind") if isinstance(node.get("asset"), dict) else "")
         or ""
     )
+
+
+def success_line(node: dict[str, Any]) -> str:
+    """Rule of success: humanizer sentence. Explicit YAML wins."""
+    explicit = str(node.get("success") or "").strip()
+    if explicit:
+        return explicit
+    mid = str(node.get("id") or "")
+    kind = _kind(node)
+    loop = str(node.get("loop") or "none")
+    extra = ""
+    if loop == "judge":
+        extra += " Retry until the worker receipt is ok."
+    cycle = node.get("cycle") if isinstance(node.get("cycle"), dict) else None
+    if cycle:
+        declared = str(cycle.get("pass") or "").strip()
+        extra += " " + (declared or "Then cycle: pass preserves the round; fail purges residue.")
+    branch = node.get("branch") if isinstance(node.get("branch"), dict) else None
+    if branch:
+        paths = []
+        for item in branch.get("paths") or []:
+            if isinstance(item, dict) and item.get("id"):
+                paths.append(str(item["id"]))
+            elif item:
+                paths.append(str(item))
+        extra += f" Then branch ({' / '.join(paths)})."
+    return f"{title_id(mid)} — {asset_line(kind)}.{extra}".strip()
+
+
+def humanize_milestone(node: dict[str, Any]) -> dict[str, str]:
+    mid = str(node.get("id") or "")
+    kind = _kind(node)
     loop = str(node.get("loop") or "none")
     extra = ""
     ledger = node.get("ledger") if isinstance(node.get("ledger"), dict) else None
@@ -89,6 +120,7 @@ def humanize_milestone(node: dict[str, Any]) -> dict[str, str]:
                 paths.append(str(item))
         extra = (extra + f" Then branch ({' / '.join(paths)}).").strip()
     status = str(node.get("status") or "").upper()
+    success = success_line(node)
     caption = f"{title_id(mid)} — {asset_line(kind)}.{extra}".strip()
     if status:
         caption = f"{caption} [{status}]"
@@ -96,6 +128,7 @@ def humanize_milestone(node: dict[str, Any]) -> dict[str, str]:
         "id": mid,
         "title": title_id(mid),
         "asset": asset_line(kind),
+        "success": success,
         "caption": caption,
         "kind": kind or "required",
         "status": status,

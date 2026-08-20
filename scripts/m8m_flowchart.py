@@ -51,6 +51,7 @@ def _nodes(items: list[dict[str, Any]], statuses: dict[str, str] | None = None) 
                 "on_path": item.get("on_path"),
                 "cycle": item.get("cycle") if isinstance(item.get("cycle"), dict) else None,
                 "on_cycle": item.get("on_cycle"),
+                "success": item.get("success"),
             }
         )
     return nodes
@@ -214,12 +215,12 @@ def render_flowchart(
         [
             "## Nodes",
             "",
-            "| Milestone | What it means | Asset | Status | Intelligence | Tools | Control |",
-            "| --- | --- | --- | --- | --- | --- | --- |",
+            "| Milestone | What it means | Success | Asset | Status | Intelligence | Tools | Control |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- |",
         ]
     )
     if not nodes:
-        lines.append("| (none) | | | | | | |")
+        lines.append("| (none) | | | | | | | |")
     for item in nodes:
         tools = ", ".join(f"`{tool}`" for tool in item["tools"]) or "none"
         if item.get("loop") == "for" and item.get("ledger"):
@@ -245,7 +246,7 @@ def render_flowchart(
         human = humanize_milestone(item)
         status = human.get("status") or "—"
         lines.append(
-            f"| `{item['id']}` | {human['title']} | `{asset}` | `{status}` | "
+            f"| `{item['id']}` | {human['title']} | {human.get('success') or human['asset']} | `{asset}` | `{status}` | "
             f"`{item['intelligence']}` | {tools} | {control} |"
         )
     lines.extend(

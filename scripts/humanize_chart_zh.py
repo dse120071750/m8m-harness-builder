@@ -84,6 +84,35 @@ def asset_line(kind: str) -> str:
     return _ASSET.get(str(kind or "").lower(), "必须交出已声明的 asset")
 
 
+def success_line(node: dict[str, Any]) -> str:
+    explicit = str(node.get("success") or "").strip()
+    if explicit:
+        return explicit
+    mid = str(node.get("id") or "")
+    kind = str(
+        node.get("asset_kind")
+        or ((node.get("asset") or {}).get("kind") if isinstance(node.get("asset"), dict) else "")
+        or ""
+    )
+    extra = ""
+    if str(node.get("loop") or "none") == "judge":
+        extra = " 重试直到 worker 收据 ok。"
+    cycle = node.get("cycle") if isinstance(node.get("cycle"), dict) else None
+    if cycle:
+        declared = str(cycle.get("pass") or "").strip()
+        extra += declared or " 然后 cycle：pass 保留本轮；fail 清掉 residual。"
+    branch = node.get("branch") if isinstance(node.get("branch"), dict) else None
+    if branch:
+        paths = []
+        for item in branch.get("paths") or []:
+            if isinstance(item, dict) and item.get("id"):
+                paths.append(title_id(str(item["id"])))
+            elif item:
+                paths.append(title_id(str(item)))
+        extra += f" 然后 branch（{' / '.join(paths)}）。"
+    return f"{title_id(mid)} — {asset_line(kind)}。{extra}".strip()
+
+
 def humanize_milestone(node: dict[str, Any]) -> dict[str, str]:
     mid = str(node.get("id") or "")
     kind = str(
@@ -112,6 +141,7 @@ def humanize_milestone(node: dict[str, Any]) -> dict[str, str]:
         "id": mid,
         "title": title_id(mid),
         "asset": asset_line(kind),
+        "success": success_line(node),
         "caption": caption,
         "kind": kind or "required",
     }

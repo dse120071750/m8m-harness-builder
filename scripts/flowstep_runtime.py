@@ -441,9 +441,12 @@ def _load_flow_v3(skill_dir: Path, path: Path, raw: dict[str, Any]) -> dict[str,
             cycle["receipt_schema"] = receipt_schema
             cycle["worker"] = worker or "cycle_receipt"
         max_attempts = item.get("max_attempts")
-        if max_attempts is None:
+        if max_attempts is None and loop != "judge":
             max_attempts = max_model_attempts
-        if not isinstance(max_attempts, int) or max_attempts < 1:
+        if max_attempts is None:
+            if loop != "judge":
+                raise FlowError(f"{step_id}.max_attempts must be a positive integer")
+        elif not isinstance(max_attempts, int) or max_attempts < 1:
             raise FlowError(f"{step_id}.max_attempts must be a positive integer")
         asset = item.get("asset") if isinstance(item.get("asset"), dict) else {}
         asset_kind = str(asset.get("kind") or "").strip().lower()
@@ -476,6 +479,7 @@ def _load_flow_v3(skill_dir: Path, path: Path, raw: dict[str, Any]) -> dict[str,
             "on_path": on_path or None,
             "cycle": cycle,
             "on_cycle": on_cycle or None,
+            "success": str(item.get("success") or "").strip() or None,
             "next": [],
             "else": None,
             "join": None,

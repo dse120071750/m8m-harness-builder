@@ -719,11 +719,30 @@ def _schema_properties(schema: dict[str, Any] | None) -> dict[str, Any]:
     return props if isinstance(props, dict) else {}
 
 
-JUDGE_HINTS = ("generate", "align", "render", "image", "card", "spatial", "judge")
+JUDGE_HINTS = ("align", "generate", "spatial", "judge")
+JUDGE_TOKENS = ("align", "aligned", "generate", "generated", "spatial", "judge")
+
+
+def needs_judge(item: dict[str, Any]) -> bool:
+    """Exists is not enough: image/align/generate quality. Schema PASS is not judge."""
+    if str(item.get("loop") or "none") == "judge":
+        return True
+    intel = str(item.get("intelligence") or "none")
+    if intel in {"image", "judge"}:
+        return True
+    name = str(item.get("id") or "").lower()
+    tokens = _tokens(name)
+    if any(token in JUDGE_TOKENS for token in tokens):
+        return True
+    if any(hint in name for hint in JUDGE_HINTS):
+        return True
+    return False
 
 
 def infer_schema_control(milestones: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Mark for (ledger) and judge (until ok) milestones. Never exclusive next.when."""
+    from humanize_chart import success_line
+
     for index, item in enumerate(milestones):
         loop = str(item.get("loop") or "none")
         if loop in {"for", "judge"}:
@@ -731,6 +750,8 @@ def infer_schema_control(milestones: list[dict[str, Any]]) -> list[dict[str, Any
                 item["worker"] = "ledger_receipt"
             if loop == "judge" and not item.get("worker"):
                 item["worker"] = "ok_receipt"
+            if not item.get("success"):
+                item["success"] = success_line(item)
             continue
         if index > 0:
             prev_props = _schema_properties(milestones[index - 1].get("output_schema"))
@@ -771,16 +792,19 @@ def infer_schema_control(milestones: list[dict[str, Any]]) -> list[dict[str, Any
                 item["worker"] = item.get("worker") or "cycle_receipt"
                 item["receipt_schema"] = item["cycle"]["receipt_schema"]
                 continue
-        intel = str(item.get("intelligence") or "none")
-        name = str(item.get("id") or "").lower()
-        if intel in {"image", "judge"} or any(hint in name for hint in JUDGE_HINTS):
+        if needs_judge(item):
             item["loop"] = "judge"
             item["worker"] = item.get("worker") or "ok_receipt"
             item["receipt_schema"] = item.get("receipt_schema") or f"schemas/{item['id']}_receipt_v1.json"
+        if not item.get("success"):
+            item["success"] = success_line(item)
         item.pop("next", None)
         item.pop("else", None)
         item.pop("join", None)
     _infer_branch(milestones)
+    for item in milestones:
+        if not item.get("success"):
+            item["success"] = success_line(item)
     return milestones
 
 
@@ -1262,6 +1286,18 @@ def audit_skill(root: Path) -> dict[str, Any]:
     python_tools = _ensure_intel_toolbox(milestones, python_tools)
     milestones = _rechain_milestones(root, milestones)
     milestones = infer_schema_control(milestones)
+    if len(milestones) >= 2 and all(str(item.get("loop") or "") == "judge" for item in milestones):
+        grade.setdefault("findings", []).append(
+            {
+                "severity": "P1",
+                "id": "judge_overuse",
+                "note": (
+                    "every milestone is judge; schema PASS is success unless exists is not enough. "
+                    "Do not drop a shared judge module onto cycle, branch, or every asset."
+                ),
+            }
+        )
+        grade["p1_count"] = int(grade.get("p1_count") or 0) + 1
 
     current_tools = []
     for script in inventory.get("scripts") or []:
@@ -1455,15 +1491,15 @@ def render_audit_markdown(report: dict[str, Any]) -> str:
     lines.extend(
         [
             "",
-            "| # | Milestone | Asset | Intelligence | Python tools | Output contract | Human inspects |",
-            "| ---: | --- | --- | --- | --- | --- | --- |",
+            "| # | Milestone | Asset | Success | Intelligence | Python tools | Output contract | Human inspects |",
+            "| ---: | --- | --- | --- | --- | --- | --- | --- |",
         ]
     )
     for index, item in enumerate(report.get("proposed_milestones") or [], start=1):
         tools = ", ".join(f"`{tool}`" for tool in item.get("tools") or []) or "none"
         asset = ((item.get("asset") or {}).get("kind") if isinstance(item.get("asset"), dict) else None) or "required"
         lines.append(
-            f"| {index} | `{item['id']}` | `{asset}` | `{item.get('intelligence') or 'none'}` | {tools} | "
+            f"| {index} | `{item['id']}` | `{asset}` | {item.get('success') or ''} | `{item.get('intelligence') or 'none'}` | {tools} | "
             f"`{item['output_contract']}` | {item.get('inspects') or ''} |"
         )
     lines.extend(
@@ -1487,8 +1523,9 @@ def render_audit_markdown(report: dict[str, Any]) -> str:
             "",
             "## Schema control",
             "",
-            "for = ledger milestone until remaining=0. judge (if) = retry until worker ok.",
-            "Proceed only on a repo worker receipt `{ok: true}` plus the asset.",
+            "Rule of success lives on each milestone gem. Schema PASS is exist.",
+            "judge = stay on this box until the worker says the asset is good (exists ≠ good).",
+            "cycle and branch keep their own receipts. Do not wrap them in a shared judge module.",
             "",
         ]
     )

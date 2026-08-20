@@ -117,6 +117,8 @@ def _nodes(items: list[dict[str, Any]], statuses: dict[str, str] | None = None) 
                 "status": str(statuses.get(mid) or item.get("status") or ""),
                 "branch": item.get("branch") if isinstance(item.get("branch"), dict) else None,
                 "on_path": item.get("on_path"),
+                "cycle": item.get("cycle") if isinstance(item.get("cycle"), dict) else None,
+                "success": item.get("success"),
             }
         )
     return nodes
@@ -187,7 +189,7 @@ def render_flowchart_image(
             _text(draw, (bx + 16, y + 56), "then branch", small_font, BLUE_EDGE)
         elif node.get("on_path"):
             _text(draw, (bx + 16, y + 56), f"path: {node['on_path']}"[: 28], small_font, BLUE_EDGE)
-        produce = human["asset"].replace("must produce ", "must produce: ")
+        produce = human.get("success") or human["asset"]
         produce_lines = _wrap(draw, produce, small_font, box_w - 32)[:2]
         py = y + 78 if (node.get("branch") or node.get("on_path")) else y + 68
         for line in produce_lines:
@@ -218,7 +220,7 @@ def render_flowchart_image(
 
     focus_h = humanize_milestone(focus)
     _text(draw, (64, inner_top + 16), f"MILESTONE  {focus['id']}", h2_font)
-    cap = focus_h["title"] + " — " + focus_h["asset"]
+    cap = focus_h.get("success") or (focus_h["title"] + " — " + focus_h["asset"])
     _text(draw, (64, inner_top + 44), cap[: 110], small_font, GRAY)
 
     sh = 92

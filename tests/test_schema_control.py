@@ -78,6 +78,8 @@ class WriterSkillTests(unittest.TestCase):
         self.assertIn("cycle:", text)
         self.assertIn("loop: judge", text)
         self.assertIn("branch:", text)
+        self.assertIn("rule of success", text.lower())
+        self.assertIn("references/<milestone_id>.md", text)
         self.assertIn("on_path:", text)
         self.assertIn("ledger", text)
         self.assertIn("worker", text)

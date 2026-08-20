@@ -9,7 +9,7 @@ description: >
 license: MIT
 metadata:
   author: dse120071750
-  version: "1.10"
+  version: "1.11"
 ---
 
 # M8M harness builder
@@ -23,6 +23,7 @@ identify milestones
   → develop that tool (existing / promote / generate-new stub)
   → write one FlowStep table + one milestone flowchart
      (markdown + humanized JPEG; cycle / judge / branch)
+  → write each milestone’s gem (rule of success)
   → scaffold flow YAML and tool stubs
 ```
 
@@ -60,7 +61,8 @@ Deliverables (this is the product):
 | `planning/flowstep-audit.md` | Proposed milestones, FlowSteps, tools |
 | `planning/m8m-flowchart.md` | Milestone chart (harness) + FlowStep table (guide) + For/Judge tables |
 | `planning/m8m-flowchart.jpg` | Portable audit JPEG. Humanizer names each milestone and FlowStep. Rewritten on generate and on every step edit. |
-| `<repo>/flowsteps/flows/<id>/flow.yaml` | Scaffolded chain |
+| `<repo>/flowsteps/flows/<id>/flow.yaml` | Scaffolded chain (`success:` on every milestone) |
+| `<repo>/flowsteps/flows/<id>/references/<id>.md` | Gem: rule of success for that checkpoint |
 | `<repo>/flowsteps/tools/<id>/` | Seeded tools, or stubs marked generate-new |
 | `<repo>/.agents/skills/<name>/SKILL.md` and `.claude/skills/<name>/SKILL.md` | Pointer skill |
 
@@ -76,7 +78,27 @@ the split. After generate, and after every step edit (`write` /
 `mark`), both `planning/m8m-flowchart.md` and
 `planning/m8m-flowchart.jpg` are rewritten.
 
-## Cycle, judge, and branch
+## Rule of success (gem), then cycle / judge / branch
+
+Every milestone has a **rule of success**. The meaning lives on that
+milestone’s **gem**: `flowsteps/flows/<id>/references/<milestone_id>.md`.
+The harness still only gates on the **asset**. Do not add a shared
+judge module and drop it onto cycle, asset, quality, and branch.
+
+Two layers. Do not merge them.
+
+1. **Exist (harness).** Source is ready must produce a file (path +
+   sha256). Missing → BLOCK. Schema cannot be waived by a model, a
+   gem, or a judge.
+2. **Good (gem).** How a person would pass this checkpoint. Teaching,
+   like a normal skill. `loop: judge` only when exist is not enough
+   (image, alignment, “does it teach”). Worker writes `{ok}`.
+   Intelligence may draft. It may not set `ok`.
+
+Self-looping FlowSteps when it is not working is already this
+milestone: `on_tool_fail: need_model`, and `loop: judge` when quality
+is the gate. Do not add a new canvas loop that re-runs the FlowStep
+table as a program.
 
 Proceed is guarded by an **internal worker**. Intelligence may draft.
 It may not set `ok`, `branch`, or `cycle`. Do not use FOR or IF.
@@ -86,15 +108,17 @@ It may not set `ok`, `branch`, or `cycle`. Do not use FOR or IF.
   asset PASSes, AI drafts pass|fail. `cycle_receipt` writes the
   receipt **and updates the ledger**. Pass → preserve `items/NNN`.
   Fail → purge live residue; the row stays unfinished (resumable).
-  `remaining == 0` is data, not the gate.
+  `remaining == 0` is data, not the gate. Not a judge module.
 - **judge:** do the work on *this* milestone until the worker says ok.
-  Image generation and spatial alignment always use this.
+  Image generation and spatial alignment always use this. Rare.
 - **branch:** after this milestone’s asset PASSes, AI drafts which
   path to take. The worker writes `{ok, branch}`. Skip is not BLOCK.
+  Not a judge module.
 
 ```yaml
 - id: pages_ledger_frozen
   asset: { kind: json }
+  success: "Pages ledger is frozen — must produce a json proof."
 - id: page_bound
   on_cycle: pages
 - id: page_rendered
@@ -109,6 +133,7 @@ It may not set `ok`, `branch`, or `cycle`. Do not use FOR or IF.
   loop: judge
   worker: alignment_judge
   intelligence: image
+  success: "Card is aligned — must produce an image (path + sha256). Retry until the worker receipt is ok."
 - id: intake_ready
   intelligence: completion
   branch:

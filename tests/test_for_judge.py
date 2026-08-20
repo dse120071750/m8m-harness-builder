@@ -7,7 +7,7 @@ from pathlib import Path
 
 import support  # noqa: F401
 
-from audit_harness import infer_schema_control
+from audit_harness import infer_schema_control, needs_judge
 from flowstep_runtime import FlowError, read_json
 from generate_harness import generate_tool, generate_v3_flow
 from m8m_flowchart import render_flowchart, render_mermaid
@@ -150,7 +150,7 @@ class JudgeLoopTests(unittest.TestCase):
             codebase = Path(temp) / "repo"
             generate_tool(codebase, "hash_bind")
             generate_tool(codebase, "ok_receipt")
-            generate_v3_flow(codebase, "judge_v1", ["card_aligned"], tools=["hash_bind"])
+            generate_v3_flow(codebase, "judge_v1", ["card_aligned"], tools=["ok_receipt"])
             harness = codebase / "flowsteps" / "flows" / "judge_v1"
             _write(
                 harness / "schemas" / "card_aligned_v1.json",
@@ -195,7 +195,7 @@ class JudgeLoopTests(unittest.TestCase):
             codebase = Path(temp) / "repo"
             generate_tool(codebase, "hash_bind")
             generate_tool(codebase, "ok_receipt")
-            generate_v3_flow(codebase, "judge_fail_v1", ["card_aligned"], tools=["hash_bind"])
+            generate_v3_flow(codebase, "judge_fail_v1", ["card_aligned"], tools=["ok_receipt"])
             harness = codebase / "flowsteps" / "flows" / "judge_fail_v1"
             _write(
                 harness / "schemas" / "card_aligned_v1.json",
@@ -291,6 +291,26 @@ class InferLoopTests(unittest.TestCase):
         infer_schema_control(milestones)
         self.assertEqual(milestones[1]["loop"], "judge")
         self.assertEqual(milestones[1]["worker"], "ok_receipt")
+        self.assertNotEqual(milestones[0].get("loop"), "judge")
+        self.assertTrue(milestones[0].get("success"))
+        self.assertIn("Retry until the worker receipt is ok", milestones[1]["success"])
+
+    def test_does_not_judge_every_asset_milestone(self) -> None:
+        milestones = [
+            {"id": "source_ready", "intelligence": "none", "tools": ["hash_bind"], "output_schema": {}, "asset": {"kind": "file"}},
+            {"id": "plan_frozen", "intelligence": "none", "tools": ["hash_bind"], "output_schema": {}, "asset": {"kind": "json"}},
+            {"id": "release_packaged", "intelligence": "none", "tools": ["hash_bind"], "output_schema": {}, "asset": {"kind": "file"}},
+        ]
+        infer_schema_control(milestones)
+        self.assertTrue(all(str(item.get("loop") or "none") != "judge" for item in milestones))
+        self.assertTrue(all(item.get("success") for item in milestones))
+
+    def test_needs_judge_is_quality_not_every_checkpoint(self) -> None:
+        self.assertFalse(needs_judge({"id": "source_ready"}))
+        self.assertFalse(needs_judge({"id": "plan_frozen"}))
+        self.assertTrue(needs_judge({"id": "card_aligned"}))
+        self.assertTrue(needs_judge({"id": "slot_generated"}))
+        self.assertTrue(needs_judge({"id": "design_frozen", "intelligence": "image"}))
 
 
 class ChartLoopTests(unittest.TestCase):

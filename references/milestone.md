@@ -106,6 +106,18 @@ A **tool** is the Python package. A **FlowStep** is the atomic goal that
 `flowsteps/tools/<id>/`, not drawing another milestone. See
 `references/tool-vs-intelligence.md`.
 
+## Rule of success (gem)
+
+Every milestone has a rule of success. Put it on that milestone’s gem
+(`flowsteps/flows/<id>/references/<milestone_id>.md`) and on YAML
+`success:`. Schema PASS is **exist**. `loop: judge` is **good** when
+exist is not enough. Cycle and branch keep their own receipts.
+
+Do not ship a shared judge module used on cycle, asset, quality, and
+branch. That is the same rigidity as FOR and IF.
+
+The product `SKILL.md` points at the gems. It is not the recipe book.
+
 ## Cycle, judge, and branch
 
 Judge is a canvas milestone. Branch is **after** a checkpoint. Cycle

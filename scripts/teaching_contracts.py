@@ -129,3 +129,48 @@ def copy_teaching_contracts(
 
 def list_flow_teaching_rel(harness: Path) -> list[str]:
     return [f"{TEACHING_DIRNAME}/{path.name}" for path in list_teaching(harness)]
+
+
+def write_milestone_gems(
+    harness: Path,
+    milestones: list[dict[str, Any]],
+    *,
+    overwrite: bool = False,
+) -> list[str]:
+    """One gem per milestone: rule of success lives here, not in a shared judge module."""
+    from humanize_chart import success_line, title_id
+
+    written: list[str] = []
+    dest_dir = Path(harness) / TEACHING_DIRNAME
+    template = Path(__file__).resolve().parents[1] / "templates" / "milestone" / "gem.md"
+    body = template.read_text(encoding="utf-8") if template.is_file() else (
+        "# __TITLE__\n\nRule of success: __SUCCESS__\n"
+    )
+    for item in milestones:
+        mid = str(item.get("id") or "").strip()
+        if not mid:
+            continue
+        dest = dest_dir / f"{mid}.md"
+        if dest.exists() and not overwrite:
+            continue
+        kind = str(
+            ((item.get("asset") or {}).get("kind") if isinstance(item.get("asset"), dict) else "")
+            or item.get("asset_kind")
+            or "required"
+        )
+        loop = str(item.get("loop") or "none")
+        if loop == "judge":
+            judge_line = "- Judge: stay on this box until the worker receipt is ok. Exists is not enough."
+        else:
+            judge_line = "- Judge: no. Schema PASS is success unless a later edit marks exists ≠ good."
+        text = (
+            body.replace("__TITLE__", title_id(mid))
+            .replace("__SUCCESS__", str(item.get("success") or success_line(item)))
+            .replace("__MID__", mid)
+            .replace("__KIND__", kind)
+            .replace("__JUDGE_LINE__", judge_line)
+        )
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(text, encoding="utf-8", newline="\n")
+        written.append(str(dest))
+    return written

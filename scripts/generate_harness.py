@@ -25,7 +25,8 @@ from flowstep_runtime import (
 )
 from flowstep_tools import tools_root
 from m8m_flowchart import flowchart_path
-from teaching_contracts import copy_teaching_contracts
+from teaching_contracts import copy_teaching_contracts, write_milestone_gems
+from humanize_chart import success_line
 from toolbox_plan import build_toolbox_plan, existing_toolbox_ids
 from tool_vs_intelligence import from_audit as classification_from_audit
 from tool_vs_intelligence import from_flow as classification_from_flow
@@ -374,6 +375,7 @@ def generate_v3_flow(
                 item["tools"].append(item["worker"])
         if spec.get("on_cycle"):
             item["on_cycle"] = spec["on_cycle"]
+        item["success"] = str(spec.get("success") or "").strip() or success_line(item)
         items.append(item)
         previous = item
     flow = {
@@ -514,6 +516,8 @@ def generate_v3_flow(
             if _write_json(receipt_path, receipt_obj, overwrite=overwrite):
                 created.append(str(receipt_path))
         previous_id = mid
+    gems = write_milestone_gems(harness, public_items, overwrite=overwrite)
+    created.extend(gems)
     loaded = load_flow(harness, flow_path)
     plan = toolbox_plan or build_toolbox_plan(
         loaded.get("steps") or items,
@@ -678,6 +682,7 @@ def generate_from_audit(
             "cycle": item.get("cycle"),
             "on_cycle": item.get("on_cycle"),
             "on_tool_fail": item.get("on_tool_fail"),
+            "success": item.get("success"),
             "max_model_attempts": item.get("max_model_attempts"),
             "_gate_schemas": {
                 str(edge["when"]): edge["schema"]
@@ -747,6 +752,8 @@ def yaml_dump_v3(flow: dict[str, Any]) -> str:
         if asset_kind:
             lines.append("    asset:")
             lines.append(f"      kind: {asset_kind}")
+        if item.get("success"):
+            lines.append(f"    success: {json.dumps(str(item['success']), ensure_ascii=False)}")
         flowsteps = item.get("flowsteps") or []
         if flowsteps:
             lines.append("    flowsteps:")

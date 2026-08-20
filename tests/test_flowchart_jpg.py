@@ -9,7 +9,7 @@ import support  # noqa: F401
 from flowchart_jpg import ARTICLE_DEMO, README_DEMO, write_flowchart_jpg
 from flowstep_instruction import mark_step
 from generate_harness import generate_tool, generate_v3_flow
-from humanize_chart import humanize_flowstep, humanize_milestone, title_id
+from humanize_chart import humanize_flowstep, humanize_milestone, success_line, title_id
 from humanize_chart_zh import title_id as title_id_zh
 from m8m_flowchart import write_flowchart
 
@@ -29,6 +29,12 @@ class HumanizeTests(unittest.TestCase):
         self.assertEqual(title_id_zh("card_aligned"), "卡片已对齐")
         self.assertEqual(title_id_zh("pages_ledger_frozen"), "页账本已冻结")
         self.assertEqual(title_id_zh("intake_ready"), "入口已就绪")
+        self.assertIn("must produce a file", success_line({"id": "source_ready", "asset_kind": "file"}))
+        self.assertEqual(
+            success_line({"id": "source_ready", "asset_kind": "file", "success": "Source bytes are bound."}),
+            "Source bytes are bound.",
+        )
+        self.assertIn("Retry until the worker receipt is ok", success_line({"id": "card_aligned", "asset_kind": "image", "loop": "judge"}))
 
 
 class JpegWriteTests(unittest.TestCase):
@@ -51,6 +57,12 @@ class JpegWriteTests(unittest.TestCase):
             self.assertIn("m8m-flowchart.jpg", text)
             self.assertIn("Source is ready", text)
             self.assertIn("What it means", text)
+            self.assertIn("Success", text)
+            yaml_text = (harness / "flow.yaml").read_text(encoding="utf-8")
+            self.assertIn("success:", yaml_text)
+            gem = harness / "references" / "source_ready.md"
+            self.assertTrue(gem.is_file())
+            self.assertIn("Rule of success:", gem.read_text(encoding="utf-8"))
             self.assertGreater(jpg.stat().st_size, 1000)
             self.assertEqual(jpg.read_bytes()[:2], b"\xff\xd8")
             self.assertTrue(result.get("flowchart_jpg"))
