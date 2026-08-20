@@ -58,9 +58,9 @@ M8M:   节点 = 一个里程碑（护栏）
 
 画布上只有里程碑。每一关必须交出声明的 asset，下一关才开始。`this.in` 就是 `previous.out`。没有 asset → BLOCK。
 
-一关**里面**是若干 FlowStep。每个 FlowStep 优先一支 repo 工具。工具可以失败、可以找路。关卡能不能过，只看 asset。
+一关**里面**是 N 个 FlowStep，再加一支 **judge**。judge 读这一关的 gem（`references/<id>.md`）里的成功规则：合格就发 pass 收据、下一关开始；不合格就让 session 留在这一关继续做。没有 asset 仍 BLOCK。
 
-![M8M 演示：上面是里程碑画布（人话标签）；下面打开 source_ready，里面是 fetch_record 和 hash_bind 两支 FlowStep 工具，然后做 asset 检查](docs/m8m-chart.jpg)
+![M8M 演示：上面是里程碑画布；下面打开 source_ready，里面是 N 个 FlowStep，然后 judge 读 references/source_ready.md，pass 收据或 keep working](docs/m8m-chart.jpg)
 
 生成 skill 时写出 `planning/m8m-flowchart.md` 和 `planning/m8m-flowchart.jpg`。开发中每改一步（`write` / `mark`）两份都重写。JPEG 给人审：可携带、好核对、不靠 mermaid。人话来自 humanizer（`source_ready` → Source is ready）。
 
@@ -71,7 +71,8 @@ request
   → source_ready     必须交出 file（path + sha256）
       里面：FlowStep fetch_record → tool fetch_record
             FlowStep hash_bind    → tool hash_bind
-            然后检查 asset。有 → 过关。没有 → BLOCK。
+            然后 judge 读 gem references/source_ready.md
+            pass 收据 → 下一关。not ok → session 继续做。没有 asset → BLOCK。
   → plan_frozen      必须交出 json plan
   → release_packaged 必须交出 file package
 ```
@@ -129,8 +130,9 @@ n8n 的画布是动作。M8M 的画布是关卡。人话来自 humanizer（`sour
 
 ```yaml
 - id: card_aligned
+  gem: references/card_aligned.md
   loop: judge
-  worker: alignment_judge
+  worker: card_aligned_judge
   intelligence: image
 ```
 
@@ -321,9 +323,9 @@ identify milestones
 
 The canvas is only milestones. Each one must produce its declared asset before the next starts. `this.in` is `previous.out`. No asset → BLOCK.
 
-**Inside** a milestone are several FlowSteps. Each FlowStep prefers one repo tool. The tool may fail; recover like a normal agent. Whether the milestone proceeds depends only on the asset.
+**Inside** a milestone are N FlowSteps plus **one judge**. The judge reads this milestone’s gem (`references/<id>.md`) for the rule of success: pass receipt → next milestone; not ok → the session stays and keeps working. Missing asset still BLOCKS.
 
-![M8M demo: top is the milestone canvas with human labels; bottom opens source_ready and shows FlowSteps fetch_record and hash_bind, each with a tool, then the asset check](docs/m8m-chart.jpg)
+![M8M demo: top is the milestone canvas; bottom opens source_ready with N FlowSteps, then a judge that reads references/source_ready.md and either issues a pass receipt or tells the session to keep working](docs/m8m-chart.jpg)
 
 Generate writes `planning/m8m-flowchart.md` and `planning/m8m-flowchart.jpg`. Every step edit during development (`write` / `mark`) rewrites both. The JPEG is the audit copy: portable, easy to review, no mermaid. Labels come from the humanizer (`source_ready` → Source is ready).
 
@@ -334,7 +336,8 @@ request
   → source_ready     must produce a file (path + sha256)
       inside: FlowStep fetch_record → tool fetch_record
               FlowStep hash_bind    → tool hash_bind
-              then the asset check. Present → pass. Missing → BLOCK.
+              then the judge reads gem references/source_ready.md
+              pass receipt → next. not ok → session keeps working. no asset → BLOCK.
   → plan_frozen      must produce a json plan
   → release_packaged must produce a file package
 ```
@@ -394,8 +397,9 @@ Source is ready  →  Card is aligned (judge until ok)  →  Release is packaged
 
 ```yaml
 - id: card_aligned
+  gem: references/card_aligned.md
   loop: judge
-  worker: alignment_judge
+  worker: card_aligned_judge
   intelligence: image
 ```
 

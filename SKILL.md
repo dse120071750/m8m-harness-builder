@@ -74,9 +74,11 @@ Inside a milestone, follow the FlowStep table as a **guide**: try the
 preferred tool first. If it fails, find a way like a normal agent.
 The flowchart is only the milestone canvas. The JPEG is the audit
 copy: portable, easy to pass around, native when a person reviews
-the split. After generate, and after every step edit (`write` /
-`mark`), both `planning/m8m-flowchart.md` and
-`planning/m8m-flowchart.jpg` are rewritten.
+the split. Inside one milestone it shows N FlowSteps plus one
+judge that reads `references/<id>.md`: pass receipt → next;
+not ok → the session keeps working. After generate, and after
+every step edit (`write` / `mark`), both `planning/m8m-flowchart.md`
+and `planning/m8m-flowchart.jpg` are rewritten.
 
 ## Rule of success (gem), then cycle / judge / branch
 

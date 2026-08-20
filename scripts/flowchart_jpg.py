@@ -18,6 +18,8 @@ GREEN = (46, 125, 50)
 GREEN_BG = (232, 245, 233)
 RED = (183, 28, 28)
 RED_BG = (255, 235, 238)
+AMBER = (255, 243, 224)
+AMBER_EDGE = (230, 145, 56)
 BG = (247, 248, 250)
 WHITE = (255, 255, 255)
 GRAY = (90, 98, 110)
@@ -119,6 +121,8 @@ def _nodes(items: list[dict[str, Any]], statuses: dict[str, str] | None = None) 
                 "on_path": item.get("on_path"),
                 "cycle": item.get("cycle") if isinstance(item.get("cycle"), dict) else None,
                 "success": item.get("success"),
+                "worker": item.get("worker"),
+                "gem": item.get("gem") or f"references/{mid}.md",
             }
         )
     return nodes
@@ -144,9 +148,9 @@ def render_flowchart_image(
     count = max(len(nodes), 1)
     box_h = 118
     top_h = 360
-    inner_items = max(len(flowsteps), 1) + 1  # + asset check
-    sw = min(260, max(150, (width - 520) // inner_items - 8))
-    height = 820
+    inner_items = max(len(flowsteps), 1) + 1  # + judge
+    sw = min(280, max(150, (width - 420) // inner_items - 8))
+    height = 920
     image = Image.new("RGB", (width, height), BG)
     draw = ImageDraw.Draw(image)
     title_font = _font(32)
@@ -209,7 +213,7 @@ def render_flowchart_image(
     )
 
     draw.line((48, top_h - 24, width - 48, top_h - 24), fill=(210, 214, 220), width=2)
-    _text(draw, (48, top_h - 8), "2. Inside one milestone — FlowSteps + tools", title_font)
+    _text(draw, (48, top_h - 8), "2. Inside one milestone — N FlowSteps + one judge", title_font)
 
     inner_top = top_h + 44
     inner_bot = height - 56
@@ -219,25 +223,39 @@ def render_flowchart_image(
         return image
 
     focus_h = humanize_milestone(focus)
-    _text(draw, (64, inner_top + 16), f"MILESTONE  {focus['id']}", h2_font)
+    mid = str(focus.get("id") or "")
+    gem = str(focus.get("gem") or f"references/{mid}.md")
+    worker = str(focus.get("worker") or f"{mid}_judge")
+    _text(draw, (64, inner_top + 14), f"MILESTONE  {mid}    gem  {gem}", h2_font)
     cap = focus_h.get("success") or (focus_h["title"] + " — " + focus_h["asset"])
-    _text(draw, (64, inner_top + 44), cap[: 110], small_font, GRAY)
+    _text(draw, (64, inner_top + 42), f"rule of success: {cap}"[: 120], small_font, GRAY)
 
-    sh = 92
+    sh = 108
     sx = 64
-    sy = inner_top + 88
+    sy = inner_top + 78
     sequence = list(flowsteps)
-    check = {"id": "asset_check", "title": "asset check", "tool": "", "kind": "check"}
-    sequence.append(check)
+    sequence.append(
+        {
+            "id": "judge",
+            "title": "Judge",
+            "tool": worker,
+            "kind": "judge",
+            "gem": gem,
+        }
+    )
 
     for index, fs in enumerate(sequence):
-        bx = sx + index * (sw + 36)
-        is_check = fs.get("kind") == "check"
-        if is_check:
+        bx = sx + index * (sw + 28)
+        is_judge = fs.get("kind") == "judge"
+        if is_judge:
             _box(draw, (bx, sy, bx + sw, sy + sh), YELLOW, YELLOW_EDGE, radius=16, width=3)
-            _center(draw, "asset check", h2_font, bx + sw / 2, sy + 32)
-            kind = focus_h.get("kind") or "asset"
-            _center(draw, f"{kind} path + sha256" if kind in {"file", "image"} else kind, small_font, bx + sw / 2, sy + 62, GRAY)
+            _text(draw, (bx + 14, sy + 8), "JUDGE", small_font, GRAY)
+            _text(draw, (bx + 14, sy + 28), "reads this gem", h2_font)
+            gem_lines = _wrap(draw, gem, small_font, sw - 28)[:2]
+            gy = sy + 56
+            for line in gem_lines:
+                _text(draw, (bx + 14, gy), line, small_font, NAVY)
+                gy += 16
         else:
             _box(draw, (bx, sy, bx + sw, sy + sh), BLUE, BLUE_EDGE, radius=16, width=3)
             _text(draw, (bx + 14, sy + 10), f"FlowStep {index + 1}", small_font, GRAY)
@@ -250,17 +268,19 @@ def render_flowchart_image(
             _box(draw, (bx + 14, sy + sh - 34, bx + 14 + tag_w, sy + sh - 10), WHITE, NAVY, radius=10, width=1)
             _text(draw, (bx + 24, sy + sh - 30), tag[: 28], small_font)
         if index < len(sequence) - 1:
-            _arrow(draw, bx + sw + 4, sy + sh / 2, bx + sw + 32)
+            _arrow(draw, bx + sw + 4, sy + sh / 2, bx + sw + 24)
 
-    check_x = width - 250
-    _box(draw, (check_x, sy - 8, check_x + 186, sy + 32), GREEN_BG, GREEN, radius=10, width=2)
-    _text(draw, (check_x + 12, sy), "PASS → next milestone", small_font, GREEN)
-    _box(draw, (check_x, sy + 44, check_x + 186, sy + 84), RED_BG, RED, radius=10, width=2)
-    _text(draw, (check_x + 12, sy + 52), "missing asset → BLOCK", small_font, RED)
+    out_x = width - 268
+    _box(draw, (out_x, sy - 4, out_x + 210, sy + 36), GREEN_BG, GREEN, radius=10, width=2)
+    _text(draw, (out_x + 12, sy + 8), "pass receipt → next", small_font, GREEN)
+    _box(draw, (out_x, sy + 44, out_x + 210, sy + 84), AMBER, AMBER_EDGE, radius=10, width=2)
+    _text(draw, (out_x + 12, sy + 56), "not ok → keep working", small_font, YELLOW_EDGE)
+    _box(draw, (out_x, sy + 92, out_x + 210, sy + 124), RED_BG, RED, radius=10, width=2)
+    _text(draw, (out_x + 12, sy + 100), "no asset → BLOCK", small_font, RED)
 
     _center(
         draw,
-        "FlowSteps are a guide. Tool may fail → recover like a normal agent. The asset is compulsory.",
+        "Judge reads this milestone's gem. Pass receipt → next. Not ok → stay; session keeps working. Missing asset still BLOCKS.",
         small_font,
         width / 2,
         inner_bot + 22,
@@ -288,7 +308,10 @@ README_DEMO = [
     {
         "id": "source_ready",
         "asset": {"kind": "file"},
-        "tools": ["fetch_record", "hash_bind"],
+        "worker": "source_ready_judge",
+        "gem": "references/source_ready.md",
+        "success": "Source is ready — must produce a file (path + sha256).",
+        "tools": ["fetch_record", "hash_bind", "source_ready_judge"],
         "flowsteps": [
             {"id": "fetch_record", "tool": "fetch_record"},
             {"id": "hash_bind", "tool": "hash_bind"},
@@ -352,8 +375,9 @@ ARTICLE_DEMO = [
         "id": "cards_rendered",
         "asset": {"kind": "image"},
         "loop": "judge",
-        "worker": "ok_receipt",
-        "tools": ["render_html_shell", "footer_geometry_qa", "hash_bind", "ok_receipt"],
+        "worker": "cards_rendered_judge",
+        "gem": "references/cards_rendered.md",
+        "tools": ["render_html_shell", "footer_geometry_qa", "hash_bind", "cards_rendered_judge"],
         "flowsteps": [
             {"id": "render_html_shell", "tool": "render_html_shell"},
             {"id": "footer_geometry_qa", "tool": "footer_geometry_qa"},
@@ -372,3 +396,19 @@ ARTICLE_DEMO = [
         ],
     },
 ]
+
+
+def write_readme_chart(root: Path | None = None) -> Path:
+    root = Path(root) if root else Path(__file__).resolve().parents[1]
+    dest = root / "docs" / "m8m-chart.jpg"
+    return write_flowchart_jpg(
+        dest,
+        README_DEMO,
+        title="m8m-harness-builder",
+        focus_id="source_ready",
+    )
+
+
+if __name__ == "__main__":
+    path = write_readme_chart()
+    print(path)

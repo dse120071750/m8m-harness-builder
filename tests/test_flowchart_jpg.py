@@ -6,7 +6,7 @@ from pathlib import Path
 
 import support  # noqa: F401
 
-from flowchart_jpg import ARTICLE_DEMO, README_DEMO, write_flowchart_jpg
+from flowchart_jpg import ARTICLE_DEMO, README_DEMO, write_flowchart_jpg, write_readme_chart
 from flowstep_instruction import mark_step
 from generate_harness import generate_tool, generate_v3_flow
 from humanize_chart import humanize_flowstep, humanize_milestone, success_line, title_id
@@ -145,6 +145,8 @@ class JpegWriteTests(unittest.TestCase):
             self.assertNotEqual(before_jpg, after_jpg)
 
     def test_direct_render(self) -> None:
+        self.assertEqual(README_DEMO[0]["worker"], "source_ready_judge")
+        self.assertEqual(README_DEMO[0]["gem"], "references/source_ready.md")
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / "demo.jpg"
             write_flowchart_jpg(
@@ -156,6 +158,14 @@ class JpegWriteTests(unittest.TestCase):
             self.assertTrue(path.is_file())
             self.assertEqual(path.read_bytes()[:2], b"\xff\xd8")
             self.assertGreater(path.stat().st_size, 1000)
+
+    def test_readme_chart_helper_writes_jpeg(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "docs").mkdir()
+            path = write_readme_chart(root)
+            self.assertEqual(path, root / "docs" / "m8m-chart.jpg")
+            self.assertEqual(path.read_bytes()[:2], b"\xff\xd8")
 
     def test_article_demo_renders(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
