@@ -11,25 +11,7 @@ If/else and foreach are JSON Schema checks on this.out, not tools and not semant
 
 ## Chart
 
-```mermaid
-flowchart TD
-    request([request])
-    source_ready{source_ready<br/>asset:file<br/>normalize_source_blocks,hash_bind}
-    blocked_source_ready{{BLOCKED}}
-    plan_frozen["plan_frozen<br/>intel:completion<br/>asset:file<br/>for:pages max=7<br/>hash_bind,schema_validate"]
-    prompts_frozen["prompts_frozen<br/>intel:completion<br/>asset:file<br/>hash_bind,schema_validate"]
-    assets_bound["assets_bound<br/>intel:image<br/>asset:file<br/>hash_bind,image_size_check"]
-    cards_rendered["cards_rendered<br/>asset:image<br/>render_html_shell,footer_geometry_qa,hash_bind"]
-    release_packaged["release_packaged<br/>intel:judge<br/>asset:file<br/>footer_geometry_qa,hash_bind,materialize_package,io_manifest"]
-    request --> source_ready
-    source_ready -->|"kind=url"| plan_frozen
-    source_ready -->|"kind=text"| plan_frozen
-    source_ready -->|"else BLOCKED"| blocked_source_ready
-    plan_frozen --> prompts_frozen
-    prompts_frozen --> assets_bound
-    assets_bound --> cards_rendered
-    cards_rendered --> release_packaged
-```
+![article infographic M8M chart: request to source_ready (kind=url or kind=text, else BLOCKED), then plan_frozen (for: pages max=7), prompts_frozen, assets_bound, cards_rendered, release_packaged](m8m-flowchart.jpg)
 
 ## Toolbox plan
 

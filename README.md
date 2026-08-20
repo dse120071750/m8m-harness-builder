@@ -79,19 +79,9 @@ FlowStep 按表的顺序走。别把这条路径当成 production lock。别跳�
 
 ## 图（护栏）
 
-一张 mermaid 画布。节点是里程碑，不是 crop。每个节点标必交的 asset。没有就 BLOCKED。FlowStep 不是额外节点，它们在上面的表里。
+一张图。节点是里程碑，不是 crop。每个节点标必交的 asset。没有就 BLOCKED。FlowStep 不是额外节点，它们在上面的表里。GitHub 上用 PNG/JPEG，不用 mermaid 富文本。
 
-```mermaid
-flowchart TD
-    request([request]) --> source_ready
-    source_ready{source_ready<br/>asset:file}
-    blocked_source_ready{{BLOCKED}}
-    source_ready -->|"kind=url"| plan_frozen
-    source_ready -->|"kind=text"| plan_frozen
-    source_ready -->|"else BLOCKED"| blocked_source_ready
-    plan_frozen["plan_frozen<br/>asset:json<br/>for:pages max=7<br/>intel:completion"] --> release_packaged
-    release_packaged["release_packaged<br/>asset:file"]
-```
+![M8M 里程碑图：request 到 source_ready（if: kind=url 或 kind=text，else BLOCKED），再到 plan_frozen（for: pages max=7）和 release_packaged](docs/m8m-chart.jpg)
 
 | 种类 | 里程碑上的证明 |
 | --- | --- |
@@ -157,7 +147,7 @@ python scripts/generate_harness.py --codebase <repo> --from-audit <skill>/planni
 会写出：
 
 - `planning/flowstep-audit.md`
-- `planning/m8m-flowchart.md`：mermaid（护栏）+ FlowStep 表（指引）+ 来源表 + Gates/Loops（this.out）
+- `planning/m8m-flowchart.md`：图（护栏）+ FlowStep 表（指引）+ 来源表 + Gates/Loops（this.out）
 - `<repo>/flowsteps/flows/<flow_id>/`
 - `<repo>/flowsteps/tools/<id>/`（seed 或 stub）
 - `<repo>/.agents/skills/<name>/SKILL.md` 和 `<repo>/.claude/skills/<name>/SKILL.md`
@@ -291,19 +281,9 @@ A real run on a seven-page article infographic skill is in [examples/article_inf
 
 ## Chart (harness)
 
-One mermaid canvas. Nodes are milestones, not crops. Each node names the required asset. If it is missing, the run is BLOCKED. FlowSteps are not extra nodes. They live in the table above.
+One chart. Nodes are milestones, not crops. Each node names the required asset. If it is missing, the run is BLOCKED. FlowSteps are not extra nodes. They live in the table above. On GitHub this is a JPEG, not a mermaid rich display.
 
-```mermaid
-flowchart TD
-    request([request]) --> source_ready
-    source_ready{source_ready<br/>asset:file}
-    blocked_source_ready{{BLOCKED}}
-    source_ready -->|"kind=url"| plan_frozen
-    source_ready -->|"kind=text"| plan_frozen
-    source_ready -->|"else BLOCKED"| blocked_source_ready
-    plan_frozen["plan_frozen<br/>asset:json<br/>for:pages max=7<br/>intel:completion"] --> release_packaged
-    release_packaged["release_packaged<br/>asset:file"]
-```
+![M8M milestone chart: request to source_ready (if: kind=url or kind=text, else BLOCKED), then plan_frozen (for: pages max=7) and release_packaged](docs/m8m-chart.jpg)
 
 | Kind | Proof on the milestone |
 | --- | --- |
@@ -369,7 +349,7 @@ python scripts/generate_harness.py --codebase <repo> --from-audit <skill>/planni
 This writes:
 
 - `planning/flowstep-audit.md`
-- `planning/m8m-flowchart.md`: mermaid (harness), FlowStep table (guide), origin table, Gates/Loops on this.out
+- `planning/m8m-flowchart.md`: chart (harness), FlowStep table (guide), origin table, Gates/Loops on this.out
 - `<repo>/flowsteps/flows/<flow_id>/`
 - `<repo>/flowsteps/tools/<id>/` (seed or stub)
 - `<repo>/.agents/skills/<name>/SKILL.md` and `<repo>/.claude/skills/<name>/SKILL.md`

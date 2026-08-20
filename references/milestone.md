@@ -126,9 +126,10 @@ Audit infers `next` from `enum`/`const` fields on this.out, and
 Generate writes the gate and item schemas. The model does not approve
 the branch.
 
-The one chart is `planning/m8m-flowchart.md` (mermaid + Gates table +
-Loops table of schema paths). Audit and generate both write that file.
-It is not embedded in the audit report or the instruction.
+The one chart is `planning/m8m-flowchart.md` (Gates table + Loops table
+of schema paths; GitHub publishes a JPEG, not a mermaid rich display).
+Audit and generate both write that file. It is not embedded in the
+audit report or the instruction.
 
 Teaching contracts (`references/*.md` on a Codex or Claude skill) belong
 on the flow: `<repo>/flowsteps/flows/<id>/references/`. Same ownership as

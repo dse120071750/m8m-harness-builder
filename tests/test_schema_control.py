@@ -59,6 +59,21 @@ class WriterSkillTests(unittest.TestCase):
         self.assertIn("foreach", text)
         self.assertIn("Do not loop tools", text)
 
+    def test_github_docs_use_images_not_mermaid(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        readme = (root / "README.md").read_text(encoding="utf-8")
+        self.assertNotIn("```mermaid", readme)
+        self.assertIn("docs/m8m-chart.jpg", readme)
+        sample = (root / "examples" / "article_infographic" / "planning" / "m8m-flowchart.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertNotIn("```mermaid", sample)
+        self.assertIn("m8m-flowchart.jpg", sample)
+        self.assertTrue((root / "docs" / "m8m-chart.jpg").is_file())
+        self.assertTrue(
+            (root / "examples" / "article_infographic" / "planning" / "m8m-flowchart.jpg").is_file()
+        )
+
 
 class GateTests(unittest.TestCase):
     def test_schema_gate_selects_url_branch(self) -> None:
@@ -499,7 +514,7 @@ class SkillWriterControlTests(unittest.TestCase):
             gate = json.loads((harness / "schemas" / "gates" / "kind_url.schema.json").read_text(encoding="utf-8"))
             self.assertEqual(gate["properties"]["kind"]["const"], "url")
             chart = (harness / "planning" / "m8m-flowchart.md").read_text(encoding="utf-8")
-            self.assertIn("```mermaid", chart)
+            self.assertIn("```text", chart)
             self.assertIn("kind=url", chart)
             self.assertIn("url_ready", chart)
             self.assertIn("else BLOCKED", chart)
@@ -572,7 +587,9 @@ class FlowchartMarkdownTests(unittest.TestCase):
             self.assertEqual(path.parent, chart.parent)
             text = chart.read_text(encoding="utf-8")
             self.assertIn("# M8M flowchart:", text)
-            self.assertIn("```mermaid", text)
+            self.assertIn("```text", text)
+            self.assertIn("flowchart TD", text)
+            self.assertNotIn("```mermaid", text)
             self.assertIn("## Loops (foreach)", text)
             self.assertIn("## Gates (if / else)", text)
             self.assertIn("## Toolbox plan", text)

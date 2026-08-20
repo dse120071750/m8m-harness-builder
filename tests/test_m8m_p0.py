@@ -148,7 +148,8 @@ class FactoryTests(unittest.TestCase):
             self.assertTrue((codebase / ".claude" / "skills" / "bare-skill" / "SKILL.md").is_file())
             chart = Path(result["flowchart_path"])
             self.assertTrue(chart.is_file())
-            self.assertIn("```mermaid", chart.read_text(encoding="utf-8"))
+            self.assertIn("```text", chart.read_text(encoding="utf-8"))
+            self.assertNotIn("```mermaid", chart.read_text(encoding="utf-8"))
             skill_md = Path(result["product_skill"]).read_text(encoding="utf-8")
             self.assertIn("m8m-flowchart.md", skill_md)
 
