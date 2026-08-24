@@ -453,6 +453,15 @@ def _recover_or_block(
             fingerprint,
             blockers + [f"{step['id']}: max_model_attempts {limit} exhausted"],
         )
+    flowsteps = step.get("flowsteps") or []
+    first_flowstep = flowsteps[0] if flowsteps else ""
+    flowstep_id = (
+        str(first_flowstep.get("id") or first_flowstep.get("tool") or "")
+        if isinstance(first_flowstep, dict)
+        else str(first_flowstep)
+    ).strip()
+    gem_path = skill_dir / str(step.get("gem") or f"references/{step['id']}.md")
+    gem_section = read_gem_section(gem_path, flowstep_id) if flowstep_id else ""
     request = {
         "milestone": step["id"],
         "blockers": blockers,
@@ -466,6 +475,12 @@ def _recover_or_block(
         ),
         "flowsteps": step.get("flowsteps") or [],
     }
+    if flowstep_id:
+        request["flowstep"] = flowstep_id
+    if gem_path.is_file():
+        request["gem_path"] = relative_to(skill_dir, gem_path)
+    if gem_section:
+        request["instruction"] = f"{request['instruction']}\n\n{gem_section}"
     request_path = folder / "model_request.json"
     write_json(request_path, request)
     return {
