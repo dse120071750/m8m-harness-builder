@@ -455,13 +455,17 @@ def _recover_or_block(
         )
     flowsteps = step.get("flowsteps") or []
     first_flowstep = flowsteps[0] if flowsteps else ""
-    flowstep_id = (
+    fallback_flowstep = (
         str(first_flowstep.get("id") or first_flowstep.get("tool") or "")
         if isinstance(first_flowstep, dict)
         else str(first_flowstep)
     ).strip()
+    flowstep_id = fallback_flowstep
     gem_path = skill_dir / str(step.get("gem") or f"references/{step['id']}.md")
     gem_section = read_gem_section(gem_path, flowstep_id) if flowstep_id else ""
+    if not gem_section and flowstep_id != "" and fallback_flowstep and fallback_flowstep != flowstep_id:
+        flowstep_id = fallback_flowstep
+        gem_section = read_gem_section(gem_path, flowstep_id)
     request = {
         "milestone": step["id"],
         "blockers": blockers,
@@ -520,9 +524,12 @@ def _need_model_action(
         fallback_flowstep = str(first.get("id") or first.get("tool") or "") if isinstance(first, dict) else str(first)
     flowstep_id = str(request.get("flowstep") or fallback_flowstep).strip()
     if flowstep_id:
-        request["flowstep"] = flowstep_id
         gem_path = skill_dir / str(step.get("gem") or f"references/{step['id']}.md")
         section = read_gem_section(gem_path, flowstep_id)
+        if not section and fallback_flowstep and fallback_flowstep != flowstep_id:
+            flowstep_id = fallback_flowstep
+            section = read_gem_section(gem_path, flowstep_id)
+        request["flowstep"] = flowstep_id
         instruction = str(request.get("instruction") or "").strip()
         if section and section not in instruction:
             request["instruction"] = f"{instruction}\n\n{section}".strip()
