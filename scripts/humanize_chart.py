@@ -35,10 +35,12 @@ _COPULA_IS = {
 }
 
 _ASSET = {
-    "file": "must produce a file (path + sha256)",
-    "image": "must produce an image (path + sha256)",
-    "json": "must produce a json proof",
-    "data": "must produce typed data",
+    "file": "must choose a file",
+    "image": "must choose an image",
+    "video": "must choose a video",
+    "audio": "must choose audio",
+    "json": "must choose a JSON value",
+    "data": "must choose typed data",
 }
 
 
@@ -65,6 +67,9 @@ def asset_line(kind: str) -> str:
 
 
 def _kind(node: dict[str, Any]) -> str:
+    outputs = node.get("outputs") if isinstance(node.get("outputs"), list) else []
+    if outputs and isinstance(outputs[0], dict):
+        return str(outputs[0].get("kind") or "")
     return str(
         node.get("asset_kind")
         or ((node.get("asset") or {}).get("kind") if isinstance(node.get("asset"), dict) else "")
@@ -96,7 +101,7 @@ def success_line(node: dict[str, Any]) -> str:
             elif item:
                 paths.append(str(item))
         extra += f" Then branch ({' / '.join(paths)})."
-    return f"{title_id(mid)} — {asset_line(kind)}.{extra}".strip()
+    return f"{title_id(mid)} — {asset_line(kind)} as the chosen output bundle.{extra}".strip()
 
 
 def humanize_milestone(node: dict[str, Any]) -> dict[str, str]:

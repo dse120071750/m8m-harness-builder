@@ -10,7 +10,7 @@ import support  # noqa: F401
 from flowstep_runtime import read_json
 from generate_harness import generate_tool, generate_v3_flow
 from run_flow import advance
-from session_layout import default_run_dir, ensure_session_tree, slot_rel
+from session_layout import default_run_dir, ensure_session_tree, load_run_roster, slot_rel
 
 
 def _write(path: Path, text: str) -> None:
@@ -28,9 +28,14 @@ class SessionTreeTests(unittest.TestCase):
             self.assertEqual(dest.parent.name, "demo_v1")
             flow = {"flow_id": "demo_v1", "steps": [{"id": "source_ready", "loop": "none"}]}
             ensure_session_tree(dest, flow)
-            self.assertTrue((dest / "milestones" / "source_ready" / "out" / "files").is_dir())
+            self.assertTrue((dest / "milestones" / "source_ready" / "out" / "members").is_dir())
             self.assertTrue((dest / "manifest.json").is_file())
-            self.assertEqual(slot_rel("source_ready", kind="image"), "milestones/source_ready/out/files/asset.png")
+            self.assertTrue((dest / "roster.json").is_file())
+            roster = load_run_roster(dest)
+            self.assertEqual(roster["schema"], "m8m_run_roster_v1")
+            self.assertEqual(roster["status"], "running")
+            self.assertEqual([row["status"] for row in roster["rows"]], ["unfinished"])
+            self.assertEqual(slot_rel("source_ready", kind="image"), "milestones/source_ready/work/candidate/files/asset.png")
 
     def test_file_asset_is_copied_into_slot(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -45,22 +50,22 @@ class SessionTreeTests(unittest.TestCase):
                 "from pathlib import Path\n"
                 f"SRC = r'''{src}'''\n"
                 "def run(input_data, draft=None, **_):\n"
-                "    return {'asset': {'path': SRC, 'sha256': 'x'}}\n",
+                "    return {'outputs': {'result': {'asset': {'path': SRC}}}}\n",
             )
             _write(harness / "milestones" / "source_ready" / "tests" / "test_assemble.py", "def test_ok():\n    assert True\n")
             request = Path(temp) / "request.json"
             request.write_text("{}", encoding="utf-8")
             run_dir = Path(temp) / "run-slot"
             done = advance(harness, run_dir, request_path=request)
-            self.assertEqual(done["state"], "COMPLETE")
-            slot = run_dir / "milestones" / "source_ready" / "out" / "files" / "asset.bin"
+            self.assertEqual(done["state"], "COMPLETE", done)
+            slot = run_dir / "milestones" / "source_ready" / "out" / "members" / "result" / "asset.txt"
             self.assertTrue(slot.is_file())
             self.assertEqual(slot.read_text(encoding="utf-8"), "hello-slot\n")
-            env = read_json(run_dir / "artifacts" / "source_ready.source_ready_v1.json")
-            self.assertTrue(str(env["data"]["asset"]["path"]).replace("\\", "/").endswith("milestones/source_ready/out/files/asset.bin") or Path(env["data"]["asset"]["path"]).resolve() == slot.resolve())
+            chosen = read_json(run_dir / "milestones" / "source_ready" / "out" / "chosen-output.json")
+            self.assertEqual(chosen["members"][0]["path"], "milestones/source_ready/out/members/result/asset.txt")
             manifest = read_json(run_dir / "manifest.json")
-            self.assertTrue(any(item.get("milestone") == "source_ready" for item in manifest.get("slots") or []))
-            self.assertTrue((run_dir / "milestones" / "source_ready" / "out" / "asset.json").is_file())
+            self.assertTrue(any(item.get("milestone") == "source_ready" for item in manifest.get("chosen_outputs") or []))
+            self.assertTrue((run_dir / "milestones" / "source_ready" / "out" / "judge-receipt.json").is_file())
 
     def test_path_outside_run_without_file_does_not_leak_on_json(self) -> None:
         self.assertIn("items/003/", slot_rel("pages_bound", kind="image", item_index=3))

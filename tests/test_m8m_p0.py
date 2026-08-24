@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
@@ -9,7 +10,7 @@ import support  # noqa: F401  # puts scripts/ on sys.path
 
 from audit_harness import audit_harness, audit_skill, render_audit_markdown
 from m8m_factory import run_factory
-from flowstep_runtime import FlowError, is_passthrough_schema
+from flowstep_runtime import FlowError, is_passthrough_schema, read_json
 from flowstep_tools import run_library_tool, validate_library_tool
 from generate_harness import (
     generate_from_audit,
@@ -18,6 +19,7 @@ from generate_harness import (
     generate_v3_flow,
     main as generate_main,
 )
+from session_layout import load_chosen_output
 
 
 
@@ -63,8 +65,10 @@ class AuditDrivesGenerateTests(unittest.TestCase):
             harness = Path(result["harness_dir"])
             flow = (harness / "flow.yaml").read_text(encoding="utf-8")
             self.assertIn("hash_bind", flow)
-            self.assertIn("asset:", flow)
-            self.assertIn("kind:", flow)
+            self.assertIn("schema: flowstep_flow_v4", flow)
+            self.assertIn("context_policy: isolated", flow)
+            self.assertIn("outputs:", flow)
+            self.assertIn("cardinality:", flow)
             last_id = result["milestones"][-1]
             last_schema = harness / "schemas" / f"{last_id}_v1.json"
             self.assertTrue(last_schema.is_file())
@@ -132,6 +136,38 @@ class DefaultV3Tests(unittest.TestCase):
 
 
 class FactoryTests(unittest.TestCase):
+    def test_builder_self_flow_commits_every_compulsory_milestone(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            source = Path(__file__).resolve().parents[1]
+            target = Path(temp) / "m8m-harness-builder"
+            (target / "flows").mkdir(parents=True)
+            shutil.copy2(source / "SKILL.md", target / "SKILL.md")
+            shutil.copy2(source / "flows" / "m8m_build_v1.yaml", target / "flows" / "m8m_build_v1.yaml")
+            codebase = Path(temp) / "repo"
+            result = run_factory(target, codebase, flow_id="m8m_self_v1", skill_name="m8m-self")
+            self.assertEqual(result["status"], "PASS", result)
+            run_dir = Path(result["run_dir"])
+            run_context = read_json(run_dir / "run-context.json")
+            execution = read_json(run_dir / "flow-execution-record.json")
+            self.assertEqual(run_context["context_policy"], "isolated")
+            self.assertFalse(run_context["chat_history_allowed"])
+            self.assertEqual(execution["cache"]["mode"], "off")
+            for milestone_id in (
+                "audit_complete",
+                "toolbox_ready",
+                "flow_generated",
+                "harness_validated",
+                "skill_shipped",
+            ):
+                manifest = load_chosen_output(run_dir, milestone_id)
+                self.assertEqual(manifest["schema"], "m8m_chosen_output_v1")
+                self.assertEqual(manifest["status"], "chosen")
+                self.assertFalse(
+                    (run_dir / "milestones" / milestone_id / "work" / "cache").exists(),
+                    "builder short-task milestones must stay cache-free by default",
+                )
+            self.assertFalse((codebase / "flowsteps" / "cache").exists())
+
     def test_run_factory_ships_product_skill(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             skill = Path(temp) / "bare-skill"
@@ -178,7 +214,8 @@ class FactoryTests(unittest.TestCase):
             self.assertIn("generate-new", notes)
             self.assertIn("crop_4x5", notes)
             validation = result["milestones"]["harness_validated"]
-            self.assertTrue(validation.get("optional"))
+            self.assertEqual(validation.get("status"), "PASS")
+            self.assertTrue(Path(validation["chosen_output"]).is_file())
 
     def test_audit_name_hints_are_notes_not_p0(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -187,16 +224,24 @@ class FactoryTests(unittest.TestCase):
             (root / "flow.yaml").write_text(
                 "\n".join(
                     [
-                        "schema: flowstep_flow_v3",
+                        "schema: flowstep_flow_v4",
                         "flow_id: hint_v1",
                         "version: 1",
                         "milestones:",
                         "  - id: crop_4x5",
                         "    output_contract: crop_v1",
+                        "    output_schema: schemas/crop_v1.json",
+                        "    success: Crop candidate is chosen.",
+                        "    outputs:",
+                        "      - { id: result, name: Crop, kind: image, cardinality: one, required: true }",
                         "    tools: [not_yet_a_seed]",
                         "    intelligence: none",
                         "  - id: if_ready",
                         "    output_contract: ready_v1",
+                        "    output_schema: schemas/ready_v1.json",
+                        "    success: Ready result is chosen.",
+                        "    outputs:",
+                        "      - { id: result, name: Ready, kind: json, cardinality: one, required: true }",
                         "    tools: [hash_bind]",
                         "    intelligence: none",
                     ]
@@ -213,13 +258,13 @@ class FactoryTests(unittest.TestCase):
             self.assertTrue(any("generate-new" in issue for issue in issues))
 
 
-class LegacyV2StillImportable(unittest.TestCase):
-    def test_python_api_legacy_v2_still_scaffolds_for_fixture_tests(self) -> None:
+class LegacyV2HardCutover(unittest.TestCase):
+    def test_python_api_legacy_v2_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             skill = Path(temp) / "legacy"
-            result = generate_harness(skill, flow_id="legacy_v1", step_ids=["alpha"])
-            self.assertEqual(result["schema"], "flowstep_harness_generate_v2")
-            self.assertTrue((skill / "steps" / "alpha" / "tool.py").is_file())
+            with self.assertRaisesRegex(FlowError, "m8m-harness-builder 2.0"):
+                generate_harness(skill, flow_id="legacy_v1", step_ids=["alpha"])
+            self.assertFalse((skill / "steps").exists())
 
 
 if __name__ == "__main__":

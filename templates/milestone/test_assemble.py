@@ -23,9 +23,10 @@ class AssembleTests(unittest.TestCase):
             path.write_text("ok\n", encoding="utf-8")
             result = assemble.run({"request": {"path": str(path)}})
         self.assertIsInstance(result, dict)
-        if assemble.ASSET_KIND in {"file", "image"} or assemble.IS_LAST:
-            self.assertIn("asset", result)
-            self.assertEqual(len(result["asset"]["sha256"]), 64)
+        if assemble.ASSET_KIND in {"file", "image", "video", "audio"}:
+            self.assertIn("outputs", result)
+            output_id = assemble.OUTPUTS[0]["id"]
+            self.assertTrue(result["outputs"][output_id]["asset"]["path"])
 
 
 if __name__ == "__main__":

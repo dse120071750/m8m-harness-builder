@@ -3,9 +3,23 @@
   "$id": "label.output.schema.json",
   "type": "object",
   "additionalProperties": false,
-  "required": ["label", "sentence"],
+  "required": ["outputs"],
   "properties": {
-    "label": { "enum": ["question", "statement", "other"] },
-    "sentence": { "type": "string", "minLength": 1 }
+    "outputs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["result"],
+      "properties": {
+        "result": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["label", "sentence"],
+          "properties": {
+            "label": { "enum": ["question", "statement", "other"] },
+            "sentence": { "type": "string", "minLength": 1 }
+          }
+        }
+      }
+    }
   }
 }

@@ -5,6 +5,6 @@
   "additionalProperties": false,
   "required": ["segment"],
   "properties": {
-    "segment": { "$ref": "../segment/output.schema.json" }
+    "segment": { "$ref": "../segment/output.schema.json#/properties/outputs/properties/result" }
   }
 }

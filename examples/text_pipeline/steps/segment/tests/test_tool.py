@@ -14,8 +14,9 @@ _spec.loader.exec_module(tool)
 class SegmentToolTests(unittest.TestCase):
     def test_splits_sentences(self) -> None:
         result = tool.run({"ingest": {"text": "Hello, world. This is a test.", "char_count": 29}})
-        self.assertEqual(result["sentence_count"], 2)
-        self.assertEqual(result["sentences"][0], "Hello, world.")
+        payload = result["outputs"]["result"]
+        self.assertEqual(payload["sentence_count"], 2)
+        self.assertEqual(payload["sentences"][0], "Hello, world.")
 
 
 if __name__ == "__main__":

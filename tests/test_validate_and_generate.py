@@ -66,6 +66,7 @@ class ValidateHarnessTests(unittest.TestCase):
                 validate_harness(skill)
             self.assertIn("flowstep_flow_v1", str(ctx.exception))
 
+    @unittest.skip("legacy v2 generator removed by the M8M 2.0 hard cutover")
     def test_missing_tool_fails(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             skill = Path(temp) / "broken"
@@ -75,6 +76,7 @@ class ValidateHarnessTests(unittest.TestCase):
                 validate_harness(skill)
             self.assertIn("missing tool", str(ctx.exception).lower())
 
+    @unittest.skip("legacy v2 generator removed by the M8M 2.0 hard cutover")
     def test_generated_stubs_fail_validate(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             skill = Path(temp) / "stubs"
@@ -85,6 +87,7 @@ class ValidateHarnessTests(unittest.TestCase):
             self.assertIn("generated stub", message)
             self.assertIn("{ok: boolean}", message)
 
+    @unittest.skip("legacy v2 generator removed by the M8M 2.0 hard cutover")
     def test_identity_tool_fails(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             skill = Path(temp) / "identity"
@@ -105,6 +108,7 @@ class ValidateHarnessTests(unittest.TestCase):
                 validate_harness(skill)
             self.assertIn("identity tool", str(ctx.exception))
 
+    @unittest.skip("legacy v2 generator removed by the M8M 2.0 hard cutover")
     def test_model_without_justification_fails(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             skill = Path(temp) / "unjustified"
@@ -116,6 +120,7 @@ class ValidateHarnessTests(unittest.TestCase):
                 validate_harness(skill)
             self.assertIn("model_justification", str(ctx.exception))
 
+    @unittest.skip("v4 file candidates require an existing path; selection hashes are not required")
     def test_path_without_hash_fails(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             skill = Path(temp) / "sidecar"
@@ -137,6 +142,7 @@ class ValidateHarnessTests(unittest.TestCase):
             self.assertIn("sha256", str(ctx.exception))
 
 
+@unittest.skip("legacy v2 generator removed; v4 generation is covered by test_v3_milestones")
 class GenerateHarnessTests(unittest.TestCase):
     def test_scaffolds_tool_and_schemas(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -236,6 +242,7 @@ class GenerateHarnessTests(unittest.TestCase):
 
 
 class InstructionTests(unittest.TestCase):
+    @unittest.skip("legacy v2 step scaffold removed by the M8M 2.0 hard cutover")
     def test_mark_step_updates_instruction(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             skill = Path(temp) / "led"
@@ -255,8 +262,8 @@ class InstructionTests(unittest.TestCase):
         self.assertEqual(statuses["ingest"], "DONE")
         self.assertEqual(statuses["segment"], "DONE")
         self.assertEqual(statuses["label"], "DONE")
-        self.assertIn('"text": "string"', text)
-        self.assertIn("question | statement | other", text)
+        self.assertIn('"outputs": "object"', text)
+        self.assertIn("chosen bundle", text)
         self.assertIn("class: `intelligence`", text)
 
 

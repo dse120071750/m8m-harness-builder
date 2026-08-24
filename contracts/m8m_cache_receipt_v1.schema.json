@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "m8m_cache_receipt_v1.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "milestone_id", "status", "updated_at"],
+  "properties": {
+    "schema": { "const": "m8m_cache_receipt_v1" },
+    "milestone_id": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+    "status": { "enum": ["disabled", "bypassed", "miss", "hit", "invalid", "expired", "rejected", "stored"] },
+    "cycle_row": { "type": "string", "minLength": 1 },
+    "cache_key_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "input_fingerprint_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "implementation_fingerprint_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "namespace_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "entry": { "type": "string", "minLength": 1 },
+    "lookup_status": { "enum": ["bypassed", "miss", "hit", "invalid", "expired", "rejected"] },
+    "write_status": { "enum": ["stored", "failed"] },
+    "reason": { "type": "string", "minLength": 1 },
+    "warning": { "type": "string", "minLength": 1 },
+    "updated_at": { "type": "string", "format": "date-time" }
+  }
+}

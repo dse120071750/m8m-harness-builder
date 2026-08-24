@@ -5,6 +5,6 @@
   "additionalProperties": false,
   "required": ["ingest"],
   "properties": {
-    "ingest": { "$ref": "../ingest/output.schema.json" }
+    "ingest": { "$ref": "../ingest/output.schema.json#/properties/outputs/properties/result" }
   }
 }

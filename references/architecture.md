@@ -1,200 +1,366 @@
 # M8M architecture
 
-Protocol reference. The skill file owns the engineering method. This
-file owns YAML, the tool protocol, and the driver.
+M8M is a milestone workflow engine. A milestone is the canvas node;
+FlowSteps and their preferred tools execute inside it.
 
 ```text
-Milestone  = canvas node. this.in = previous.out
-FlowStep   = tool-heavy unit inside a milestone
-Tool       = premade Python at flowsteps/tools/<id>/
+named inputs
+  → FlowSteps generate/refine the current candidate
+  → milestone judge evaluates success
+       not ok → another attempt under work/attempts
+       PASS   → commit the current candidate
+  → out/chosen-output.json
+  → downstream named input binding
 ```
 
-v3 product **milestones** live at `<codebase>/flowsteps/flows/<flow_id>/`.
-Reusable **tools** live at `<codebase>/flowsteps/tools/<tool_id>/`.
-See `milestone.md`.
+The session directory is the run-state authority. Selection is logical,
+not cryptographic: there are no lock IDs, candidate hashes, revisions, or
+judge-digest bindings.
 
-## Control plane
+## Hard-cutover contracts
 
-```text
-driver
-  -> bind typed inputs (previous data or user.request)
-  -> validate input.schema.json
-  -> steps/<id>/tool.py run()
-  -> validate output.schema.json
-  -> wrap flowstep_output_v2
-  -> next step
+The canonical runtime accepts only:
 
-if preferred FlowStep tool fails
-  -> NEED_MODEL (agent recovery, like a normal skill)
-  -> write work/<id>/model_request.json
-  -> agent writes work/<id>/draft.json
-  -> assemble runs again with draft
-  -> milestone asset schema still must PASS or BLOCK
-```
+- `flowstep_flow_v4` — workflow and declared output ports
+- `flowstep_output_v3` — execution envelope
+- `m8m_chosen_output_v1` — the one consumable milestone result
 
-There is one execution mode: `tool`. `class` is `tool` or `intelligence`
-(see `tool-vs-intelligence.md`). `model` is only set on intelligence.
-A name like `crop_*` / `fetch_*` is a **note** (looks like a tool);
-`judge_*` / `choose_*` looks like intelligence. The writer still draws.
+`flowstep_flow_v1`, v2, and v3 fail with “regenerate with
+m8m-harness-builder 2.0”. There is no legacy execution mode.
 
-Every **milestone** output schema is a required asset (file, image, json
-proof, or data), closed, with `required` fields. Runtime BLOCKs if that
-schema does not PASS. Next milestone does not start.
+Each milestone must declare:
 
-A generated **tool** stub is a successful sketch. Fill in `tool.py` later.
-`validate_harness.py` is optional (tools). `run_flow.py` is the harness.
+- `success`: the goal evaluated by its judge
+- `output_contract` and `output_schema`
+- at least one `outputs` entry with `id`, display `name`, `kind`,
+  `cardinality: one|many`, and `required: true|false`
 
-Do not set `max_run_repair_cycles`. A BLOCKED run stays BLOCKED; start a
-new run after changing tools.
+Provider-neutral member kinds are `json`, `data`, `file`, `image`,
+`video`, and `audio`.
 
-## Flow YAML
+## Canonical flow YAML
 
 ```yaml
-schema: flowstep_flow_v2
-flow_id: text_pipeline_v1
+schema: flowstep_flow_v4
+flow_id: content_post_v1
 version: 1
-max_run_seconds: 3600
-artifact_root: artifacts
-steps:
-  - id: ingest
-    kind: source.ingest
-    class: tool
-    handler: steps/ingest/tool.py
-    model: none
+milestones:
+  - id: render
+    success: The accepted hero and supporting images satisfy the brief.
+    output_contract: render_v1
+    output_schema: milestones/render/output.schema.json
+    outputs:
+      - id: images
+        name: Accepted images
+        kind: image
+        cardinality: many
+        required: true
+      - id: receipt
+        name: Render data
+        kind: json
+        cardinality: one
+        required: true
+    handler: milestones/render/assemble.py
+    input_schema: milestones/render/input.schema.json
     inputs:
       request: user.request
-    output_contract: ingest_v1
-    input_schema: steps/ingest/input.schema.json
-    output_schema: steps/ingest/output.schema.json
-  - id: segment
-    kind: text.segment
-    class: tool
-    handler: steps/segment/tool.py
-    model: none
+    loop: judge
+    worker: render_judge
+    flowsteps:
+      - { id: generate, tool: image_generate }
+      - { id: compare, tool: visual_compare }
+      - { id: refine, tool: image_edit }
+
+  - id: package
+    success: The post package is complete.
+    output_contract: package_v1
+    output_schema: milestones/package/output.schema.json
+    outputs:
+      - id: package
+        name: Content package
+        kind: json
+        cardinality: one
+        required: true
+    handler: milestones/package/assemble.py
+    input_schema: milestones/package/input.schema.json
     inputs:
-      ingest: ingest.ingest_v1
-    output_contract: segment_v1
-    input_schema: steps/segment/input.schema.json
-    output_schema: steps/segment/output.schema.json
-  - id: label
-    kind: text.label
-    class: intelligence
-    handler: steps/label/tool.py
-    model: completion
-    model_justification: semantic class is not derivable from punctuation alone
-    draft_schema: steps/label/draft.schema.json
-    inputs:
-      segment: segment.segment_v1
-    output_contract: label_v1
-    input_schema: steps/label/input.schema.json
-    output_schema: steps/label/output.schema.json
+      all_rendered:
+        from: render.render_v1
+        output: images
+      hero:
+        from: render.render_v1
+        output: images
+        member: hero_image
 ```
 
-`inputs` values are `user.request` or `<earlier_step>.<output_contract>`.
-The driver puts the upstream `data` object under the input name. The input
-schema for `segment` therefore requires `ingest` and `$ref`s
-`../ingest/output.schema.json`.
+The workflow JSON/YAML is the design-time canvas representation. Its
+`outputs` entries are visible output ports. `chosen-output.json` is the
+run-time representation used for status, previews, and queries.
 
-v1 fields are rejected: `execution_mode`, `assigned_agent`,
-`persistent_worker`, `max_subagent_roles`.
+## Candidate protocol
 
-## Tool protocol
-
-```python
-def run(input_data: dict, draft: dict | None = None, **kwargs) -> dict:
-    ...
-```
-
-Return values:
-
-| Return | Driver |
-| --- | --- |
-| payload object | validate against `output.schema.json`, write artifact, continue |
-| `{'_flowstep':'NEED_MODEL','model':...,'model_request':{...}}` | stop with `ACTION_REQUIRED` |
-| `{'_flowstep':'BLOCKED','blockers':[...]}` | write BLOCKED artifact and stop |
-| exception | BLOCKED |
-
-`model: none` tools may not return `NEED_MODEL`. The payload must not use the
-key `_flowstep`.
-
-## Envelope
-
-The driver, not the tool, writes:
+Handlers return the current candidate in the shape validated by the
+milestone `output_schema`:
 
 ```json
 {
-  "schema": "<output_contract>",
-  "artifact_id": "<contract>:<run_id>:<step_id>",
-  "run_id": "<run_id>",
-  "flow_id": "<flow_id>",
-  "flow_version": 1,
-  "step_id": "<step_id>",
-  "status": "PASS",
-  "data": {},
-  "evidence": {
-    "handler": "steps/<id>/tool.py",
-    "model": "none",
-    "attempt": 1,
-    "input_artifacts": [],
-    "implementation_fingerprint_sha256": "<sha256>",
-    "blockers": []
+  "outputs": {
+    "images": [
+      {"id": "hero_image", "name": "Hero image", "path": "..."},
+      {"id": "detail_image", "name": "Detail image", "path": "..."}
+    ],
+    "receipt": {"id": "render_receipt", "name": "Render receipt", "value": {}}
   },
-  "created_at": "<iso8601>"
+  "receipt": {"ok": true}
 }
 ```
 
-`data` is the output schema. A file is a `file_ref_v2` object, not a bare
-path. Required fields are `path` and `sha256`. Add `content_schema` when the
-bytes are JSON that the next step must understand. `$ref` the shared
-`contracts/file_ref_v2.schema.json`. A `*_path` property without a sibling
-`sha256` fails `validate_harness.py`.
+Each collection member needs a unique filesystem-safe `id` and non-empty
+`name`. A one-cardinality output is one member; a many-cardinality output
+is an ordered member array. The judge may reject the candidate and repeat
+FlowSteps. Rejected attempts are diagnostic only and are never queryable.
 
-## Run layout (session addresses)
+On PASS the runtime immediately commits the current return value:
 
-The driver creates this tree. Generated bytes **must** land in a slot.
-`asset.path` outside the run is an address leak → BLOCK.
+```text
+milestones/<milestone_id>/out/
+  chosen-output.json
+  judge-receipt.json
+  members/<member_id>/asset.<ext>
+```
 
-Default `--run-dir`: `<repo>/flowsteps/runs/<flow_id>/<utc>_<shortid>/`
+JSON/data values are stored as JSON assets. File and media bytes are
+copied into the member directory. The chosen manifest contains the
+ordered member list, output IDs, names, kinds, relative paths, and
+`status: chosen`. It contains no candidate hash or lock ID and is written
+last, after every declared member and the judge receipt are valid.
+
+Only `out/chosen-output.json` makes a milestone consumable. Missing
+required outputs, duplicate or unsafe IDs, empty names, missing files,
+schema failures, exhausted judge attempts, or a missing chosen manifest
+leave the milestone BLOCKED.
+
+## Input queries
+
+Whole milestone binding remains valid:
+
+```yaml
+inputs:
+  rendered_content: render.render_v1
+```
+
+It returns a mapping of declared output IDs. Explicit output and member
+bindings are:
+
+```yaml
+inputs:
+  images:
+    from: render.render_v1
+    output: images
+  hero:
+    from: render.render_v1
+    output: images
+    member: hero_image
+```
+
+Omitting `member` returns the declared output as one value or an ordered
+array according to cardinality. Downstream code never reads attempts,
+execution envelopes, or unchosen candidate files.
+
+## Execution context and run modes
+
+`context_policy: isolated` is the v4 default. The runtime writes
+`run-context.json` with `chat_history_allowed: false`. Deterministic handlers
+receive only resolved run inputs. Model work returns `ACTION_REQUIRED` with
+an `m8m_context_capsule_v1` containing a closed file allowlist and one draft
+destination. The platform adapter must launch a fresh no-history worker for
+that capsule; using the orchestration chat to produce the draft violates the
+flow contract.
+
+Fresh is the CLI default. It creates a new folder, defaults cross-run cache
+to `off`, and refuses an existing execution record. Only the exact request,
+current implementation, gems/schemas, and chosen outputs created inside that
+folder are available. `--run-mode resume --run-dir <exact-run>` is explicit
+same-run continuation. A missing fresh input is an error or clarification;
+the adapter must not fill it from prior conversation memory.
+
+Provider-neutral Python cannot erase a caller's model memory. The boundary
+is therefore contractual and machine-readable: the caller must create the
+no-history worker described by the capsule. Generated product skills make
+this compulsory.
+
+## Resume, edited-workflow continuation, and replacement
+
+Plain resume validates each chosen manifest, skips completed milestones,
+and starts at the first unfinished node. It does not invoke a handler or
+judge for a milestone with a valid chosen output. It reuses run state, not a
+cross-run cache entry.
+
+When a defect is repaired during a paused or blocked workflow, use:
+
+```powershell
+python scripts/run_flow.py ... --run-dir <run> --continue-after-edit render
+```
+
+The adoption gate compares the frozen flow snapshot and implementation lock
+with current code. It permits changes owned by `render` and its transitive
+downstream graph, verifies preserved chosen port compatibility, updates the
+lock, then clears and reruns the affected graph. Flow-level changes,
+milestone identity/order changes, unowned implementation changes, or edits
+to preserved milestones fail closed and require a fresh run.
+
+Intentional regeneration is explicit:
+
+```powershell
+python scripts/run_flow.py ... --replace-milestone render
+```
+
+Replacement removes the chosen and working state of that milestone and
+every transitively downstream milestone, then runs from the selected
+milestone. There is only one current chosen result per milestone; no
+revision is created. This changes session artifacts only. Side-effecting
+tools retain their existing idempotency responsibilities.
+
+## Repeated-goal isolation
+
+`run_goal.py` is the outer orchestration layer for repeated work. Its
+`m8m_goal_ledger_v1` freezes row IDs and tracks row status, while each row
+uses a distinct child folder:
+
+```text
+<goal>/
+  goal-ledger.json
+  implementation-lock.json
+  rows/<row>/attempt-001/
+    request.json
+    run/
+      run-context.json
+      roster.json
+      milestones/...
+      cycles/...
+```
+
+Every child has origin `goal_child`, `chat_history_allowed: false`, and cache
+mode `off`. Completed rows are not carried into the next child's context;
+only their status/path remains in the outer ledger. `--continue-after-edit`
+repairs the current child in place and preserves compatible upstream state.
+`--abandon-row` retains the old attempt and starts a new clean attempt. This
+prevents a ten-case goal from becoming one progressively drifting model
+conversation.
+
+## Workflow state versus cross-run cache
+
+The run directory is always the workflow-state authority. Its chosen
+outputs, attempts, roster, ledger, branch, wait, resume, and replacement
+records are never cache entries. The implementation lock prevents code
+drift inside that run; it is not a cache key.
+
+Cross-run cache is optional and requires both a milestone declaration and
+an enabled run mode:
+
+```yaml
+cache:
+  reuse: candidate
+  ttl_seconds: 86400
+  side_effects: none
+```
+
+```text
+--cache-mode off|read|write|read-write   # new-run default: off
+--cache-namespace <tenant-or-local>
+```
+
+Entries live at
+`<repo>/flowsteps/cache/v1/<flow>/<namespace-digest>/<milestone>/<key>/`.
+The key covers canonical semantic inputs plus milestone handler, FlowStep
+tools, schemas, success gem, judge, model configuration, output ports, and
+contract. It excludes run paths, IDs, attempts, timestamps, roster, and
+cycle-control state. File and media input identity uses byte digests.
+
+On hit, copy the entry into the current run's `work/cache-candidate`,
+validate it, and run the current judge. Rejection falls through to fresh
+FlowSteps without spending their attempt budget or looking up again.
+PASS creates a normal run-local chosen bundle and current judge receipt.
+Cache entries never contain chosen status or judge receipts, and chosen
+manifests never point outside the run.
+
+Cache faults and writes are non-blocking. Replacement bypasses reads for
+the entire invalidated subgraph. Write-only mode is the explicit refresh
+path. Wait, branch-decision, cycle-control, side-effecting, and legacy
+`loop: for` milestones cannot declare cache. Ordinary cycle-row work uses
+one lookup receipt per semantic row.
+
+## Session layout
 
 ```text
 <run>/
   request.json
+  run-context.json                       # isolated; chat history forbidden
   manifest.json
-  implementation-lock.json
+  roster.json
   flow-execution-record.json
-  progress.json
-  milestones/<id>/out/files/asset.png
-  milestones/<id>/out/asset.json
-  milestones/<id>/items/001/files/asset.png
-  milestones/<id>/work/attempts/01/files/asset.png
-  work/<step>/input.json
-  work/<step>/model_request.json
-  work/<step>/draft.json
-  artifacts/<step>.<contract>.json
-  materialized/<step>.runtime_step_result.json
-  runtime-tasks/<step>.json
+  runtime-tasks/<id>.context.json        # allowlist for a fresh model worker
+  milestones/<id>/
+    out/
+      chosen-output.json
+      judge-receipt.json
+      members/<member_id>/asset.<ext>
+    work/
+      cache-receipt.json                # optional lookup/write metadata
+      cache-candidate/...               # imported bytes; never downstream address
+      candidate/files/...
+      attempts/01/...
+    items/001/work/cache-receipt.json   # optional cycle-row cache metadata
+    items/001/...                       # completed cycle item, when used
+  cycles/<id>/ledger.json
 ```
 
-Tools get `address.write_to` / `address.slot`. Copy Imagine/temp output
-into that path. `manifest.json` lists every slot for later audit.
+The roster tracks milestone progress. A cycle ledger tracks rows inside a
+cycle. Neither is a canvas node and neither replaces chosen outputs.
 
-The implementation lock hashes the flow YAML plus every step `tool.py` and
-schema. Changing those files mid-run is terminal; start a new run.
+## Control semantics
 
-Consecutive `model: none` steps execute in one `run_flow.py` invocation.
-Repair is not implicit. A BLOCKED run stays BLOCKED.
+- FlowSteps are the preferred internal sequence; their tools may recover
+  like a normal agent, but the declared chosen bundle is compulsory.
+- `loop: judge` repeats current-candidate production until its dedicated
+  worker says `ok: true` or attempts are exhausted.
+- A branch is evaluated after the milestone has committed its chosen
+  output. Unselected paths are skipped, not BLOCKED.
+- A cycle wraps milestones over a frozen ledger. Pass preserves the item;
+  fail removes unfinished live output and leaves the row resumable.
+- A wait is a normal milestone using roster state. It pauses without
+  manufacturing a chosen output, then resumes and judges the reply.
 
-## Shared commands
+Intelligence may propose content. It may not set `ok`, `branch`, or
+`cycle`; deterministic workers own those receipts.
 
-All product skills call this skill’s scripts. Do not fork `run_flow.py`.
+## Builder dogfooding
+
+`flows/m8m_build_v1.yaml` is itself `flowstep_flow_v4` and runs through
+the canonical runtime. All five milestones are compulsory:
+
+```text
+source audit
+  → toolbox construction
+  → staged flow/skill generation
+  → harness validation
+  → local skill installation
+```
+
+Every stage consumes the preceding chosen output. Generated target files
+remain inside the builder session until the validation milestone has a
+valid chosen manifest. Only the installation milestone copies the
+validated stage into the local target. `run_m8m.py` is a thin launcher;
+it does not maintain a second pseudo-milestone engine.
+
+## Commands
 
 ```powershell
-python <builder>/scripts/audit_harness.py --target <skill-or-flow>
-python <builder>/scripts/generate_harness.py --codebase <repo> --tool crop_4x5
-python <builder>/scripts/generate_harness.py --codebase <repo> --flow-id <id> --milestone source_ready --milestone assets_bound --tools hash_bind,crop_4x5 --intelligence assets_bound
-python <builder>/scripts/flowstep_instruction.py mark --codebase <repo> --flow-id <id> --step <milestone> --status DONE
-python <builder>/scripts/validate_harness.py --codebase <repo> --flow-id <id>
-python <builder>/scripts/run_flow.py --codebase <repo> --flow-id <id> --run-dir <run> --request <request.json>
+python scripts/run_m8m.py --target <skill-or-flow-dir> --codebase <repo>
+python scripts/audit_harness.py --target <skill-or-flow-dir>
+python scripts/generate_harness.py --codebase <repo> --from-audit <skill>/planning/flowstep-audit.json
+python scripts/validate_harness.py --codebase <repo> --flow-id <id>
+python scripts/run_flow.py --codebase <repo> --flow-id <id> --run-dir <run> --request <request.json>
 ```
 
-`--skill-dir` remains only for this skill’s `examples/text_pipeline` fixture.
+No command in this builder deploys a generated workflow.

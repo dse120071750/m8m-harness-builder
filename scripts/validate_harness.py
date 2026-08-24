@@ -12,14 +12,17 @@ from jsonschema import Draft202012Validator, RefResolver
 
 from flowstep_instruction import sync_statuses_from_errors
 from flowstep_tools import infer_codebase
+from milestone_pair import is_wait_milestone
 from schema_gate import is_control_name, schema_property_names, schema_required_names
 from flowstep_runtime import (
     FlowError,
     add_harness_location_args,
+    cache_side_effect_risk,
     find_flow_path,
     harness_dir_from_args,
     inspect_step_test,
     inspect_tool_source,
+    is_builder_fixture,
     is_passthrough_schema,
     is_stub_output_schema,
     lint_file_payload_schema,
@@ -38,6 +41,8 @@ def _previous_output_schema(skill_dir: Path, flow: dict[str, Any], step: dict[st
         refs = list(step["join"])
     else:
         for reference in (step.get("inputs") or {}).values():
+            if isinstance(reference, dict):
+                reference = reference.get("from")
             if isinstance(reference, str) and "." in reference and reference != "user.request":
                 refs.append(reference.split(".", 1)[0])
     names: set[str] = set()
@@ -74,6 +79,21 @@ def _validate_control(
     if attempts is not None and (not isinstance(attempts, int) or attempts < 1):
         errors.append(f"{step_id}: max_model_attempts must be a positive integer")
     loop = str(step.get("loop") or "none")
+    cache = step.get("cache") if isinstance(step.get("cache"), dict) else None
+    if cache:
+        if cache.get("reuse") != "candidate":
+            errors.append(f"{step_id}: cache.reuse must be candidate")
+        if not isinstance(cache.get("ttl_seconds"), int) or cache.get("ttl_seconds", 0) < 1:
+            errors.append(f"{step_id}: cache.ttl_seconds must be a positive integer")
+        if cache.get("side_effects") != "none":
+            errors.append(f"{step_id}: cache.side_effects must be none")
+        if step.get("branch") or step.get("cycle") or loop == "for" or is_wait_milestone(step):
+            errors.append(f"{step_id}: wait/branch/cycle control milestones cannot use cross-run cache")
+        side_effect_risk = cache_side_effect_risk(step)
+        if side_effect_risk:
+            errors.append(
+                f"{step_id}: cache is unsafe because {side_effect_risk} may have external side effects"
+            )
     if step.get("next") or step.get("else") or step.get("join"):
         errors.append(f"{step_id}: exclusive next.when/else/join is removed; use branch after the milestone")
     branch = step.get("branch") if isinstance(step.get("branch"), dict) else None
@@ -227,10 +247,10 @@ def validate_harness(
         except FlowError as exc:
             errors.append(f"{step_id}: {exc}")
         handler_path = skill_dir / step["handler"]
-        if flow.get("_v3"):
+        if flow.get("_v4"):
             codebase = infer_codebase(skill_dir)
-            if codebase is None:
-                errors.append(f"{step_id}: v3 flow must live at flowsteps/flows/<flow_id>")
+            if codebase is None and not is_builder_fixture(skill_dir):
+                errors.append(f"{step_id}: v4 flow must live at flowsteps/flows/<flow_id>")
         elif handler_path.is_file():
             errors.extend(
                 inspect_tool_source(
@@ -240,7 +260,7 @@ def validate_harness(
                 )
             )
         test_path = skill_dir / step["test"]
-        if test_path.is_file() and not flow.get("_v3"):
+        if test_path.is_file() and not flow.get("_v4"):
             errors.extend(inspect_step_test(test_path.read_text(encoding="utf-8"), step_id=step_id))
         for schema_key in ("input_schema", "output_schema", "draft_schema"):
             if schema_key == "draft_schema" and not step.get("draft_schema"):
@@ -263,10 +283,10 @@ def validate_harness(
                 errors.append(f"{step_id}: {schema_key} is not a usable JSON Schema: {exc}")
             if schema_key == "output_schema" and is_stub_output_schema(schema):
                 errors.append(f"{step_id}: output schema is still the generated {{ok: boolean}} stub")
-            if schema_key == "output_schema" and flow.get("_v3") and is_passthrough_schema(schema):
-                errors.append(f"{step_id}: milestone output is not a required asset (closed schema with required fields)")
+            if schema_key == "output_schema" and flow.get("_v4") and is_passthrough_schema(schema):
+                errors.append(f"{step_id}: candidate output schema must be closed and require the declared outputs object")
             errors.extend(lint_file_payload_schema(schema, label=f"{step_id}.{schema_key}"))
-        if is_control_name(step_id) and not flow.get("_v3"):
+        if is_control_name(step_id) and not flow.get("_v4"):
             errors.append(f"{step_id}: if/loop/switch names are notes; for/judge are milestones")
         _validate_control(skill_dir, flow, step, index, declared, errors)
         contract = step["output_contract"]
@@ -277,8 +297,17 @@ def validate_harness(
         for name, reference in step["inputs"].items():
             if reference == "user.request":
                 continue
+            if isinstance(reference, dict):
+                source_ref = str(reference.get("from") or "")
+                output_id = str(reference.get("output") or "")
+                member_id = str(reference.get("member") or "")
+                if member_id and not output_id:
+                    errors.append(f"{step_id}.inputs.{name}.member requires output")
+                reference = source_ref
             if not isinstance(reference, str) or "." not in reference:
-                errors.append(f"{step_id}.inputs.{name} must be user.request or <step>.<contract>")
+                errors.append(
+                    f"{step_id}.inputs.{name} must be user.request, <milestone>.<contract>, or a member binding"
+                )
                 continue
             source_id, contract_name = reference.split(".", 1)
             if source_id not in declared:
@@ -296,7 +325,7 @@ def validate_harness(
     if errors:
         raise FlowError("harness invalid:\n- " + "\n- ".join(errors))
     return {
-        "schema": "flowstep_harness_validation_v2",
+        "schema": "flowstep_harness_validation_v3",
         "status": "PASS",
         "skill": skill_dir.name,
         "flow_id": flow["flow_id"],

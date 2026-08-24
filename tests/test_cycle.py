@@ -5,6 +5,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import yaml
+
 import support  # noqa: F401
 
 from generate_harness import generate_tool, generate_v3_flow
@@ -96,7 +98,12 @@ def _assemble(path: Path, body: str) -> None:
     _write(path, "def run(input_data, draft=None, **_):\n" + body)
 
 
-def _scaffold(temp: str, *, fail_first: bool = False) -> tuple[Path, Path]:
+def _scaffold(
+    temp: str,
+    *,
+    fail_first: bool = False,
+    cache_page_bound: bool = False,
+) -> tuple[Path, Path]:
     codebase = Path(temp) / "repo"
     generate_tool(codebase, "hash_bind")
     generate_tool(codebase, "cycle_receipt")
@@ -108,15 +115,25 @@ def _scaffold(temp: str, *, fail_first: bool = False) -> tuple[Path, Path]:
         milestone_specs=CYCLE_SPEC,
     )
     harness = codebase / "flowsteps" / "flows" / "cycle_v1"
+    if cache_page_bound:
+        flow_path = harness / "flow.yaml"
+        flow = yaml.safe_load(flow_path.read_text(encoding="utf-8"))
+        page_bound = next(item for item in flow["milestones"] if item["id"] == "page_bound")
+        page_bound["cache"] = {"reuse": "candidate", "ttl_seconds": 3600, "side_effects": "none"}
+        flow_path.write_text(yaml.safe_dump(flow, sort_keys=False), encoding="utf-8")
     _assemble(
         harness / "milestones" / "pages_ledger_frozen" / "assemble.py",
         "    req = input_data.get('request') if isinstance(input_data.get('request'), dict) else input_data\n"
-        "    return {'rows': req.get('rows') or [{'id': '001'}, {'id': '002'}]}\n",
+        "    return {'outputs': {'result': {'rows': req.get('rows') or [{'id': '001'}, {'id': '002'}]}}}\n",
     )
     _assemble(
         harness / "milestones" / "page_bound" / "assemble.py",
+        "    from pathlib import Path\n"
+        "    marker = Path(__file__).with_name('_handler_calls.txt')\n"
+        "    calls = int(marker.read_text()) + 1 if marker.is_file() else 1\n"
+        "    marker.write_text(str(calls))\n"
         "    row = input_data.get('row') or '001'\n"
-        "    return {'page': 'p-' + str(row)}\n",
+        "    return {'outputs': {'result': {'page': 'p-' + str(row)}}}\n",
     )
     fail = "True" if fail_first else "False"
     _assemble(
@@ -129,11 +146,12 @@ def _scaffold(temp: str, *, fail_first: bool = False) -> tuple[Path, Path]:
         "    marker.write_text(str(n))\n"
         "    row = input_data.get('row') or '001'\n"
         "    chosen = 'fail' if fail_first and n == 1 else 'pass'\n"
-        "    return {'page': 'p-' + str(row), 'receipt': {'ok': True, 'cycle': chosen, 'row': row, 'reason': chosen}}\n",
+        "    receipt = {'ok': True, 'cycle': chosen, 'row': row, 'reason': chosen}\n"
+        "    return {'outputs': {'result': {'page': 'p-' + str(row), 'receipt': receipt}}, 'receipt': receipt}\n",
     )
     _assemble(
         harness / "milestones" / "release_packaged" / "assemble.py",
-        "    return {'ready': True}\n",
+        "    return {'outputs': {'result': {'ready': True}}}\n",
     )
     for mid in [item["id"] for item in CYCLE_SPEC]:
         _ok_test(harness / "milestones" / mid / "tests" / "test_assemble.py")
@@ -164,6 +182,42 @@ class CycleChartTests(unittest.TestCase):
 
 
 class CycleRunTests(unittest.TestCase):
+    def test_row_candidates_cache_independently_across_runs(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            codebase, harness = _scaffold(temp, cache_page_bound=True)
+            first_run = codebase / "runs" / "cache-first"
+            second_run = codebase / "runs" / "cache-second"
+            first = advance(
+                harness,
+                first_run,
+                request_path=_request(first_run),
+                cache_mode="read-write",
+                cache_namespace="tenant-a",
+            )
+            second = advance(
+                harness,
+                second_run,
+                request_path=_request(second_run),
+                cache_mode="read-write",
+                cache_namespace="tenant-a",
+            )
+            self.assertEqual(first["state"], "COMPLETE", first)
+            self.assertEqual(second["state"], "COMPLETE", second)
+            marker = harness / "milestones" / "page_bound" / "_handler_calls.txt"
+            self.assertEqual(marker.read_text(encoding="utf-8"), "2")
+            for row_id in ("001", "002"):
+                receipt = read_json(
+                    second_run
+                    / "milestones"
+                    / "page_bound"
+                    / "items"
+                    / row_id
+                    / "work"
+                    / "cache-receipt.json"
+                )
+                self.assertEqual(receipt["lookup_status"], "hit")
+                self.assertEqual(receipt["cycle_row"], row_id)
+
     def test_two_rows_pass_preserves_items(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             codebase, harness = _scaffold(temp)
@@ -197,7 +251,7 @@ class CycleRunTests(unittest.TestCase):
             codebase, harness = _scaffold(temp)
             _assemble(
                 harness / "milestones" / "page_rendered" / "assemble.py",
-                "    return {'page': 'p'}\n",
+                "    return {'outputs': {'result': {'page': 'p'}}}\n",
             )
             run_dir = codebase / "runs" / "noreceipt"
             action = advance(harness, run_dir, request_path=_request(run_dir))

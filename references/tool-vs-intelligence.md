@@ -27,7 +27,8 @@ They agree on three rules we adopt at the **milestone** grain:
 2. A **tool** is a prewritten, schema-bound function the FlowStep prefers.
    The builder should develop it (fetch, MCP, crop). It is not compulsory.
 3. If that tool fails, recover **like a normal agent** still aimed at the
-   milestone asset. Intelligence does not pick the next **milestone**.
+   milestone candidate. The judge commits its declared named outputs;
+   intelligence does not pick the next **milestone**.
 
 Read this file once per new flow. Do not restate the catalog in `SKILL.md`.
 
@@ -137,13 +138,14 @@ path; add a model only when a fixture test cannot express the work.
 ## Forbidden (milestone harness)
 
 - Generating product tools under `~/.codex/skills` or `~/.claude/skills`
-- Skipping the milestone asset because a tool failed or a model “approved”
+- Skipping required named outputs because a tool failed or a model “approved”
 - Marking fetch, crop, hash, render, package, or schema-validate as the
   *first* move of a FlowStep when a repo tool exists
 - Intelligence choosing the next **milestone** or writing `ok` on a for/judge receipt (the worker tool owns that)
 
 Not forbidden: recovering like a normal agent **inside** a milestone after
-the preferred tool failed, as long as the asset schema still PASSes.
+the preferred tool failed, as long as the declared candidate schema PASSes
+and the milestone judge commits a chosen output bundle.
 
 ## How the highest-star systems strengthen us
 

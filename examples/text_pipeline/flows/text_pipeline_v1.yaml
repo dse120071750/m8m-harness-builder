@@ -1,44 +1,64 @@
-schema: flowstep_flow_v2
+schema: flowstep_flow_v4
 flow_id: text_pipeline_v1
 version: 1
+context_policy: isolated
 max_run_seconds: 3600
 artifact_root: artifacts
-steps:
+milestones:
   - id: ingest
-    kind: source.ingest
-    class: tool
+    success: Normalized text is available as the chosen JSON result.
+    output_contract: ingest_v1
+    output_schema: steps/ingest/output.schema.json
+    outputs:
+      - id: result
+        name: Normalized text
+        kind: json
+        cardinality: one
+        required: true
     handler: steps/ingest/tool.py
-    model: none
+    test: steps/ingest/tests/test_tool.py
     inputs:
       request: user.request
-    output_contract: ingest_v1
     input_schema: steps/ingest/input.schema.json
-    output_schema: steps/ingest/output.schema.json
-    params:
-      step_budget_seconds: 30
+    intelligence: none
+    on_tool_fail: BLOCKED
   - id: segment
-    kind: text.segment
-    class: tool
-    handler: steps/segment/tool.py
-    model: none
-    inputs:
-      ingest: ingest.ingest_v1
+    success: The sentence array is available as the chosen JSON result.
     output_contract: segment_v1
-    input_schema: steps/segment/input.schema.json
     output_schema: steps/segment/output.schema.json
-    params:
-      step_budget_seconds: 30
+    outputs:
+      - id: result
+        name: Sentences
+        kind: json
+        cardinality: one
+        required: true
+    handler: steps/segment/tool.py
+    test: steps/segment/tests/test_tool.py
+    inputs:
+      ingest:
+        from: ingest.ingest_v1
+        output: result
+    input_schema: steps/segment/input.schema.json
+    intelligence: none
+    on_tool_fail: BLOCKED
   - id: label
-    kind: text.label
-    class: intelligence
+    success: The first sentence has one accepted label.
+    output_contract: label_v1
+    output_schema: steps/label/output.schema.json
+    outputs:
+      - id: result
+        name: Sentence label
+        kind: json
+        cardinality: one
+        required: true
     handler: steps/label/tool.py
-    model: completion
+    test: steps/label/tests/test_tool.py
+    inputs:
+      segment:
+        from: segment.segment_v1
+        output: result
+    input_schema: steps/label/input.schema.json
+    intelligence: completion
     model_justification: semantic class is not derivable from punctuation alone
     draft_schema: steps/label/draft.schema.json
-    inputs:
-      segment: segment.segment_v1
-    output_contract: label_v1
-    input_schema: steps/label/input.schema.json
-    output_schema: steps/label/output.schema.json
-    params:
-      step_budget_seconds: 120
+    on_tool_fail: need_model

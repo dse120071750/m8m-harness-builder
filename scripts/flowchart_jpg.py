@@ -107,6 +107,9 @@ def _nodes(items: list[dict[str, Any]], statuses: dict[str, str] | None = None) 
             ledger = item["foreach"]
         asset = item.get("asset") if isinstance(item.get("asset"), dict) else {}
         kind = str(item.get("asset_kind") or asset.get("kind") or "")
+        outputs = [dict(output) for output in (item.get("outputs") or []) if isinstance(output, dict)]
+        if outputs:
+            kind = str(outputs[0].get("kind") or kind)
         flowsteps, _ = normalize_flowsteps(flowsteps=item.get("flowsteps"), tools=item.get("tools"))
         nodes.append(
             {
@@ -115,6 +118,7 @@ def _nodes(items: list[dict[str, Any]], statuses: dict[str, str] | None = None) 
                 "ledger": ledger,
                 "asset": asset,
                 "asset_kind": kind,
+                "outputs": outputs,
                 "flowsteps": flowsteps,
                 "status": str(statuses.get(mid) or item.get("status") or ""),
                 "branch": item.get("branch") if isinstance(item.get("branch"), dict) else None,
@@ -123,6 +127,8 @@ def _nodes(items: list[dict[str, Any]], statuses: dict[str, str] | None = None) 
                 "success": item.get("success"),
                 "worker": item.get("worker"),
                 "gem": item.get("gem") or f"references/{mid}.md",
+                "cache": item.get("cache") if isinstance(item.get("cache"), dict) else None,
+                "cache_status": str(item.get("cache_status") or ""),
             }
         )
     return nodes
@@ -187,6 +193,10 @@ def render_flowchart_image(
         if status:
             head = f"{head}  {status}"
         _text(draw, (bx + 16, y + 12), head[: 36], small_font, GRAY)
+        if node.get("cache"):
+            ttl = (node.get("cache") or {}).get("ttl_seconds")
+            cache_label = str(node.get("cache_status") or f"TTL {ttl}s")
+            _text(draw, (bx + box_w - 116, y + 12), f"cache {cache_label}"[:16], small_font, BLUE_EDGE)
         title_lines = _wrap(draw, human["title"], h2_font, box_w - 32)[:1]
         _text(draw, (bx + 16, y + 36), title_lines[0], h2_font)
         if node.get("branch"):
@@ -199,13 +209,16 @@ def render_flowchart_image(
         for line in produce_lines:
             _text(draw, (bx + 16, py), line, small_font, NAVY)
             py += 18
+        ports = ", ".join(str(output.get("id") or "") for output in node.get("outputs") or [] if output.get("id"))
+        if ports:
+            _text(draw, (bx + 16, y + box_h - 20), f"out: {ports}"[: 38], small_font, GREEN)
         if index < len(humans) - 1:
             _arrow(draw, bx + box_w + 4, request_cy, bx + box_w + gap)
 
     _box(draw, (width / 2 - 280, y + box_h + 28, width / 2 + 280, y + box_h + 64), RED_BG, RED, radius=8, width=2)
     _center(
         draw,
-        "No asset → BLOCK. Next milestone does not start.",
+        "No chosen-output.json → BLOCK. Next milestone does not start.",
         small_font,
         width / 2,
         y + box_h + 46,
@@ -228,7 +241,7 @@ def render_flowchart_image(
     worker = str(focus.get("worker") or f"{mid}_judge")
     _text(draw, (64, inner_top + 14), f"MILESTONE  {mid}    gem  {gem}", h2_font)
     cap = focus_h.get("success") or (focus_h["title"] + " — " + focus_h["asset"])
-    _text(draw, (64, inner_top + 42), f"rule of success: {cap}"[: 120], small_font, GRAY)
+    _text(draw, (64, inner_top + 42), f"rule of success + FlowStep prompts: {cap}"[: 120], small_font, GRAY)
 
     sh = 108
     sx = 64
@@ -272,15 +285,15 @@ def render_flowchart_image(
 
     out_x = width - 268
     _box(draw, (out_x, sy - 4, out_x + 210, sy + 36), GREEN_BG, GREEN, radius=10, width=2)
-    _text(draw, (out_x + 12, sy + 8), "pass receipt → next", small_font, GREEN)
+    _text(draw, (out_x + 12, sy + 8), "PASS → choose bundle", small_font, GREEN)
     _box(draw, (out_x, sy + 44, out_x + 210, sy + 84), AMBER, AMBER_EDGE, radius=10, width=2)
     _text(draw, (out_x + 12, sy + 56), "not ok → keep working", small_font, YELLOW_EDGE)
     _box(draw, (out_x, sy + 92, out_x + 210, sy + 124), RED_BG, RED, radius=10, width=2)
-    _text(draw, (out_x + 12, sy + 100), "no asset → BLOCK", small_font, RED)
+    _text(draw, (out_x + 12, sy + 100), "no chosen output → BLOCK", small_font, RED)
 
     _center(
         draw,
-        "Judge reads this milestone's gem. Pass receipt → next. Not ok → stay; session keeps working. Missing asset still BLOCKS.",
+        "FlowSteps refine candidates. Judge PASS commits chosen-output.json; only that bundle is visible downstream.",
         small_font,
         width / 2,
         inner_bot + 22,
@@ -307,10 +320,10 @@ def write_flowchart_jpg(
 README_DEMO = [
     {
         "id": "source_ready",
-        "asset": {"kind": "file"},
+        "outputs": [{"id": "source", "name": "Source file", "kind": "file", "cardinality": "one", "required": True}],
         "worker": "source_ready_judge",
         "gem": "references/source_ready.md",
-        "success": "Source is ready — must produce a file (path + sha256).",
+        "success": "The accepted source file is chosen and ready downstream.",
         "tools": ["fetch_record", "hash_bind", "source_ready_judge"],
         "flowsteps": [
             {"id": "fetch_record", "tool": "fetch_record"},
@@ -319,13 +332,13 @@ README_DEMO = [
     },
     {
         "id": "plan_frozen",
-        "asset": {"kind": "json"},
+        "outputs": [{"id": "plan", "name": "Plan", "kind": "json", "cardinality": "one", "required": True}],
         "tools": ["compact_editorial_config"],
         "flowsteps": [{"id": "compact_plan", "tool": "compact_editorial_config"}],
     },
     {
         "id": "release_packaged",
-        "asset": {"kind": "file"},
+        "outputs": [{"id": "package", "name": "Release package", "kind": "file", "cardinality": "one", "required": True}],
         "tools": ["materialize_package"],
         "flowsteps": [{"id": "materialize_package", "tool": "materialize_package"}],
     },
@@ -334,7 +347,7 @@ README_DEMO = [
 ARTICLE_DEMO = [
     {
         "id": "source_ready",
-        "asset": {"kind": "file"},
+        "outputs": [{"id": "source", "name": "Source", "kind": "file", "cardinality": "one", "required": True}],
         "tools": ["normalize_source_blocks", "hash_bind"],
         "flowsteps": [
             {"id": "normalize_source_blocks", "tool": "normalize_source_blocks"},
@@ -343,7 +356,7 @@ ARTICLE_DEMO = [
     },
     {
         "id": "plan_frozen",
-        "asset": {"kind": "file"},
+        "outputs": [{"id": "plan", "name": "Plan", "kind": "json", "cardinality": "one", "required": True}],
         "tools": ["hash_bind", "schema_validate"],
         "flowsteps": [
             {"id": "hash_bind", "tool": "hash_bind"},
@@ -352,7 +365,7 @@ ARTICLE_DEMO = [
     },
     {
         "id": "prompts_frozen",
-        "asset": {"kind": "file"},
+        "outputs": [{"id": "prompts", "name": "Prompts", "kind": "json", "cardinality": "many", "required": True}],
         "tools": ["hash_bind", "schema_validate"],
         "flowsteps": [
             {"id": "hash_bind", "tool": "hash_bind"},
@@ -361,7 +374,7 @@ ARTICLE_DEMO = [
     },
     {
         "id": "assets_bound",
-        "asset": {"kind": "file"},
+        "outputs": [{"id": "assets", "name": "Bound assets", "kind": "file", "cardinality": "many", "required": True}],
         "loop": "for",
         "ledger": {"path": "pages", "item_schema": "schemas/page_item_v1.json", "max_items": 7},
         "worker": "ledger_receipt",
@@ -373,7 +386,7 @@ ARTICLE_DEMO = [
     },
     {
         "id": "cards_rendered",
-        "asset": {"kind": "image"},
+        "outputs": [{"id": "cards", "name": "Rendered cards", "kind": "image", "cardinality": "many", "required": True}],
         "loop": "judge",
         "worker": "cards_rendered_judge",
         "gem": "references/cards_rendered.md",
@@ -386,7 +399,7 @@ ARTICLE_DEMO = [
     },
     {
         "id": "release_packaged",
-        "asset": {"kind": "file"},
+        "outputs": [{"id": "package", "name": "Release package", "kind": "file", "cardinality": "one", "required": True}],
         "tools": ["footer_geometry_qa", "hash_bind", "materialize_package", "io_manifest"],
         "flowsteps": [
             {"id": "footer_geometry_qa", "tool": "footer_geometry_qa"},

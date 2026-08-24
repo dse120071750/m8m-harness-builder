@@ -63,10 +63,12 @@ _HEAD = {
 }
 
 _ASSET = {
-    "file": "必须交出文件（path + sha256）",
-    "image": "必须交出图片（path + sha256）",
-    "json": "必须交出 json 证明",
-    "data": "必须交出 typed 数据",
+    "file": "必须选定文件 output",
+    "image": "必须选定图片 output",
+    "video": "必须选定视频 output",
+    "audio": "必须选定音频 output",
+    "json": "必须选定 JSON output",
+    "data": "必须选定 typed data output",
 }
 
 
@@ -88,7 +90,18 @@ def title_id(value: str) -> str:
 
 
 def asset_line(kind: str) -> str:
-    return _ASSET.get(str(kind or "").lower(), "必须交出已声明的 asset")
+    return _ASSET.get(str(kind or "").lower(), "必须提交已声明的 chosen output")
+
+
+def _kind(node: dict[str, Any]) -> str:
+    outputs = node.get("outputs") if isinstance(node.get("outputs"), list) else []
+    if outputs and isinstance(outputs[0], dict):
+        return str(outputs[0].get("kind") or "")
+    return str(
+        node.get("asset_kind")
+        or ((node.get("asset") or {}).get("kind") if isinstance(node.get("asset"), dict) else "")
+        or ""
+    )
 
 
 def success_line(node: dict[str, Any]) -> str:
@@ -96,11 +109,7 @@ def success_line(node: dict[str, Any]) -> str:
     if explicit:
         return explicit
     mid = str(node.get("id") or "")
-    kind = str(
-        node.get("asset_kind")
-        or ((node.get("asset") or {}).get("kind") if isinstance(node.get("asset"), dict) else "")
-        or ""
-    )
+    kind = _kind(node)
     extra = ""
     if str(node.get("loop") or "none") == "judge":
         extra = " 重试直到 worker 收据 ok。"
@@ -117,16 +126,12 @@ def success_line(node: dict[str, Any]) -> str:
             elif item:
                 paths.append(title_id(str(item)))
         extra += f" 然后 branch（{' / '.join(paths)}）。"
-    return f"{title_id(mid)} — {asset_line(kind)}。{extra}".strip()
+    return f"{title_id(mid)} — {asset_line(kind)}，成为 chosen bundle。{extra}".strip()
 
 
 def humanize_milestone(node: dict[str, Any]) -> dict[str, str]:
     mid = str(node.get("id") or "")
-    kind = str(
-        node.get("asset_kind")
-        or ((node.get("asset") or {}).get("kind") if isinstance(node.get("asset"), dict) else "")
-        or ""
-    )
+    kind = _kind(node)
     extra = ""
     loop = str(node.get("loop") or "none")
     if loop == "judge":

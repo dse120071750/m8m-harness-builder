@@ -14,7 +14,7 @@ _spec.loader.exec_module(tool)
 class IngestToolTests(unittest.TestCase):
     def test_normalizes_whitespace(self) -> None:
         result = tool.run({"request": {"text": "Hello,   world."}})
-        self.assertEqual(result, {"text": "Hello, world.", "char_count": 13})
+        self.assertEqual(result["outputs"]["result"], {"text": "Hello, world.", "char_count": 13})
 
     def test_empty_after_normalize_fails(self) -> None:
         with self.assertRaises(ValueError):

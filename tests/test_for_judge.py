@@ -53,10 +53,10 @@ def _judge_assemble(path: Path, fail_first: bool = False) -> None:
         "    attempt += 1\n"
         "    marker.write_text(str(attempt))\n"
         "    ok = True if not fail_first else attempt >= 2\n"
+        "    receipt = {'ok': ok, 'attempt': attempt, 'code': 'pass' if ok else 'fail'}\n"
         "    return {\n"
-        "        'label': 'ok',\n"
-        "        'sentence': 'x',\n"
-        "        'receipt': {'ok': ok, 'attempt': attempt, 'code': 'pass' if ok else 'fail'},\n"
+        "        'outputs': {'result': {'label': 'ok', 'sentence': 'x', 'receipt': receipt}},\n"
+        "        'receipt': receipt,\n"
         "    }\n",
     )
 
@@ -133,7 +133,7 @@ class ForLedgerTests(unittest.TestCase):
             request = Path(temp) / "request.json"
             request.write_text(json.dumps({"pages": [{"id": "a"}, {"id": "b"}]}), encoding="utf-8")
             done = advance(harness, Path(temp) / "run-2", request_path=request)
-            self.assertEqual(done["state"], "COMPLETE")
+            self.assertEqual(done["state"], "COMPLETE", done)
             out = read_json(Path(temp) / "run-2" / "artifacts" / "pages_bound.pages_bound_v1.json")
             self.assertEqual(len(out["data"]["pages"]), 2)
             self.assertTrue(out["data"]["receipt"]["ok"])
@@ -151,17 +151,36 @@ class JudgeLoopTests(unittest.TestCase):
             codebase = Path(temp) / "repo"
             generate_tool(codebase, "hash_bind")
             generate_tool(codebase, "ok_receipt")
-            generate_v3_flow(codebase, "judge_v1", ["card_aligned"], tools=["ok_receipt"])
+            generate_v3_flow(
+                codebase,
+                "judge_v1",
+                ["card_aligned"],
+                tools=["ok_receipt"],
+                milestone_specs=[{"id": "card_aligned", "asset": {"kind": "json"}, "tools": ["ok_receipt"]}],
+            )
             harness = codebase / "flowsteps" / "flows" / "judge_v1"
             _write(
                 harness / "schemas" / "card_aligned_v1.json",
                 json.dumps(
                     {
                         "type": "object",
-                        "required": ["label", "sentence", "receipt"],
+                        "required": ["outputs"],
                         "properties": {
-                            "label": {"type": "string"},
-                            "sentence": {"type": "string"},
+                            "outputs": {
+                                "type": "object",
+                                "required": ["result"],
+                                "properties": {
+                                    "result": {
+                                        "type": "object",
+                                        "required": ["label", "sentence", "receipt"],
+                                        "properties": {
+                                            "label": {"type": "string"},
+                                            "sentence": {"type": "string"},
+                                            "receipt": {"type": "object"},
+                                        },
+                                    }
+                                },
+                            },
                             "receipt": {"type": "object"},
                         },
                     }
@@ -186,10 +205,10 @@ class JudgeLoopTests(unittest.TestCase):
             request = Path(temp) / "request.json"
             request.write_text(json.dumps({"kind": "image"}), encoding="utf-8")
             done = advance(harness, Path(temp) / "run-j", request_path=request)
-            self.assertEqual(done["state"], "COMPLETE")
-            out = read_json(Path(temp) / "run-j" / "artifacts" / "card_aligned.card_aligned_v1.json")
-            self.assertTrue(out["data"]["receipt"]["ok"])
-            self.assertGreaterEqual(out["data"]["receipt"]["attempt"], 2)
+            self.assertEqual(done["state"], "COMPLETE", done)
+            out = read_json(Path(temp) / "run-j" / "milestones" / "card_aligned" / "out" / "judge-receipt.json")
+            self.assertTrue(out["ok"])
+            self.assertGreaterEqual(out["attempt"], 2)
 
     def test_budget_exhausted_blocks(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -219,7 +238,8 @@ class JudgeLoopTests(unittest.TestCase):
             _write(
                 harness / "milestones" / "card_aligned" / "assemble.py",
                 "def run(input_data, draft=None, **_):\n"
-                "    return {'receipt': {'ok': False, 'code': 'fail'}}\n",
+                "    receipt = {'ok': False, 'code': 'fail'}\n"
+                "    return {'outputs': {'result': {'receipt': receipt}}, 'receipt': receipt}\n",
             )
             _ok_test(harness / "milestones" / "card_aligned" / "tests" / "test_assemble.py")
             request = Path(temp) / "request.json"
@@ -252,7 +272,7 @@ class ReceiptGuardTests(unittest.TestCase):
             (harness / "flow.yaml").write_text(text, encoding="utf-8")
             _write(
                 harness / "milestones" / "card_aligned" / "assemble.py",
-                "def run(input_data, draft=None, **_):\n    return {'label': 'x'}\n",
+                "def run(input_data, draft=None, **_):\n    return {'outputs': {'result': {'label': 'x'}}}\n",
             )
             _ok_test(harness / "milestones" / "card_aligned" / "tests" / "test_assemble.py")
             request = Path(temp) / "request.json"

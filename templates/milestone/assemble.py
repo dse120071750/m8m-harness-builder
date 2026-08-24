@@ -15,6 +15,7 @@ FLOWSTEPS: list[dict[str, Any]] = json.loads("""__FLOWSTEPS_JSON__""")
 INTELLIGENCE = "__INTELLIGENCE__"
 IS_LAST = __IS_LAST__
 ASSET_KIND = "__ASSET_KIND__"
+OUTPUTS: list[dict[str, Any]] = json.loads(r'''__OUTPUTS_JSON__''')
 WORKER = "__WORKER__"
 LOOP = "__LOOP__"
 HARNESS_DIR = Path(__file__).resolve().parents[2]
@@ -65,7 +66,45 @@ def _first_path(value: Any) -> str | None:
     return None
 
 
+def _gem_section(flowstep: str) -> str:
+    path = Path(GEM_PATH)
+    fid = str(flowstep or "").strip().lower().replace("-", "_")
+    if not fid or not path.is_file():
+        return ""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+    current = ""
+    chunks: list[str] = []
+    found: str = ""
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            if current == fid and chunks:
+                found = "\n".join(chunks).strip()
+                break
+            title = stripped.lstrip("#").strip().strip("`").strip()
+            token = title.split()[0].strip("`").lower().replace("-", "_") if title else ""
+            current = token
+            chunks = []
+            continue
+        if current:
+            chunks.append(line)
+    if not found and current == fid:
+        found = "\n".join(chunks).strip()
+    return found
+
+
 def _need_model(flowstep: str, tool_id: str, error: str) -> dict[str, Any]:
+    section = _gem_section(flowstep)
+    instruction = (
+        f"Preferred tool `{tool_id}` failed FlowStep `{flowstep}`. "
+        "Do this FlowStep as its gem section says. Still produce the milestone's declared named outputs. "
+        "Prefer fixing or using the tool. The judge must be able to choose the current bundle."
+    )
+    if section:
+        instruction = instruction + "\n\n" + section
     return {
         "_flowstep": "NEED_MODEL",
         "model": "completion" if INTELLIGENCE == "none" else INTELLIGENCE,
@@ -73,14 +112,31 @@ def _need_model(flowstep: str, tool_id: str, error: str) -> dict[str, Any]:
             "milestone": STEP_ID,
             "flowstep": flowstep,
             "tool": tool_id,
+            "gem_path": GEM_PATH,
             "error": error,
-            "instruction": (
-                f"Preferred tool `{tool_id}` failed FlowStep `{flowstep}`. "
-                "Find a way to still produce this milestone's required asset. "
-                "Prefer fixing or using the tool. Do not skip the asset."
-            ),
+            "instruction": instruction,
         },
     }
+
+
+def _candidate(value: dict[str, Any], receipt: dict[str, Any] | None = None) -> dict[str, Any]:
+    if isinstance(value.get("outputs"), dict):
+        candidate = dict(value)
+    else:
+        clean = {key: item for key, item in value.items() if key not in {"receipt", "address", "draft"}}
+        if len(OUTPUTS) == 1:
+            output_values = {str(OUTPUTS[0]["id"]): clean}
+        else:
+            output_values = {
+                str(output["id"]): clean[str(output["id"])]
+                for output in OUTPUTS
+                if str(output["id"]) in clean
+            }
+        candidate = {"outputs": output_values}
+    accepted = receipt or (value.get("receipt") if isinstance(value.get("receipt"), dict) else None)
+    if isinstance(accepted, dict):
+        candidate["receipt"] = accepted
+    return candidate
 
 
 def _tool_input(payload: dict[str, Any], tool_id: str) -> dict[str, Any]:
@@ -150,7 +206,7 @@ def run(input_data: dict[str, Any], draft: dict[str, Any] | None = None, **kwarg
                 else:
                     raise ValueError(f"{STEP_ID}: ok_receipt looks at the gem; draft {{ok}} for the rule of success")
             elif WORKER == "schema_validate":
-                receipt_input = {"schema_path": SCHEMA_PATH, "instance": payload}
+                receipt_input = {"schema_path": SCHEMA_PATH, "instance": _candidate(payload)}
             elif WORKER == "hash_bind":
                 asset = payload.get("asset") if isinstance(payload.get("asset"), dict) else {}
                 path = asset.get("path") or _first_path(payload)
@@ -177,42 +233,33 @@ def run(input_data: dict[str, Any], draft: dict[str, Any] | None = None, **kwarg
             if draft is None:
                 return _need_model(STEP_ID, WORKER, f"{type(exc).__name__}: {exc}")
             payload[f"{WORKER}_error"] = f"{type(exc).__name__}: {exc}"
-    if ASSET_KIND in {"file", "image"} or IS_LAST:
+    if ASSET_KIND in {"file", "image", "video", "audio"}:
         address = payload.get("address") if isinstance(payload.get("address"), dict) else {}
         dest = address.get("write_to")
-        asset = payload.get("asset")
-        if not isinstance(asset, dict) or "path" not in asset or "sha256" not in asset:
-            path = _first_path(payload)
-            if not path:
-                if draft is None:
-                    return _need_model(STEP_ID, "hash_bind", f"{STEP_ID}: milestone asset not produced (need {ASSET_KIND} path+sha256)")
-                raise ValueError(f"{STEP_ID}: milestone asset not produced (need {ASSET_KIND} path+sha256)")
-            if dest:
-                dest_path = Path(str(dest))
-                dest_path.parent.mkdir(parents=True, exist_ok=True)
-                if Path(path).resolve() != dest_path.resolve():
-                    shutil.copy2(path, dest_path)
-                path = str(dest_path)
-            try:
-                asset = tools.run_library_tool(codebase, "hash_bind", {"path": path})
-            except Exception as exc:
-                if draft is None:
-                    return _need_model(STEP_ID, "hash_bind", f"{type(exc).__name__}: {exc}")
-                raise ValueError(f"{STEP_ID}: milestone asset not produced (need {ASSET_KIND} path+sha256)") from exc
-        elif dest and Path(str(asset.get("path") or "")).is_file():
+        asset = dict(payload.get("asset")) if isinstance(payload.get("asset"), dict) else {}
+        path = asset.get("path") or _first_path(payload)
+        if not path or not Path(str(path)).is_file():
+            if draft is None:
+                return _need_model(STEP_ID, "", f"{STEP_ID}: declared {ASSET_KIND} output needs an existing path")
+            raise ValueError(f"{STEP_ID}: declared {ASSET_KIND} output needs an existing path")
+        asset["path"] = str(path)
+        if dest:
             dest_path = Path(str(dest))
             dest_path.parent.mkdir(parents=True, exist_ok=True)
             if Path(str(asset["path"])).resolve() != dest_path.resolve():
                 shutil.copy2(asset["path"], dest_path)
-                asset = tools.run_library_tool(codebase, "hash_bind", {"path": str(dest_path)})
-        out = {"asset": {"path": asset["path"], "sha256": asset["sha256"]}}
+            asset["path"] = str(dest_path)
+        out_asset = {"path": asset["path"]}
+        if asset.get("sha256"):
+            out_asset["sha256"] = asset["sha256"]
+        out = {"asset": out_asset}
         if address.get("slot"):
             out["asset"]["slot"] = str(address["slot"])
         if isinstance(payload.get("receipt"), dict):
             out["receipt"] = payload["receipt"]
-        return out
+        return _candidate(out, payload.get("receipt") if isinstance(payload.get("receipt"), dict) else None)
     if not payload:
         if draft is None:
-            return _need_model(STEP_ID, "", f"{STEP_ID}: milestone asset not produced (empty {ASSET_KIND} proof)")
-        raise ValueError(f"{STEP_ID}: milestone asset not produced (empty {ASSET_KIND} proof)")
-    return payload
+            return _need_model(STEP_ID, "", f"{STEP_ID}: no candidate named outputs were produced")
+        raise ValueError(f"{STEP_ID}: no candidate named outputs were produced")
+    return _candidate(payload)

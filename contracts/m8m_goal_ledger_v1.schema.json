@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "m8m_goal_ledger_v1.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "goal_id",
+    "flow_id",
+    "status",
+    "context_policy",
+    "cache_mode",
+    "implementation_fingerprint_sha256",
+    "rows",
+    "created_at",
+    "updated_at"
+  ],
+  "properties": {
+    "schema": { "const": "m8m_goal_ledger_v1" },
+    "goal_id": { "type": "string", "pattern": "^[A-Za-z0-9._-]+$" },
+    "flow_id": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+    "status": { "enum": ["in_progress", "complete", "blocked"] },
+    "context_policy": { "const": "isolated_per_row" },
+    "cache_mode": { "const": "off" },
+    "implementation_fingerprint_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "rows": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/row" }
+    },
+    "created_at": { "type": "string", "format": "date-time" },
+    "updated_at": { "type": "string", "format": "date-time" }
+  },
+  "$defs": {
+    "row": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "request", "status", "attempt"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[A-Za-z0-9._-]+$" },
+        "name": { "type": "string", "minLength": 1 },
+        "request": { "type": "object" },
+        "status": { "enum": ["pending", "running", "done", "blocked", "abandoned"] },
+        "attempt": { "type": "integer", "minimum": 0 },
+        "child_run_dir": { "type": "string", "minLength": 1 },
+        "last_state": { "enum": ["ACTION_REQUIRED", "COMPLETE", "BLOCKED"] },
+        "chosen_output": { "type": "string", "minLength": 1 },
+        "blockers": { "type": "array", "items": { "type": "string", "minLength": 1 } }
+      }
+    }
+  }
+}

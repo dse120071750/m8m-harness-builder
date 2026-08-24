@@ -12,4 +12,4 @@ def run(input_data: dict[str, Any], draft: dict[str, Any] | None = None, **_: An
     sentences = [part.strip() for part in re.split(r"(?<=[.!?])\s+", text) if part.strip()]
     if not sentences:
         raise ValueError("no sentences")
-    return {"sentences": sentences, "sentence_count": len(sentences)}
+    return {"outputs": {"result": {"sentences": sentences, "sentence_count": len(sentences)}}}

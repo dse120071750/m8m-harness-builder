@@ -41,7 +41,7 @@ def _nodes(items: list[dict[str, Any]], statuses: dict[str, str] | None = None) 
                 "else": None,
                 "join": None,
                 "output_contract": str(item.get("output_contract") or ""),
-                "asset_kind": str(((item.get("asset") or {}).get("kind") if isinstance(item.get("asset"), dict) else "") or ""),
+                "outputs": [dict(output) for output in (item.get("outputs") or []) if isinstance(output, dict)],
                 "flowsteps": normalize_flowsteps(
                     flowsteps=item.get("flowsteps"),
                     tools=item.get("tools"),
@@ -52,6 +52,9 @@ def _nodes(items: list[dict[str, Any]], statuses: dict[str, str] | None = None) 
                 "cycle": item.get("cycle") if isinstance(item.get("cycle"), dict) else None,
                 "on_cycle": item.get("on_cycle"),
                 "success": item.get("success"),
+                "gem": str(item.get("gem") or f"references/{mid}.md"),
+                "cache": item.get("cache") if isinstance(item.get("cache"), dict) else None,
+                "cache_status": str(item.get("cache_status") or ""),
             }
         )
     return nodes
@@ -99,8 +102,8 @@ def render_mermaid(items: list[dict[str, Any]]) -> str:
         mid = item["id"]
         tools = ",".join(item["tools"] or [])
         tool_line = f"<br/>{tools}" if tools else ""
-        asset_kind = item.get("asset_kind") or ""
-        asset_line = f"<br/>asset:{asset_kind}" if asset_kind else ""
+        output_ports = ",".join(str(output.get("id") or "") for output in item.get("outputs") or [] if output.get("id"))
+        output_line = f"<br/>out:{output_ports}" if output_ports else ""
         loop_line = ""
         if item.get("loop") == "for" and item.get("ledger"):
             fe = item["ledger"]
@@ -113,10 +116,11 @@ def render_mermaid(items: list[dict[str, Any]]) -> str:
                 if isinstance(path, dict) and path.get("id"):
                     paths.append(str(path["id"]))
             loop_line = "<br/>branch:" + "/".join(paths[:4])
+        cache_line = "<br/>cache:candidate" if item.get("cache") else ""
         extra = ""
         if item["intelligence"] not in {None, "none"}:
             extra = f"<br/>intel:{item['intelligence']}"
-        lines.append(f'    {mid}["{mid}{extra}{asset_line}{loop_line}{tool_line}"]')
+        lines.append(f'    {mid}["{mid}{extra}{output_line}{loop_line}{cache_line}{tool_line}"]')
     if ids:
         lines.append(f"    request --> {ids[0]}")
     for item in nodes:
@@ -185,8 +189,10 @@ def render_flowchart(
     lines = [
         f"# M8M flowchart: {title}",
         "",
-        "One chart. Milestone to milestone. Each node is a required asset",
-        "(file, image, json proof, or data). Missing it is BLOCKED.",
+        "One chart. Milestone to milestone. Each node declares named output ports.",
+        "FlowSteps refine candidates; the judge chooses one bundle. Without chosen-output.json the node is BLOCKED.",
+        "Run state is authoritative. Optional cross-run cache only supplies a candidate for the current judge.",
+        "Execution context is isolated: a fresh run does not inherit orchestration chat or prior-row memory.",
         "FlowSteps inside a node are a guide (one preferred tool each), not a compulsory path.",
         "cycle = wrap over a frozen ledger (pass preserves, fail purges). judge = retry until worker ok.",
         "The JPEG is the audit copy: portable, human-labeled, native to review.",
@@ -215,12 +221,12 @@ def render_flowchart(
         [
             "## Nodes",
             "",
-            "| Milestone | What it means | Success | Asset | Status | Intelligence | Tools | Control |",
-            "| --- | --- | --- | --- | --- | --- | --- | --- |",
+            "| Milestone | What it means | Success | Declared output ports | Status | Intelligence | Tools | Control | Cache |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
         ]
     )
     if not nodes:
-        lines.append("| (none) | | | | | | | |")
+        lines.append("| (none) | | | | | | | | |")
     for item in nodes:
         tools = ", ".join(f"`{tool}`" for tool in item["tools"]) or "none"
         if item.get("loop") == "for" and item.get("ledger"):
@@ -242,12 +248,23 @@ def render_flowchart(
             control = f"on_cycle `{item['on_cycle']}`"
         else:
             control = "linear"
-        asset = item.get("asset_kind") or "required"
+        ports = []
+        for output in item.get("outputs") or []:
+            oid = str(output.get("id") or "")
+            kind = str(output.get("kind") or "")
+            cardinality = str(output.get("cardinality") or "one")
+            required = "required" if output.get("required") else "optional"
+            ports.append(f"`{oid}` ({kind}, {cardinality}, {required})")
+        port_text = "<br>".join(ports) or "missing (BLOCKED)"
         human = humanize_milestone(item)
         status = human.get("status") or "—"
+        cache = item.get("cache") or {}
+        cache_text = f"candidate, TTL {cache.get('ttl_seconds')}s" if cache else "off"
+        if item.get("cache_status"):
+            cache_text += f", status `{item['cache_status']}`"
         lines.append(
-            f"| `{item['id']}` | {human['title']} | {human.get('success') or human['asset']} | `{asset}` | `{status}` | "
-            f"`{item['intelligence']}` | {tools} | {control} |"
+            f"| `{item['id']}` | {human['title']} | {human.get('success') or human['asset']} | {port_text} | `{status}` | "
+            f"`{item['intelligence']}` | {tools} | {control} | {cache_text} |"
         )
     lines.extend(
         [
@@ -255,23 +272,26 @@ def render_flowchart(
             "## FlowSteps (guide)",
             "",
             "Sequence inside each milestone. Prefer the named tool. Optional.",
-            "If it fails, recover like a normal agent. The milestone asset is still compulsory.",
+            "If it fails, recover like a normal agent. The prompt for that step is the",
+            "matching section of the milestone gem. A judge-approved chosen output bundle is still compulsory.",
             "",
-            "| Milestone | # | FlowStep | What it means | Preferred tool |",
-            "| --- | ---: | --- | --- | --- |",
+            "| Milestone | # | FlowStep | What it means | Preferred tool | Gem section |",
+            "| --- | ---: | --- | --- | --- | --- |",
         ]
     )
     guide_rows = 0
     for item in nodes:
+        gem = str(item.get("gem") or f"references/{item['id']}.md")
         for index, fs in enumerate(item.get("flowsteps") or [], start=1):
             guide_rows += 1
             human_fs = humanize_flowstep(fs, index)
+            fid = str(fs.get("id") or fs.get("tool") or "")
             lines.append(
-                f"| `{item['id']}` | {index} | `{fs.get('id') or fs.get('tool')}` | "
-                f"{human_fs['caption']} | `{fs.get('tool') or '—'}` |"
+                f"| `{item['id']}` | {index} | `{fid}` | "
+                f"{human_fs['caption']} | `{fs.get('tool') or '—'}` | `{gem}#{fid}` |"
             )
     if not guide_rows:
-        lines.append("| (none) | | | | |")
+        lines.append("| (none) | | | | | |")
     lines.extend(["", "## Cycle", ""])
     cycles = [item for item in nodes if item.get("cycle")]
     if not cycles:
@@ -337,7 +357,7 @@ def render_flowchart(
     lines.extend(
         [
             "",
-            "Proceed only when the worker receipt is `ok: true` and the milestone asset PASSes.",
+            "Proceed only when the worker receipt is `ok: true` and the current named outputs are committed as `chosen-output.json`.",
             "Branch is after that PASS. The model drafts; the tool writes `branch`.",
             "",
         ]

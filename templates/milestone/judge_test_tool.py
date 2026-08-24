@@ -21,7 +21,7 @@ class ToolTests(unittest.TestCase):
 
     def test_missing_ok_raises(self) -> None:
         with self.assertRaises(ValueError):
-            tool.run({"gem_path": "references/box.md", "asset": {"path": "a.png"}})
+            tool.run({"gem_path": "references/box.md", "outputs": {"image": {"path": "a.png"}}})
 
 
 if __name__ == "__main__":

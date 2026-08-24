@@ -6,7 +6,9 @@
 
 给 Codex / Claude 用的 skill。它把一条 skill 拆成里程碑、FlowStep、工具，再写出一张表和一张流程图。
 
-M8M 是 milestone to milestone，里程碑到里程碑。它是轻量 skill writer，不是 production OS。
+M8M 是 milestone to milestone，里程碑到里程碑。2.0 版使用
+`flowstep_flow_v4`：FlowStep 反复生成候选结果，judge 接受当前结果后，才写成唯一的
+`chosen-output.json` 给下游读取。选择锁是 session 目录里的逻辑状态，不是 hash、lock ID 或 revision。
 
 ---
 
@@ -37,7 +39,7 @@ M8M:   节点 = 一个里程碑（护栏）
 
 | 词 | 硬性？ | 意思 |
 | --- | --- | --- |
-| Milestone（里程碑） | 是，护栏 | 人在流程里停下来检查的关卡。输入就是上一关输出。必须交出已声明的 asset：文件、图片、json 证明或数据。交不出来就 BLOCK。下一关不开始。 |
+| Milestone（里程碑） | 是，护栏 | 声明 `success`、output schema 和命名 output ports。Judge PASS 后当前候选成为唯一 chosen bundle；没有 `chosen-output.json` 就 BLOCK。 |
 | FlowStep（流程步） | 指引 | 里程碑里面的原子目标，比如绑五张图、抓一条 record。优先一支工具。顺序跟表走。怎么做到，像普通 skill。 |
 | Tool（工具） | 首选，可选 | Python，放在 `<repo>/flowsteps/tools/<id>/`。Builder 该开发它：已有、从 skill script promote、或 generate-new stub。失败就找路，目标仍是里程碑产出。 |
 
@@ -56,9 +58,9 @@ M8M:   节点 = 一个里程碑（护栏）
 
 ## 图：里程碑到里程碑，以及一关里面有什么
 
-画布上只有里程碑。每一关必须交出声明的 asset，下一关才开始。`this.in` 就是 `previous.out`。没有 asset → BLOCK。
+画布上只有里程碑，静态 workflow JSON 显示命名 output ports。FlowSteps 生成／改善当前候选，judge PASS 后 runtime 才写 `chosen-output.json`；下一关只能查询这份 chosen bundle。没有 manifest → BLOCK。
 
-一关**里面**是 N 个 FlowStep，再加一支 **judge**。judge 读这一关的 gem（`references/<id>.md`）里的成功规则：合格就发 pass 收据、下一关开始；不合格就让 session 留在这一关继续做。没有 asset 仍 BLOCK。
+一关**里面**是 N 个 FlowStep，再加一支 **judge**。judge 读这一关 gem 里的 **Rule of success**：合格就把当前候选提交成 chosen bundle；不合格就让 session 留在这一关继续做。每个 FlowStep 在同一份 gem 里有一节，那一节就是这一歩的 prompt，不是画布节点。
 
 ![M8M 演示：上面是里程碑画布；下面打开 source_ready，里面是 N 个 FlowStep，然后 judge 读 references/source_ready.md，pass 收据或 keep working](docs/m8m-chart.jpg)
 
@@ -68,21 +70,20 @@ M8M:   节点 = 一个里程碑（护栏）
 
 ```text
 request
-  → source_ready     必须交出 file（path + sha256）
+  → source_ready     必须选定命名 file output
       里面：FlowStep fetch_record → tool fetch_record
             FlowStep hash_bind    → tool hash_bind
             然后 judge 读 gem references/source_ready.md
-            pass 收据 → 下一关。not ok → session 继续做。没有 asset → BLOCK。
+            PASS → chosen-output.json → 下一关。not ok → session 继续做。
   → plan_frozen      必须交出 json plan
   → release_packaged 必须交出 file package
 ```
 
-| 种类 | 这一关必须交出的证明 |
+| 种类 | chosen bundle 成员 |
 | --- | --- |
-| `file` | `asset.path` + `asset.sha256` |
-| `image` | 同一套文件回执，图的 bytes |
-| `json` | 封闭对象，必填字段 |
-| `data` | 同上：typed 必填字段 |
+| `file` | runtime 复制到 `out/members/<id>/asset.<ext>` |
+| `image` / `video` / `audio` | 同样复制媒体 bytes，可在 canvas preview |
+| `json` / `data` | 写成 JSON asset，并按 output schema 验证 |
 
 ## 表（指引）
 
@@ -112,17 +113,17 @@ n8n 的画布是动作。M8M 的画布是关卡。人话来自 humanizer（`sour
 | n8n | M8M |
 | --- | --- |
 | 节点 = 一次 HTTP / 一次 crop | 节点 = 一个里程碑。动作在关卡**里面**（FlowStep + 工具） |
-| Retry 同一节点 | **judge**：停在**这一关里面**，直到 asset 合格。收据 `{ok}` |
+| Retry 同一节点 | **judge**：停在**这一关里面**，直到当前候选合格，再提交 chosen bundle。收据 `{ok}` |
 | IF / Switch 节点 | **branch**：**这一关之后**选路。AI 起草，工具写 `{ok, branch}`。另一条路 skipped |
 | Loop Over Items / Split in Batches | **cycle**：先冻账本，再**包一圈关卡**。每一轮 AI 起草 pass/fail，工具改账本。pass 保留；fail 清 residual，可 resume |
 
 每一关都有一份 gem，和一支**看这份 gem 的 worker**。gem 不是画布节点。judge 也不是第二关。存在关用 `hash_bind` / `schema_validate` 一次过；质量关才 `loop: judge` 加 `<id>_judge`（分开开发，不要共用 `ok_receipt`）。cycle / branch 仍用自己的收据。
 
-模型不能填 `ok` / `branch` / `cycle`。收据 ok 仍不能免掉 asset。
+模型不能填 `ok` / `branch` / `cycle`。收据 ok 仍不能免掉 required outputs 和 chosen manifest。
 
 ### wait — 回复已就绪
 
-等待回复是**一关**，不是 n8n 的 Wait 节点，也不叫 `loop: wait`。里面仍是 N 个 FlowStep + 一支 judge。judge 读 `references/response_ready.md`：还没有 draft → 暂停（`ACTION_REQUIRED`）；gem 不合格 → 留在这一关继续；pass 收据 → 下一关。人把回复写进 `work/draft.json` 再 `advance()`。因为他们说了什么才选路，那是这一关 **之后** 的 branch。
+等待回复是**一关**，不是 n8n 的 Wait 节点，也不叫 `loop: wait`。里面仍是 N 个 FlowStep + 一支 judge。session 一开始就冻一份**名册** `<run>/roster.json`（`m8m_run_roster_v1`），每关走完改一行。还没有 draft → 该行走 `waiting`、run 变 `paused`、session **退出**。人把回复写进 `milestones/response_ready/work/draft.json` 之后，skill 找到这份名册 resume，judge 再读 gem：现在有回复了吗？不合格 → 留在这一关继续；pass 收据 → 下一关。因为他们说了什么才选路，那是这一关 **之后** 的 branch。不要画 `roster_frozen` 关卡。名册不是 cycle 的账本 `cycles/<id>/ledger.json`。
 
 ```text
 问已写下  →  回复已就绪（judge：暂停 / 继续 / pass）  →  下一关
@@ -130,12 +131,21 @@ n8n 的画布是动作。M8M 的画布是关卡。人话来自 humanizer（`sour
 
 ```yaml
 - id: response_ready
-  asset: { kind: json }
+  success: "回复已经到达并可供下一关使用"
+  output_contract: response_ready_v1
+  output_schema: milestones/response_ready/output.schema.json
+  outputs:
+    - { id: reply, name: Reply, kind: json, cardinality: one, required: true }
   gem: references/response_ready.md
   intelligence: completion
   loop: judge
   worker: response_ready_judge
 ```
+
+| 本子 | 文件 | 干什么 |
+| --- | --- | --- |
+| 名册（roster） | `<run>/roster.json` | 开跑就冻。每关 `done` / `waiting` / `skipped`。wait 时 `paused`，退出 session。人给回复后找这份名册 resume。 |
+| 账本（cycle） | `cycles/<id>/ledger.json` | 某一圈的行。pass 留 `items/NNN`；fail 清 residual。 |
 
 ### judge — 卡片已对齐
 
@@ -151,11 +161,16 @@ n8n 的画布是动作。M8M 的画布是关卡。人话来自 humanizer（`sour
   loop: judge
   worker: card_aligned_judge
   intelligence: image
+  flowsteps:
+    - { id: align_compare, tool: align_compare }
+    - { id: draw_red_circles, tool: draw_red_circles }
+    - { id: align_edit, tool: align_edit }
+    - { id: hash_bind, tool: hash_bind }
 ```
 
 ### branch — 入口已就绪
 
-入口 asset PASS 之后，AI 起草走哪条生成路。不要叫 IF。
+入口 chosen bundle 提交之后，AI 起草走哪条生成路。不要叫 IF。
 
 ```text
 入口已就绪
@@ -187,7 +202,7 @@ n8n 的画布是动作。M8M 的画布是关卡。人话来自 humanizer（`sour
 页账本已冻结
   → [cycle pages]
         页已绑定
-        页已渲染     ← asset PASS，然后 cycle_receipt
+        页已渲染     ← milestone judge PASS，然后提交 chosen output
             pass → 保留 items/001，账本该行走 done
             fail → 清掉这一轮 out/，行仍 unfinished，可再做
   → 发布包已打包
@@ -195,7 +210,11 @@ n8n 的画布是动作。M8M 的画布是关卡。人话来自 humanizer（`sour
 
 ```yaml
 - id: pages_ledger_frozen
-  asset: { kind: json }
+  success: "页账本已经冻结"
+  output_contract: pages_ledger_v1
+  output_schema: milestones/pages_ledger_frozen/output.schema.json
+  outputs:
+    - { id: ledger, name: Page ledger, kind: json, cardinality: one, required: true }
 - id: page_bound
   on_cycle: pages
 - id: page_rendered
@@ -205,7 +224,7 @@ n8n 的画布是动作。M8M 的画布是关卡。人话来自 humanizer（`sour
     ledger: pages_ledger_frozen
     start: page_bound
     join: release_packaged
-    pass: "这一行走完：页图 path + sha256"
+    pass: "这一行走完：页图已成为 chosen output member"
 ```
 
 `--milestone` 写成 `crop_4x5` 只是备注：看起来像工具。不是拒绝画图。
@@ -234,9 +253,65 @@ python scripts/generate_harness.py --codebase <repo> --from-audit <skill>/planni
 - `<repo>/flowsteps/tools/<id>/`（seed 或 stub）
 - `<repo>/.agents/skills/<name>/SKILL.md` 和 `<repo>/.claude/skills/<name>/SKILL.md`
 
-图、表、stub、每个里程碑的 asset schema 都在，factory 就 PASS。`validate_harness.py` 可选，用来把工具填实。`run_flow.py` 是护栏：工具失败走 agent；没有产出或 worker 收据不是 ok 就 BLOCK。
+Builder 本身也用同一个 v4 runtime：audit → toolbox → staged generation → validation → local install。所有五关都必须有 chosen manifest；validation chosen 以前不会写 target。`run_flow.py` 负责 schema、judge、chosen output、resume 和 `--replace-milestone`。本项目不部署。
 
 真实样本（一篇文章做成七页 infographic）：[examples/article_infographic/planning/m8m-flowchart.md](examples/article_infographic/planning/m8m-flowchart.md)
+
+### Fresh rerun、resume、修 workflow、十件式 goal
+
+一般调用和明确说 **rerun** 都默认开新 folder、`--cache-mode off`，并写
+`run-context.json`：`context_policy: isolated`、`chat_history_allowed: false`。
+不能把当前 Codex/Claude 对话、上一次 run、或前一件 case 的记忆偷偷当输入。
+runtime 回 `ACTION_REQUIRED` 时，adapter 必须按 `context_capsule_path` 开一个
+fresh no-history worker；它只能读 `allowed_files`、只能写 `write_file`。
+
+```powershell
+# fresh（默认）
+python scripts/run_flow.py --codebase <repo> --flow-id <id> --request <request.json>
+
+# 同一 run resume
+python scripts/run_flow.py ... --run-mode resume --run-dir <exact-run>
+
+# 修好 workflow 后，保留 compatible upstream chosen，再从这一关继续
+python scripts/run_flow.py ... --run-dir <exact-run> --continue-after-edit <milestone>
+```
+
+`resume` 是同一个 run 的 chosen/attempt/roster/asset 复用，不是 cache。
+`--continue-after-edit` 会审计 frozen flow 与 implementation lock，只准选择关卡
+及 downstream 的改动；flow-level、关卡换序、或 preserved port 不相容就要求
+fresh。明确要放弃当前 attempt 才另开，不会暗中清掉旧资产。
+
+十件 interior case 这类 goal 用外层 ledger：
+
+```powershell
+python scripts/run_goal.py --codebase <repo> --flow-id <id> --goal <goal.json>
+```
+
+`goal-ledger.json` 只记每 row 的 pending/running/done/blocked；每 row 都在
+`rows/<row>/attempt-NNN/run` 开独立、cache-off、无 chat history 的 child M8M
+session、roster 和 milestone/cycle ledger。修 workflow 后用同一 goal folder 的
+`--continue-after-edit` 继续当前 child；只有 `--abandon-row` 才保留旧 attempt
+并开新 attempt。这样第十件不会继承前九件越来越长的对话。
+
+### Workflow state 不是跨 run cache
+
+`chosen-output.json`、attempt、roster、ledger、branch、wait、resume 和
+replacement 全是一个 session 的 workflow state。跨 run cache 只是可选的
+候选结果优化，短任务默认不开。要用必须两边都同意：milestone 声明
+`cache: {reuse: candidate, ttl_seconds, side_effects: none}`，而新 run 传
+`--cache-mode read|write|read-write`。平台还必须用 tenant ID 传
+`--cache-namespace`。
+
+cache hit 会先复制进新 run，再做 schema 验证并让**现在的 judge**重判；
+不会直接成为 chosen，也不会重放旧 judge receipt。cache 坏掉、过期、
+被拒或写不进去都只当 miss／warning，不能 BLOCK workflow。Resume 已完成
+节点不读 cache；`--replace-milestone` 对整段失效子图绕过 cache read。
+`--cache-mode write` 是明确请求的 cache-refresh run（不读、完成后可写），
+不是一般「rerun」的默认。过期条目只由显式命令清理：
+
+```powershell
+python scripts/m8m_cache.py prune --codebase <repo> [--flow-id <id>]
+```
 
 ## 安装
 
@@ -292,7 +367,10 @@ references/                      milestone + tool-vs-intelligence
 
 A Codex / Claude skill that splits another skill into milestones, FlowSteps, and tools, then writes one table and one flowchart.
 
-M8M means milestone to milestone. It is a small skill writer, not a production OS.
+M8M means milestone to milestone. Version 2.0 uses `flowstep_flow_v4`:
+FlowSteps generate/refine a candidate, and only a judge PASS commits the
+current result as the milestone's single `chosen-output.json`. This is
+logical session state—not a hash lock, lock ID, or revision system.
 
 ## The problem
 
@@ -307,7 +385,7 @@ The problem is not that AI exists. The problem is using the model first, with no
 
 ## The solution
 
-Keep n8n's typed I/O. Raise the canvas to milestones. Put FlowSteps inside each one. Each FlowStep prefers one repo tool. The builder should write that tool (fetch a table, call MCP, crop, hash). If the tool is missing or fails, recover the way a normal agent would. The milestone asset still has to exist.
+Keep n8n's typed I/O. Raise the canvas to milestones. Put FlowSteps inside each one. Each FlowStep prefers one repo tool. The builder should write that tool (fetch a table, call MCP, crop). If the tool is missing or fails, recover the way a normal agent would. The milestone still needs a judge-approved chosen output bundle.
 
 ```text
 n8n:   node = one action
@@ -319,9 +397,9 @@ M8M:   node = one milestone (harness)
 
 | Word | Compulsory? | Meaning |
 | --- | --- | --- |
-| Milestone | Yes. This is the harness. | A checkpoint a person would inspect. Input is the previous output. It must produce a declared asset: file, image, json proof, or data. If that asset is missing, BLOCK. The next milestone does not start. |
+| Milestone | Yes. This is the harness. | A checkpoint with `success`, an output schema, and named output ports. Judge PASS commits the current candidate as the one chosen bundle. No chosen manifest means BLOCKED. |
 | FlowStep | Guide | An atomic goal inside a milestone (bind five images, fetch a record). Prefers one tool. Follow the table order. How you get there is a normal skill. |
-| Tool | Preferred, optional | Python at `<repo>/flowsteps/tools/<id>/`. The builder should write it: existing, promote from a skill script, or a generate-new stub. If it fails, find another way. The target is still the milestone asset. |
+| Tool | Preferred, optional | Python at `<repo>/flowsteps/tools/<id>/`. The builder should write it: existing, promote from a skill script, or a generate-new stub. If it fails, find another way. The target is still the declared chosen bundle. |
 
 The skill does this:
 
@@ -338,9 +416,9 @@ identify milestones
 
 ## Chart: milestone to milestone, and what is inside one
 
-The canvas is only milestones. Each one must produce its declared asset before the next starts. `this.in` is `previous.out`. No asset → BLOCK.
+The canvas is only milestones. Workflow JSON displays declared output ports. FlowSteps produce a current candidate; judge PASS commits `chosen-output.json`, and only that manifest is visible downstream. No manifest → BLOCK.
 
-**Inside** a milestone are N FlowSteps plus **one judge**. The judge reads this milestone’s gem (`references/<id>.md`) for the rule of success: pass receipt → next milestone; not ok → the session stays and keeps working. Missing asset still BLOCKS.
+**Inside** a milestone are N FlowSteps plus **one judge**. The judge reads **Rule of success** in this milestone’s gem (`references/<id>.md`): PASS commits the current candidate as the chosen bundle; not ok keeps the session working inside the node. Each FlowStep has a section in that same gem—the step prompt, not a canvas node.
 
 ![M8M demo: top is the milestone canvas; bottom opens source_ready with N FlowSteps, then a judge that reads references/source_ready.md and either issues a pass receipt or tells the session to keep working](docs/m8m-chart.jpg)
 
@@ -350,21 +428,20 @@ How a run proceeds:
 
 ```text
 request
-  → source_ready     must produce a file (path + sha256)
+  → source_ready     must choose its named file output
       inside: FlowStep fetch_record → tool fetch_record
               FlowStep hash_bind    → tool hash_bind
               then the judge reads gem references/source_ready.md
-              pass receipt → next. not ok → session keeps working. no asset → BLOCK.
+              PASS → chosen-output.json → next. not ok → keep working.
   → plan_frozen      must produce a json plan
   → release_packaged must produce a file package
 ```
 
-| Kind | Proof this milestone must hand over |
+| Kind | Chosen bundle member |
 | --- | --- |
-| `file` | `asset.path` + `asset.sha256` |
-| `image` | same file receipt, for a picture |
-| `json` | closed object with required fields |
-| `data` | same: typed required fields |
+| `file` | copied to `out/members/<id>/asset.<ext>` |
+| `image` / `video` / `audio` | copied media bytes, available for canvas preview |
+| `json` / `data` | JSON asset validated by the milestone output schema |
 
 ## Table (guide)
 
@@ -396,17 +473,17 @@ Deploy as open source, like n8n: companies self-host a standardized, auditable a
 | n8n | M8M |
 | --- | --- |
 | Node = one HTTP call / one crop | Node = one milestone. Actions sit **inside** it (FlowStep + tool) |
-| Retry the same node | **judge**: stay **inside this milestone** until the asset is good. Receipt `{ok}` |
+| Retry the same node | **judge**: stay **inside this milestone** until the current candidate is accepted, then commit its chosen bundle. Receipt `{ok}` |
 | IF / Switch node | **branch**: pick a path **after this milestone**. AI drafts; the tool writes `{ok, branch}`. The other path is skipped |
 | Loop Over Items / Split in Batches | **cycle**: freeze a ledger, then **wrap a stretch of milestones**. Each round AI drafts pass/fail; the tool updates the ledger. Pass preserves; fail purges residue so you can resume |
 
 Every milestone has a gem and **one worker that looks at that gem**. The gem is not a canvas node. The judge is not a second box. Exist boxes use `hash_bind` / `schema_validate` once. Quality boxes use `loop: judge` plus a named `<id>_judge` (developed separately; not shared `ok_receipt`). Cycle and branch keep their own receipts.
 
-The model must not set `ok` / `branch` / `cycle`. An ok receipt still cannot waive a missing asset.
+The model must not set `ok` / `branch` / `cycle`. An ok receipt cannot waive missing required outputs or a missing chosen manifest.
 
 ### wait — Response is ready
 
-Wait-for-response is **one milestone**, not an n8n Wait node, and not `loop: wait`. Inside it is still N FlowSteps + one judge. The judge reads `references/response_ready.md`: no draft yet → pause (`ACTION_REQUIRED`); gem fail → stay and keep working; pass receipt → next. Write the reply to `work/draft.json` and `advance()`. A path because of what they said is **branch after** this box.
+Wait-for-response is **one milestone**, not an n8n Wait node, and not `loop: wait`. Inside it is still N FlowSteps + one judge. The session freezes a **roster** at start (`<run>/roster.json`, `m8m_run_roster_v1`) with one row per canvas milestone, and updates it as each box finishes. No draft yet → that row becomes `waiting`, the run `paused`, and the session **exits**. After the reply is in `milestones/response_ready/work/draft.json`, the skill finds that roster, resumes, and the judge reads the gem: does the wait have its feedback now? Gem fail → stay and keep working; pass receipt → next. A path because of what they said is **branch after** this box. Do not draw a `roster_frozen` milestone. Roster is not the cycle ledger at `cycles/<id>/ledger.json`.
 
 ```text
 ask is written  →  Response is ready (judge: pause / keep working / pass)  →  next
@@ -414,12 +491,21 @@ ask is written  →  Response is ready (judge: pause / keep working / pass)  →
 
 ```yaml
 - id: response_ready
-  asset: { kind: json }
+  success: "A reply is present and consumable downstream."
+  output_contract: response_ready_v1
+  output_schema: milestones/response_ready/output.schema.json
+  outputs:
+    - { id: reply, name: Reply, kind: json, cardinality: one, required: true }
   gem: references/response_ready.md
   intelligence: completion
   loop: judge
   worker: response_ready_judge
 ```
+
+| Book | File | Job |
+| --- | --- | --- |
+| Roster | `<run>/roster.json` | Frozen when the session starts. Each milestone row is `done` / `waiting` / `skipped`. Wait sets `paused` and exits. Find this file to resume after feedback. |
+| Ledger | `cycles/<id>/ledger.json` | Rows inside one wrap. Pass keeps `items/NNN`. Fail purges residue. |
 
 ### judge — Card is aligned
 
@@ -435,11 +521,16 @@ Source is ready  →  Card is aligned (judge until ok)  →  Release is packaged
   loop: judge
   worker: card_aligned_judge
   intelligence: image
+  flowsteps:
+    - { id: align_compare, tool: align_compare }
+    - { id: draw_red_circles, tool: draw_red_circles }
+    - { id: align_edit, tool: align_edit }
+    - { id: hash_bind, tool: hash_bind }
 ```
 
 ### branch — Intake is ready
 
-After the intake asset PASSes, AI drafts which generation path to take. Do not call this IF.
+After the intake chosen bundle is committed, AI drafts which generation path to take. Do not call this IF.
 
 ```text
 Intake is ready
@@ -471,7 +562,7 @@ Freeze the ledger first, then wrap. Do not call this FOR. `remaining == 0` is da
 Pages ledger is frozen
   → [cycle pages]
         Page is bound
-        Page is rendered     ← asset PASS, then cycle_receipt
+        Page is rendered     ← milestone judge PASS, then commit chosen output
             pass → keep items/001, mark the ledger row done
             fail → purge this round’s out/, row stays unfinished, can redo
   → Release is packaged
@@ -479,7 +570,11 @@ Pages ledger is frozen
 
 ```yaml
 - id: pages_ledger_frozen
-  asset: { kind: json }
+  success: "The page ledger is frozen."
+  output_contract: pages_ledger_v1
+  output_schema: milestones/pages_ledger_frozen/output.schema.json
+  outputs:
+    - { id: ledger, name: Page ledger, kind: json, cardinality: one, required: true }
 - id: page_bound
   on_cycle: pages
 - id: page_rendered
@@ -489,7 +584,7 @@ Pages ledger is frozen
     ledger: pages_ledger_frozen
     start: page_bound
     join: release_packaged
-    pass: "this row is done: page image path + sha256"
+    pass: "this row is done: page image is a chosen output member"
 ```
 
 A name like `crop_4x5` on `--milestone` is a note that it looks like a tool. It is not a refusal to draw.
@@ -518,7 +613,69 @@ This writes:
 - `<repo>/flowsteps/tools/<id>/` (seed or stub)
 - `<repo>/.agents/skills/<name>/SKILL.md` and `<repo>/.claude/skills/<name>/SKILL.md`
 
-The factory PASSes when the chart, tables, stubs, and each milestone's asset schema exist. `validate_harness.py` is optional. Use it when you fill in tools. `run_flow.py` is the harness: a failed tool goes to the agent; a missing asset or a not-ok worker receipt BLOCKs.
+The builder dogfoods the same v4 runtime: audit → toolbox → staged generation → validation → local installation. All five milestones require chosen manifests, and the target is untouched until validation is chosen. `run_flow.py` owns schema checks, judge loops, chosen output, resume, and `--replace-milestone`. Nothing here deploys the result.
+
+### Fresh rerun, resume, workflow repair, and repeated goals
+
+An ordinary invocation and an explicit **rerun** create a new folder with
+cache mode `off`. `run-context.json` freezes `context_policy: isolated` and
+`chat_history_allowed: false`. Current Codex/Claude chat, another run, and a
+previous case are not implicit inputs. When the runtime returns
+`ACTION_REQUIRED`, the adapter must launch a fresh no-history worker from
+`context_capsule_path`; it may read only `allowed_files` and write only
+`write_file`.
+
+```powershell
+# fresh (default)
+python scripts/run_flow.py --codebase <repo> --flow-id <id> --request <request.json>
+
+# same-run resume
+python scripts/run_flow.py ... --run-mode resume --run-dir <exact-run>
+
+# adopt a workflow fix, preserve compatible upstream chosen state, rerun downstream
+python scripts/run_flow.py ... --run-dir <exact-run> --continue-after-edit <milestone>
+```
+
+Resume reuses one run's chosen outputs, attempts, roster, and generated
+assets; it is not cache. Continue-after-edit audits the frozen flow and
+implementation lock and only accepts changes owned by the selected milestone
+or its downstream graph. Flow-level changes, milestone reordering, or
+incompatible preserved ports require a fresh run.
+
+Use the outer goal ledger for ten-case work:
+
+```powershell
+python scripts/run_goal.py --codebase <repo> --flow-id <id> --goal <goal.json>
+```
+
+`goal-ledger.json` tracks row status, while every row receives a distinct
+cache-off, no-history child session, roster, and milestone/cycle ledger at
+`rows/<row>/attempt-NNN/run`. After repairing a workflow, continue the current
+child with `--continue-after-edit`. Only `--abandon-row` retains that attempt
+and creates a fresh one. Later cases therefore cannot drift through an
+accumulating multi-case chat.
+
+### Workflow state is not cross-run cache
+
+`chosen-output.json`, attempts, roster, ledger, branch, wait, resume, and
+replacement are state of one session. Cross-run cache is only an optional
+candidate optimization and short tasks stay uncached. It requires both a
+milestone declaration (`reuse: candidate`, positive TTL, `side_effects:
+none`) and an enabled run mode. Platform runs must partition it with the
+tenant ID in `--cache-namespace`.
+
+A hit is copied into the new run, schema-validated, and judged by the
+current judge. It is never directly chosen and never replays an old judge
+receipt. Expired, corrupt, rejected, missing, or unwritable cache becomes a
+miss/warning, not BLOCKED. Resume does not consult cache for completed
+milestones; replacement bypasses reads for its invalidated subgraph. Write
+mode is an explicitly requested cache-refresh run that skips reads; it is not
+the default meaning of “rerun.”
+
+```powershell
+python scripts/run_flow.py ... --cache-mode read-write --cache-namespace <tenant-or-local>
+python scripts/m8m_cache.py prune --codebase <repo> [--flow-id <id>]
+```
 
 ## Install
 

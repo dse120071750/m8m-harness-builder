@@ -73,26 +73,31 @@ class ControlNameTests(unittest.TestCase):
 
 
 class WriterSkillTests(unittest.TestCase):
-    def test_skill_md_teaches_if_for_on_this_out(self) -> None:
+    def test_skill_md_teaches_chosen_output_runtime(self) -> None:
         text = (Path(__file__).resolve().parents[1] / "SKILL.md").read_text(encoding="utf-8")
-        self.assertIn("cycle:", text)
+        self.assertIn("flowstep_flow_v4", text)
+        self.assertIn("flowstep_output_v3", text)
+        self.assertIn("m8m_chosen_output_v1", text)
         self.assertIn("loop: judge", text)
-        self.assertIn("branch:", text)
+        self.assertIn("chosen-output.json", text)
         self.assertIn("rule of success", text.lower())
         self.assertIn("references/<id>.md", text)
-        self.assertIn("card_aligned_judge", text)
-        self.assertIn("ok_receipt", text)
-        self.assertIn("response_ready", text)
-        self.assertIn("Do not add `loop: wait`", text)
-        self.assertIn("on_path:", text)
+        self.assertIn("not separate canvas nodes", text.lower())
+        self.assertIn("output: images", text)
+        self.assertIn("member: hero_image", text)
+        self.assertIn("--replace-milestone", text)
         self.assertIn("ledger", text)
-        self.assertIn("worker", text)
+        self.assertIn("Roster", text)
+        self.assertIn("Never deploy", text)
 
     def test_github_docs_use_images_not_mermaid(self) -> None:
         root = Path(__file__).resolve().parents[1]
         readme = (root / "README.md").read_text(encoding="utf-8")
         self.assertNotIn("```mermaid", readme)
         self.assertIn("docs/m8m-chart.jpg", readme)
+        self.assertIn("m8m_run_roster_v1", readme)
+        self.assertIn("<run>/roster.json", readme)
+        self.assertIn("cycles/<id>/ledger.json", readme)
         sample = (root / "examples" / "article_infographic" / "planning" / "m8m-flowchart.md").read_text(
             encoding="utf-8"
         )

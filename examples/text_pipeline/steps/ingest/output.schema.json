@@ -3,9 +3,23 @@
   "$id": "ingest.output.schema.json",
   "type": "object",
   "additionalProperties": false,
-  "required": ["text", "char_count"],
+  "required": ["outputs"],
   "properties": {
-    "text": { "type": "string", "minLength": 1 },
-    "char_count": { "type": "integer", "minimum": 1 }
+    "outputs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["result"],
+      "properties": {
+        "result": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["text", "char_count"],
+          "properties": {
+            "text": { "type": "string", "minLength": 1 },
+            "char_count": { "type": "integer", "minimum": 1 }
+          }
+        }
+      }
+    }
   }
 }

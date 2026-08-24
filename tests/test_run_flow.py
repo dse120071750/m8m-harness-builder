@@ -9,6 +9,7 @@ from support import EXAMPLE
 
 from flowstep_runtime import FlowError, read_json
 from run_flow import advance
+from session_layout import resolve_chosen_output
 
 
 class RunFlowTests(unittest.TestCase):
@@ -25,10 +26,10 @@ class RunFlowTests(unittest.TestCase):
             self.assertEqual(first["state"], "ACTION_REQUIRED")
             self.assertEqual(first["step_id"], "label")
             self.assertEqual(first["model"], "completion")
-            ingest = read_json(run_dir / "artifacts" / "ingest.ingest_v1.json")
-            self.assertEqual(ingest["data"]["text"], "Hello, world. This is a test.")
-            segment = read_json(run_dir / "artifacts" / "segment.segment_v1.json")
-            self.assertEqual(segment["data"]["sentence_count"], 2)
+            ingest = resolve_chosen_output(run_dir, "ingest", output_id="result")
+            self.assertEqual(ingest["text"], "Hello, world. This is a test.")
+            segment = resolve_chosen_output(run_dir, "segment", output_id="result")
+            self.assertEqual(segment["sentence_count"], 2)
             model_request = read_json(run_dir / first["model_request_path"])
             self.assertEqual(model_request["sentence"], "Hello, world.")
 
@@ -36,9 +37,10 @@ class RunFlowTests(unittest.TestCase):
             draft.write_text(json.dumps({"label": "statement"}), encoding="utf-8")
             done = advance(EXAMPLE, run_dir, draft_path=draft)
             self.assertEqual(done["state"], "COMPLETE")
-            label = read_json(run_dir / "artifacts" / "label.label_v1.json")
-            self.assertEqual(label["data"], {"label": "statement", "sentence": "Hello, world."})
-            self.assertEqual(label["evidence"]["handler"], "steps/label/tool.py")
+            label = resolve_chosen_output(run_dir, "label", output_id="result")
+            self.assertEqual(label, {"label": "statement", "sentence": "Hello, world."})
+            envelope = read_json(run_dir / "artifacts" / "label.label_v1.json")
+            self.assertEqual(envelope["evidence"]["handler"], "steps/label/tool.py")
 
     def test_invalid_draft_blocks(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

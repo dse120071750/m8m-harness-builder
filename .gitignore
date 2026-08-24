@@ -10,3 +10,6 @@ Thumbs.db
 *.tmp
 planning/flowstep-audit.md
 planning/flowstep-audit.json
+flowsteps/cache/
+flowsteps/goals/
+flowsteps/runs/

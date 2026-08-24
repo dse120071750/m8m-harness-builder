@@ -1,9 +1,9 @@
 # M8M flowchart: article-infographic-maker
 
 Two pictures. Top: milestone to milestone. Each node must hand over an
-asset or the next node does not start. Bottom: open one milestone
+chosen output or the next node does not start. Bottom: open one milestone
 (`cards_rendered`) — several FlowSteps, each with one preferred tool,
-then the image asset check.
+then the image output check.
 
 - flow_id: `article_infographic_zh_hant_v2`
 - source: `audit`
@@ -11,7 +11,7 @@ then the image asset check.
 
 ## Chart
 
-![article infographic: canvas of milestones, then inside cards_rendered the FlowSteps render_html_shell, footer_geometry_qa, hash_bind and the image asset check](m8m-flowchart.jpg)
+![article infographic: canvas of milestones, then inside cards_rendered the FlowSteps render_html_shell, footer_geometry_qa, hash_bind and the image output check](m8m-flowchart.jpg)
 
 ## Toolbox plan
 
@@ -43,7 +43,7 @@ develop this tool; a stub is a successful sketch.
 ## FlowSteps (guide)
 
 Sequence inside each milestone. Prefer the named tool. Optional.
-If it fails, recover like a normal agent. The milestone asset is still compulsory.
+If it fails, recover like a normal agent. The milestone chosen output is still compulsory.
 
 | Milestone | # | FlowStep | Preferred tool |
 | --- | ---: | --- | --- |
@@ -79,4 +79,4 @@ If it fails, recover like a normal agent. The milestone asset is still compulsor
 
 Render and spatial alignment stay on this milestone until the worker receipt is `ok: true`. Budget gone → BLOCK.
 
-Proceed only when the worker receipt is `ok: true` and the milestone asset PASSes.
+Proceed only when the worker receipt is `ok: true`, the milestone judge PASSes, and `chosen-output.json` is committed.

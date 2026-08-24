@@ -32,7 +32,7 @@ class HumanizeTests(unittest.TestCase):
         self.assertEqual(title_id("response_ready"), "Response is ready")
         self.assertEqual(title_id_zh("response_ready"), "回复已就绪")
         self.assertEqual(title_id_zh("wait_for_response"), "等待回复")
-        self.assertIn("must produce a file", success_line({"id": "source_ready", "asset_kind": "file"}))
+        self.assertIn("must choose a file", success_line({"id": "source_ready", "asset_kind": "file"}))
         self.assertEqual(
             success_line({"id": "source_ready", "asset_kind": "file", "success": "Source bytes are bound."}),
             "Source bytes are bound.",
@@ -41,6 +41,36 @@ class HumanizeTests(unittest.TestCase):
 
 
 class JpegWriteTests(unittest.TestCase):
+    def test_cache_policy_is_canvas_metadata_not_a_node(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            items = [
+                {
+                    "id": "result_ready",
+                    "success": "The result is accepted.",
+                    "output_contract": "result_v1",
+                    "outputs": [
+                        {
+                            "id": "result",
+                            "name": "Result",
+                            "kind": "json",
+                            "cardinality": "one",
+                            "required": True,
+                        }
+                    ],
+                    "intelligence": "none",
+                    "tools": [],
+                    "cache": {"reuse": "candidate", "ttl_seconds": 3600, "side_effects": "none"},
+                    "cache_status": "hit",
+                }
+            ]
+            write_flowchart(root, items, title="cache", flow_id="cache_v1", source="test")
+            text = (root / "planning" / "m8m-flowchart.md").read_text(encoding="utf-8")
+            self.assertIn("cache:candidate", text)
+            self.assertIn("TTL 3600s", text)
+            self.assertIn("status `hit`", text)
+            self.assertEqual(text.count('result_ready["'), 1)
+
     def test_generate_writes_jpg_next_to_md(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             codebase = Path(temp) / "repo"

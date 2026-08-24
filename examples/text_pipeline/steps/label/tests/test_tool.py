@@ -22,7 +22,7 @@ class LabelToolTests(unittest.TestCase):
             {"segment": {"sentences": ["Hello, world."], "sentence_count": 1}},
             draft={"label": "statement"},
         )
-        self.assertEqual(result, {"label": "statement", "sentence": "Hello, world."})
+        self.assertEqual(result["outputs"]["result"], {"label": "statement", "sentence": "Hello, world."})
 
 
 if __name__ == "__main__":

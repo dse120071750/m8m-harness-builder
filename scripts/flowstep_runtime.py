@@ -1,4 +1,4 @@
-"""Shared FlowStep v2 runtime: one step is one Python tool plus I/O schemas."""
+"""Shared M8M v4 runtime: FlowSteps work inside chosen-output milestones."""
 
 from __future__ import annotations
 
@@ -7,17 +7,19 @@ import hashlib
 import importlib.util
 import json
 import re
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import yaml
 from jsonschema import Draft202012Validator, RefResolver
+from jsonschema.exceptions import SchemaError
 
 
-FLOW_SCHEMA = "flowstep_flow_v2"
+FLOW_SCHEMA = "flowstep_flow_v4"
 FLOW_SCHEMA_V3 = "flowstep_flow_v3"
-ENVELOPE_SCHEMA = "flowstep_output_v2"
+ENVELOPE_SCHEMA = "flowstep_output_v3"
 ACTION_SCHEMA = "flow_sequence_action_v2"
 MODELS = ("none", "completion", "image", "judge")
 STEP_CLASSES = ("tool", "intelligence")
@@ -48,6 +50,39 @@ MILESTONE_SUFFIXES = (
     "_checked",
 )
 STEP_ID_RE = re.compile(r"^[a-z][a-z0-9_]*$")
+OUTPUT_KINDS = ("json", "data", "file", "image", "video", "audio")
+OUTPUT_CARDINALITIES = ("one", "many")
+CACHE_SIDE_EFFECT_TOKENS = {
+    "apply",
+    "commit",
+    "delete",
+    "deploy",
+    "install",
+    "patch",
+    "publish",
+    "register",
+    "remove",
+    "rotate",
+    "send",
+    "update",
+    "upload",
+}
+
+
+def cache_side_effect_risk(step: dict[str, Any]) -> str | None:
+    """Return a conservative identifier when declared work may mutate external state."""
+    identifiers = [str(step.get("id") or ""), Path(str(step.get("handler") or "")).stem]
+    identifiers.extend(str(item) for item in (step.get("tools") or []) if item)
+    for flowstep in step.get("flowsteps") or []:
+        if isinstance(flowstep, str):
+            identifiers.append(flowstep)
+        elif isinstance(flowstep, dict):
+            identifiers.extend(str(flowstep.get(key) or "") for key in ("id", "tool"))
+    for identifier in identifiers:
+        tokens = {item for item in re.split(r"[^a-z0-9]+", identifier.lower()) if item}
+        if tokens & CACHE_SIDE_EFFECT_TOKENS:
+            return identifier
+    return None
 
 
 def normalize_flowsteps(
@@ -132,7 +167,18 @@ def write_json(path: Path, value: Any, *, overwrite: bool = True) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temp = path.with_suffix(path.suffix + ".tmp")
     temp.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    temp.replace(path)
+    for attempt in range(20):
+        try:
+            temp.replace(path)
+            break
+        except OSError as exc:
+            # Windows can report ERROR_ACCESS_DENIED (5) for the same brief
+            # antivirus/indexer handle race that otherwise appears as a
+            # sharing violation (32). Treat all transient replace failures
+            # uniformly so long-running IO ledgers remain resumable.
+            if getattr(exc, "winerror", None) not in {5, 32, 1450} or attempt == 19:
+                raise
+            time.sleep(0.05 * (attempt + 1))
 
 
 def load_yaml(path: Path) -> Any:
@@ -320,7 +366,49 @@ def _normalize_branch(raw: Any, *, step_id: str) -> dict[str, Any] | None:
     }
 
 
-def _load_flow_v3(skill_dir: Path, path: Path, raw: dict[str, Any]) -> dict[str, Any]:
+def _normalize_outputs(raw: Any, *, step_id: str) -> list[dict[str, Any]]:
+    if not isinstance(raw, list) or not raw:
+        raise FlowError(f"{step_id}.outputs must be a non-empty list")
+    outputs: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for index, item in enumerate(raw):
+        if not isinstance(item, dict):
+            raise FlowError(f"{step_id}.outputs[{index}] must be a mapping")
+        _require(item, {"id", "name", "kind", "cardinality", "required"}, f"{step_id}.outputs[{index}]")
+        output_id = str(item.get("id") or "").strip()
+        name = str(item.get("name") or "").strip()
+        kind = str(item.get("kind") or "").strip().lower()
+        cardinality = str(item.get("cardinality") or "").strip().lower()
+        required = item.get("required")
+        if not STEP_ID_RE.match(output_id):
+            raise FlowError(f"{step_id}.outputs[{index}].id is invalid: {output_id}")
+        if output_id in seen:
+            raise FlowError(f"{step_id}: duplicate output id {output_id}")
+        if not name:
+            raise FlowError(f"{step_id}.outputs[{index}].name must not be empty")
+        if kind not in OUTPUT_KINDS:
+            raise FlowError(f"{step_id}.outputs[{index}].kind must be one of {OUTPUT_KINDS}")
+        if cardinality not in OUTPUT_CARDINALITIES:
+            raise FlowError(
+                f"{step_id}.outputs[{index}].cardinality must be one of {OUTPUT_CARDINALITIES}"
+            )
+        if not isinstance(required, bool):
+            raise FlowError(f"{step_id}.outputs[{index}].required must be boolean")
+        seen.add(output_id)
+        outputs.append(
+            {
+                "id": output_id,
+                "name": name,
+                "kind": kind,
+                "cardinality": cardinality,
+                "required": required,
+            }
+        )
+    return outputs
+
+
+def _load_flow_v4(skill_dir: Path, path: Path, raw: dict[str, Any]) -> dict[str, Any]:
+    validate_against_schema(raw, flow_schema_path())
     _require(raw, {"schema", "flow_id", "version", "milestones"}, "flow")
     if not isinstance(raw["flow_id"], str) or not FLOW_ID_RE.match(raw["flow_id"]):
         raise FlowError(f"invalid flow_id: {raw.get('flow_id')}")
@@ -333,19 +421,28 @@ def _load_flow_v3(skill_dir: Path, path: Path, raw: dict[str, Any]) -> dict[str,
         raise FlowError("flow must declare at least one milestone")
     raw.setdefault("max_run_seconds", 3600)
     raw.setdefault("artifact_root", "artifacts")
+    raw.setdefault("context_policy", "isolated")
     steps: list[dict[str, Any]] = []
     ids: list[str] = []
     previous: dict[str, Any] | None = None
     for index, item in enumerate(milestones):
         if not isinstance(item, dict):
             raise FlowError(f"milestone {index} must be a mapping")
-        _require(item, {"id", "output_contract"}, f"milestone {index}")
+        _require(
+            item,
+            {"id", "success", "output_contract", "output_schema", "outputs"},
+            f"milestone {index}",
+        )
         step_id = item["id"]
         if not isinstance(step_id, str) or not STEP_ID_RE.match(step_id):
             raise FlowError(f"invalid milestone id: {step_id}")
         if step_id in ids:
             raise FlowError(f"duplicate milestone id: {step_id}")
         ids.append(step_id)
+        success = str(item.get("success") or "").strip()
+        if not success:
+            raise FlowError(f"{step_id}.success must not be empty")
+        outputs = _normalize_outputs(item.get("outputs"), step_id=step_id)
         intel = item.get("intelligence") or "none"
         if intel not in ("none", *MODELS[1:]):
             raise FlowError(f"{step_id}.intelligence must be none|completion|image|judge")
@@ -362,7 +459,6 @@ def _load_flow_v3(skill_dir: Path, path: Path, raw: dict[str, Any]) -> dict[str,
             raise FlowError(f"{step_id}.max_model_attempts must be a positive integer")
         if intel != "none" and not str(item.get("model_justification") or "").strip():
             item["model_justification"] = "optional; writer sketch"
-        item.setdefault("output_schema", f"schemas/{item['output_contract']}.json")
         item.setdefault("draft_schema", f"milestones/{step_id}/draft.schema.json")
         item.setdefault("handler", f"milestones/{step_id}/assemble.py")
         inputs = item.get("inputs")
@@ -406,6 +502,17 @@ def _load_flow_v3(skill_dir: Path, path: Path, raw: dict[str, Any]) -> dict[str,
         on_path = str(item.get("on_path") or "").strip()
         on_cycle = str(item.get("on_cycle") or "").strip()
         cycle = _normalize_cycle(item.get("cycle"), step_id=step_id)
+        cache = dict(item["cache"]) if isinstance(item.get("cache"), dict) else None
+        if cache and (branch or cycle or loop == "for"):
+            raise FlowError(f"{step_id}: branch/cycle control milestones cannot use cross-run cache")
+        wait_tokens = {"response", "reply", "confirm", "wait"}
+        if cache and set(step_id.lower().replace("-", "_").split("_")) & wait_tokens:
+            raise FlowError(f"{step_id}: wait milestones cannot use cross-run cache")
+        side_effect_risk = cache_side_effect_risk(item) if cache else None
+        if side_effect_risk:
+            raise FlowError(
+                f"{step_id}: cache is unsafe because {side_effect_risk} may have external side effects"
+            )
         if loop == "for" and cycle is None:
             cycle = {
                 "worker": worker or "cycle_receipt",
@@ -448,10 +555,9 @@ def _load_flow_v3(skill_dir: Path, path: Path, raw: dict[str, Any]) -> dict[str,
                 raise FlowError(f"{step_id}.max_attempts must be a positive integer")
         elif not isinstance(max_attempts, int) or max_attempts < 1:
             raise FlowError(f"{step_id}.max_attempts must be a positive integer")
+        primary_output = outputs[0]
         asset = item.get("asset") if isinstance(item.get("asset"), dict) else {}
-        asset_kind = str(asset.get("kind") or "").strip().lower()
-        if asset_kind not in ASSET_KINDS:
-            asset_kind = ""
+        asset_kind = str(asset.get("kind") or primary_output["kind"]).strip().lower()
         step = {
             "id": step_id,
             "kind": "milestone",
@@ -479,12 +585,14 @@ def _load_flow_v3(skill_dir: Path, path: Path, raw: dict[str, Any]) -> dict[str,
             "on_path": on_path or None,
             "cycle": cycle,
             "on_cycle": on_cycle or None,
-            "success": str(item.get("success") or "").strip() or None,
+            "success": success,
             "gem": str(item.get("gem") or "").strip() or None,
             "next": [],
             "else": None,
             "join": None,
             "asset": {"kind": asset_kind} if asset_kind else dict(asset),
+            "outputs": outputs,
+            "cache": cache,
         }
         if intel != "none" or on_tool_fail == "need_model":
             step["draft_schema"] = item.get("draft_schema") or f"milestones/{step_id}/draft.schema.json"
@@ -495,7 +603,7 @@ def _load_flow_v3(skill_dir: Path, path: Path, raw: dict[str, Any]) -> dict[str,
     raw["steps"] = steps
     raw["_skill_dir"] = skill_dir
     raw["_flow_path"] = path
-    raw["_v3"] = True
+    raw["_v4"] = True
     return raw
 
 
@@ -506,84 +614,14 @@ def load_flow(skill_dir: Path, flow_path: Path | None = None) -> dict[str, Any]:
     if not isinstance(raw, dict):
         raise FlowError(f"flow must be a mapping: {path}")
     schema = raw.get("schema")
-    if schema == "flowstep_flow_v1":
+    if schema in {"flowstep_flow_v1", "flowstep_flow_v2", "flowstep_flow_v3"}:
         raise FlowError(
-            "flowstep_flow_v1 is rejected: every step needs handler + input/output schemas "
-            "(flowstep_flow_v2). Do not use execution_mode local/in_process/subagent."
+            f"{schema} is rejected; regenerate with m8m-harness-builder 2.0 "
+            f"to produce {FLOW_SCHEMA} chosen-output milestones"
         )
-    if schema == FLOW_SCHEMA_V3:
-        return _load_flow_v3(skill_dir, path, raw)
-    _require(raw, {"schema", "flow_id", "version", "steps"}, "flow")
-    if raw["schema"] != FLOW_SCHEMA:
-        raise FlowError(f"flow schema must be {FLOW_SCHEMA}")
-    if not isinstance(raw["flow_id"], str) or not FLOW_ID_RE.match(raw["flow_id"]):
-        raise FlowError(f"invalid flow_id: {raw.get('flow_id')}")
-    if not isinstance(raw["version"], int) or raw["version"] < 1:
-        raise FlowError("flow version must be a positive integer")
-    if not isinstance(raw["steps"], list) or not raw["steps"]:
-        raise FlowError("flow must declare at least one step")
-    raw.setdefault("max_run_seconds", 3600)
-    raw.setdefault("artifact_root", "artifacts")
-    if int(raw.get("max_run_repair_cycles") or 0) != 0:
-        raise FlowError("max_run_repair_cycles is forbidden; a BLOCKED run stays BLOCKED")
-    ids: list[str] = []
-    for index, step in enumerate(raw["steps"]):
-        if not isinstance(step, dict):
-            raise FlowError(f"step {index} must be a mapping")
-        if step.get("execution_mode") or step.get("assigned_agent") or step.get("params", {}).get("execution_mode"):
-            raise FlowError(
-                f"step {step.get('id', index)} uses v1 agent modes; replace with handler + model"
-            )
-        _require(step, {"id", "handler", "inputs", "output_contract"}, f"step {index}")
-        step_id = step["id"]
-        if not isinstance(step_id, str) or not STEP_ID_RE.match(step_id):
-            raise FlowError(f"invalid step id: {step_id}")
-        if step_id in ids:
-            raise FlowError(f"duplicate step id: {step_id}")
-        ids.append(step_id)
-        step.setdefault("kind", "step")
-        step.setdefault("model", "none")
-        step.setdefault("class", "tool" if step["model"] == "none" else "intelligence")
-        step.setdefault("input_schema", f"steps/{step_id}/input.schema.json")
-        step.setdefault("output_schema", f"steps/{step_id}/output.schema.json")
-        step.setdefault("test", f"steps/{step_id}/tests/test_tool.py")
-        step.setdefault("params", {})
-        if step["model"] not in MODELS:
-            raise FlowError(f"{step_id}.model must be one of {MODELS}")
-        if step["class"] not in STEP_CLASSES:
-            raise FlowError(f"{step_id}.class must be one of {STEP_CLASSES}")
-        if step["class"] == "tool" and step["model"] != "none":
-            raise FlowError(
-                f"{step_id}: class tool forbids model {step['model']}; "
-                "fetch/crop/hash/render/package belong in a codebase tool"
-            )
-        if step["class"] == "intelligence" and step["model"] == "none":
-            raise FlowError(f"{step_id}: class intelligence requires model completion|image|judge")
-        hint = step_class_hint(step_id)
-        if hint == "tool" and step["class"] == "intelligence":
-            raise FlowError(
-                f"{step_id}: name is a structured transform/IO; class must be tool "
-                "(see references/tool-vs-intelligence.md)"
-            )
-        if hint == "intelligence" and step["class"] == "tool":
-            raise FlowError(
-                f"{step_id}: name is judgment; class must be intelligence "
-                "(see references/tool-vs-intelligence.md)"
-            )
-        if step["model"] == "none":
-            if step.get("draft_schema"):
-                raise FlowError(f"{step_id}: draft_schema is only valid when model is not none")
-        else:
-            step.setdefault("draft_schema", f"steps/{step_id}/draft.schema.json")
-            if not str(step.get("model_justification") or "").strip():
-                raise FlowError(f"{step_id}: model {step['model']} requires model_justification")
-        if not isinstance(step["inputs"], dict) or not step["inputs"]:
-            raise FlowError(f"{step_id}.inputs must be a non-empty mapping")
-        if not str(step["handler"]).replace("\\", "/").endswith("tool.py"):
-            raise FlowError(f"{step_id}.handler must point at tool.py")
-    raw["_skill_dir"] = skill_dir
-    raw["_flow_path"] = path
-    return raw
+    if schema == FLOW_SCHEMA:
+        return _load_flow_v4(skill_dir, path, raw)
+    raise FlowError(f"flow schema must be {FLOW_SCHEMA}; regenerate with m8m-harness-builder 2.0")
 
 
 def skill_rel(skill_dir: Path, value: str | Path) -> Path:
@@ -611,19 +649,44 @@ def relative_to(root: Path, path: Path) -> str:
 def implementation_files(skill_dir: Path, flow: dict[str, Any]) -> list[Path]:
     files = [flow["_flow_path"]]
     for step in flow["steps"]:
-        files.append(skill_rel(skill_dir, step["handler"]))
-        files.append(skill_rel(skill_dir, step["input_schema"]))
-        files.append(skill_rel(skill_dir, step["output_schema"]))
-        if step["model"] != "none" and step.get("draft_schema"):
-            files.append(skill_rel(skill_dir, step["draft_schema"]))
+        for field in ("handler", "input_schema", "output_schema", "draft_schema", "receipt_schema", "gem"):
+            if step.get(field):
+                files.append(skill_rel(skill_dir, step[field]))
+    root = skill_dir.resolve()
+    project = root.parent.parent.parent if root.parent.name == "flows" and root.parent.parent.name == "flowsteps" else root
+    tool_ids = {
+        str(tool_id)
+        for step in flow["steps"]
+        for tool_id in (step.get("tools") or [])
+        if tool_id
+    }
+    for tool_id in sorted(tool_ids):
+        tool_root = project / "flowsteps" / "tools" / tool_id
+        if not tool_root.is_dir():
+            continue
+        files.extend(
+            path
+            for path in tool_root.rglob("*")
+            if path.is_file()
+            and path.suffix.lower() in {".json", ".md", ".py", ".yaml", ".yml"}
+            and "__pycache__" not in path.parts
+        )
     return sorted({path.resolve() for path in files if path.is_file()}, key=lambda item: item.as_posix().lower())
 
 
 def implementation_lock(skill_dir: Path, flow: dict[str, Any]) -> dict[str, Any]:
-    entries = {
-        relative_to(skill_dir, path): sha256_file(path)
-        for path in implementation_files(skill_dir, flow)
-    }
+    root = skill_dir.resolve()
+    project = root.parent.parent.parent if root.parent.name == "flows" and root.parent.parent.name == "flowsteps" else root
+    entries: dict[str, str] = {}
+    for path in implementation_files(skill_dir, flow):
+        try:
+            label = f"skill:{path.relative_to(root).as_posix()}"
+        except ValueError:
+            try:
+                label = f"project:{path.relative_to(project).as_posix()}"
+            except ValueError:
+                label = f"external:{path.as_posix()}"
+        entries[label] = sha256_file(path)
     return {
         "schema": "flowstep_implementation_lock_v2",
         "skill": skill_dir.name,
@@ -641,7 +704,10 @@ def assert_implementation_lock(run_dir: Path, skill_dir: Path, flow: dict[str, A
     frozen = read_json(lock_path)
     current = implementation_lock(skill_dir, flow)
     if frozen.get("fingerprint_sha256") != current["fingerprint_sha256"]:
-        raise FlowError("implementation drift detected; start a fresh run")
+        raise FlowError(
+            "implementation drift detected; start a fresh run or use "
+            "--continue-after-edit <milestone> to preserve compatible upstream chosen outputs"
+        )
     return frozen
 
 
@@ -649,6 +715,10 @@ def validate_against_schema(instance: Any, schema_path: Path) -> None:
     if not schema_path.is_file():
         raise FlowError(f"schema not found: {schema_path}")
     schema = read_json(schema_path)
+    try:
+        Draft202012Validator.check_schema(schema)
+    except SchemaError as exc:
+        raise FlowError(f"invalid schema {schema_path}: {exc.message}") from exc
     resolver = RefResolver(base_uri=schema_path.resolve().as_uri(), referrer=schema)
     errors = sorted(
         Draft202012Validator(schema, resolver=resolver).iter_errors(instance),
@@ -661,7 +731,39 @@ def validate_against_schema(instance: Any, schema_path: Path) -> None:
 
 
 def envelope_schema_path() -> Path:
-    return CONTRACTS_DIR / "flowstep_output_v2.schema.json"
+    return CONTRACTS_DIR / "flowstep_output_v3.schema.json"
+
+
+def action_schema_path() -> Path:
+    return CONTRACTS_DIR / "flow_sequence_action_v2.schema.json"
+
+
+def flow_schema_path() -> Path:
+    return CONTRACTS_DIR / "flowstep_flow_v4.schema.json"
+
+
+def chosen_output_schema_path() -> Path:
+    return CONTRACTS_DIR / "m8m_chosen_output_v1.schema.json"
+
+
+def candidate_cache_schema_path() -> Path:
+    return CONTRACTS_DIR / "m8m_candidate_cache_entry_v1.schema.json"
+
+
+def cache_receipt_schema_path() -> Path:
+    return CONTRACTS_DIR / "m8m_cache_receipt_v1.schema.json"
+
+
+def run_context_schema_path() -> Path:
+    return CONTRACTS_DIR / "m8m_run_context_v1.schema.json"
+
+
+def context_capsule_schema_path() -> Path:
+    return CONTRACTS_DIR / "m8m_context_capsule_v1.schema.json"
+
+
+def goal_ledger_schema_path() -> Path:
+    return CONTRACTS_DIR / "m8m_goal_ledger_v1.schema.json"
 
 
 def expected_artifact_path(run_dir: Path, flow: dict[str, Any], step: dict[str, Any]) -> Path:
@@ -680,7 +782,12 @@ def load_tool(skill_dir: Path, step: dict[str, Any]) -> Any:
     if spec is None or spec.loader is None:
         raise FlowError(f"cannot import tool: {path}")
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    # Compile the current bytes instead of consulting __pycache__. Intentional
+    # continue-after-edit can replace a handler with same-size source inside one
+    # filesystem timestamp tick; normal import bytecode validation may otherwise
+    # execute the implementation that the run has just superseded.
+    source = path.read_bytes()
+    exec(compile(source, str(path), "exec"), module.__dict__)
     if not callable(getattr(module, "run", None)):
         raise FlowError(f"{path} must define run(input_data, draft=None, **kwargs)")
     return module
@@ -713,7 +820,31 @@ def _last_pass_source(
     return None
 
 
+def _binding_reference(reference: Any, *, step_id: str, input_name: str) -> tuple[str, str, str | None, str | None]:
+    if isinstance(reference, str):
+        if "." not in reference:
+            raise FlowError(
+                f"{step_id}.inputs.{input_name} must be user.request, <milestone>.<contract>, "
+                "or a member binding"
+            )
+        source_id, contract = reference.split(".", 1)
+        return source_id, contract, None, None
+    if not isinstance(reference, dict):
+        raise FlowError(f"{step_id}.inputs.{input_name} must be a string or member binding")
+    source_ref = str(reference.get("from") or "")
+    if "." not in source_ref:
+        raise FlowError(f"{step_id}.inputs.{input_name}.from must be <milestone>.<contract>")
+    source_id, contract = source_ref.split(".", 1)
+    output_id = str(reference.get("output") or "").strip() or None
+    member_id = str(reference.get("member") or "").strip() or None
+    if member_id and not output_id:
+        raise FlowError(f"{step_id}.inputs.{input_name}.member requires output")
+    return source_id, contract, output_id, member_id
+
+
 def bind_inputs(run_dir: Path, flow: dict[str, Any], step: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    from session_layout import chosen_output_path, load_chosen_output, resolve_chosen_output
+
     by_id = {item["id"]: item for item in flow["steps"]}
     payload: dict[str, Any] = {}
     bindings: list[dict[str, Any]] = []
@@ -723,22 +854,18 @@ def bind_inputs(run_dir: Path, flow: dict[str, Any], step: dict[str, Any]) -> tu
             if source_id not in by_id:
                 raise FlowError(f"{step['id']} join references unknown milestone {source_id}")
             source = by_id[source_id]
-            path = expected_artifact_path(run_dir, flow, source)
+            path = chosen_output_path(run_dir, source_id)
             if not path.is_file():
                 continue
-            artifact = read_json(path)
-            if artifact.get("status") != "PASS":
-                continue
-            payload[source_id] = artifact.get("data")
+            load_chosen_output(run_dir, source_id)
+            payload[source_id] = resolve_chosen_output(run_dir, source_id)
             bindings.append(
                 {
                     "input_name": source_id,
                     "source_step_id": source_id,
-                    "artifact_path": relative_to(run_dir, path),
-                    "artifact_id": artifact.get("artifact_id"),
-                    "artifact_sha256": sha256_file(path),
+                    "chosen_output_path": relative_to(run_dir, path),
                     "contract": source["output_contract"],
-                    "status": "PASS",
+                    "status": "chosen",
                 }
             )
             return payload, bindings
@@ -753,48 +880,40 @@ def bind_inputs(run_dir: Path, flow: dict[str, Any], step: dict[str, Any]) -> tu
                 {
                     "input_name": name,
                     "source_step_id": "user",
-                    "artifact_path": relative_to(run_dir, path),
-                    "artifact_id": "user.request",
-                    "artifact_sha256": sha256_file(path),
+                    "chosen_output_path": relative_to(run_dir, path),
                     "contract": "user.request",
-                    "status": "PASS",
+                    "status": "chosen",
                 }
             )
             continue
-        if not isinstance(reference, str) or "." not in reference:
-            raise FlowError(f"{step['id']}.inputs.{name} must be user.request or <step>.<contract>")
-        source_id, contract = reference.split(".", 1)
+        source_id, contract, output_id, member_id = _binding_reference(
+            reference, step_id=step["id"], input_name=name
+        )
         if source_id not in by_id:
-            raise FlowError(f"{step['id']} input {name} references unknown step {source_id}")
+            raise FlowError(f"{step['id']} input {name} references unknown milestone {source_id}")
         source = by_id[source_id]
         if source["output_contract"] != contract:
             raise FlowError(f"{step['id']} input {name} contract mismatch: expected {source['output_contract']}")
-        path = expected_artifact_path(run_dir, flow, source)
-        if not path.is_file():
-            fallback = _last_pass_source(run_dir, flow, step)
-            if fallback is None:
-                raise FlowError(f"missing upstream artifact: {source_id}")
-            source, path, artifact = fallback
-        else:
-            artifact = read_json(path)
-        if artifact.get("status") != "PASS":
-            fallback = _last_pass_source(run_dir, flow, step)
-            if fallback is None:
-                raise FlowError(f"upstream step is not PASS: {source_id}")
-            source, path, artifact = fallback
-        contract = source["output_contract"]
-        payload[name] = artifact.get("data")
-        bindings.append(
-            {
-                "input_name": name,
-                "source_step_id": source_id,
-                "artifact_path": relative_to(run_dir, path),
-                "artifact_id": artifact.get("artifact_id"),
-                "artifact_sha256": sha256_file(path),
-                "contract": contract,
-                "status": "PASS",
-            }
+        path = chosen_output_path(run_dir, source_id)
+        load_chosen_output(run_dir, source_id)
+        payload[name] = resolve_chosen_output(
+            run_dir,
+            source_id,
+            output_id=output_id,
+            member_id=member_id,
         )
+        binding = {
+            "input_name": name,
+            "source_step_id": source_id,
+            "chosen_output_path": relative_to(run_dir, path),
+            "contract": contract,
+            "status": "chosen",
+        }
+        if output_id:
+            binding["output"] = output_id
+        if member_id:
+            binding["member"] = member_id
+        bindings.append(binding)
     return payload, bindings
 
 
@@ -804,9 +923,10 @@ def invoke_tool(
     input_data: dict[str, Any],
     draft: dict[str, Any] | None,
     task: dict[str, Any],
+    run_dir: Path,
 ) -> dict[str, Any]:
     module = load_tool(skill_dir, step)
-    return module.run(input_data, draft=draft, task=task)
+    return module.run(input_data, draft=draft, task=task, run_dir=run_dir)
 
 
 def make_envelope(
@@ -820,16 +940,19 @@ def make_envelope(
     bindings: list[dict[str, Any]],
     fingerprint: str,
     blockers: list[str],
+    chosen_output: str | None,
 ) -> dict[str, Any]:
     return {
-        "schema": step["output_contract"],
+        "schema": ENVELOPE_SCHEMA,
         "artifact_id": f"{step['output_contract']}:{run_id}:{step['id']}",
         "run_id": run_id,
         "flow_id": flow["flow_id"],
         "flow_version": flow["version"],
         "step_id": step["id"],
+        "output_contract": step["output_contract"],
         "status": status,
         "data": data,
+        "chosen_output": chosen_output,
         "evidence": {
             "handler": step["handler"].replace("\\", "/"),
             "model": step["model"],
@@ -870,7 +993,7 @@ def is_stub_output_schema(schema: dict[str, Any]) -> bool:
     return list(required) == ["ok"] and set(properties) <= {"ok"}
 
 
-ASSET_KINDS = ("file", "image", "json", "data")
+ASSET_KINDS = ("file", "image", "video", "audio", "json", "data")
 
 
 def is_passthrough_schema(schema: dict[str, Any] | None) -> bool:
@@ -925,7 +1048,7 @@ def file_asset_schema(step_id: str) -> dict[str, Any]:
             "asset": {
                 "type": "object",
                 "additionalProperties": False,
-                "required": ["path", "sha256"],
+                "required": ["path"],
                 "properties": {
                     "path": {"type": "string", "minLength": 1},
                     "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
@@ -954,7 +1077,7 @@ def harness_output_schema(
             closed["required"] = [str(key) for key in (closed.get("properties") or {})]
         return closed, infer_asset_kind(closed, fallback=kind or "json")
     resolved = kind if kind in ASSET_KINDS else "file"
-    if resolved in {"file", "image"}:
+    if resolved in {"file", "image", "video", "audio"}:
         return file_asset_schema(step_id), resolved
     return (
         {

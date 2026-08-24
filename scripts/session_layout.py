@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import mimetypes
+import re
 import secrets
 import shutil
 from datetime import datetime, timezone
@@ -22,6 +24,10 @@ def default_run_dir(codebase: Path, flow_id: str) -> Path:
 def _kind_ext(kind: str) -> str:
     if kind == "image":
         return "png"
+    if kind == "video":
+        return "mp4"
+    if kind == "audio":
+        return "mp3"
     if kind in {"json", "data"}:
         return "json"
     return "bin"
@@ -33,7 +39,7 @@ def slot_rel(step_id: str, *, kind: str = "file", item_index: int | None = None,
         return f"milestones/{step_id}/items/{int(item_index):03d}/files/asset.{ext}"
     if attempt is not None:
         return f"milestones/{step_id}/work/attempts/{int(attempt):02d}/files/asset.{ext}"
-    return f"milestones/{step_id}/out/files/asset.{ext}"
+    return f"milestones/{step_id}/work/candidate/files/asset.{ext}"
 
 
 def ensure_session_tree(run_dir: Path, flow: dict[str, Any]) -> None:
@@ -46,7 +52,7 @@ def ensure_session_tree(run_dir: Path, flow: dict[str, Any]) -> None:
             continue
         (run_dir / "milestones" / mid / "in").mkdir(parents=True, exist_ok=True)
         (run_dir / "milestones" / mid / "work" / "attempts").mkdir(parents=True, exist_ok=True)
-        (run_dir / "milestones" / mid / "out" / "files").mkdir(parents=True, exist_ok=True)
+        (run_dir / "milestones" / mid / "out" / "members").mkdir(parents=True, exist_ok=True)
         if str(step.get("loop") or "none") == "for" or step.get("on_cycle") or step.get("cycle"):
             (run_dir / "milestones" / mid / "items").mkdir(parents=True, exist_ok=True)
         cycle = step.get("cycle") if isinstance(step.get("cycle"), dict) else None
@@ -66,6 +72,247 @@ def ensure_session_tree(run_dir: Path, flow: dict[str, Any]) -> None:
             },
             overwrite=False,
         )
+    freeze_run_roster(run_dir, flow)
+
+
+def chosen_output_path(run_dir: Path, milestone_id: str) -> Path:
+    return Path(run_dir) / "milestones" / str(milestone_id) / "out" / "chosen-output.json"
+
+
+def judge_receipt_path(run_dir: Path, milestone_id: str) -> Path:
+    return Path(run_dir) / "milestones" / str(milestone_id) / "out" / "judge-receipt.json"
+
+
+def _candidate_value(item: Any) -> Any:
+    if isinstance(item, dict) and "value" in item:
+        return item["value"]
+    if isinstance(item, dict) and {"id", "name"} <= set(item):
+        return {key: value for key, value in item.items() if key not in {"id", "name"}}
+    return item
+
+
+def _candidate_file(run_dir: Path, item: Any) -> Path:
+    raw: Any = item
+    if isinstance(item, dict):
+        raw = item.get("path")
+        if raw is None and isinstance(item.get("value"), dict):
+            raw = item["value"].get("path")
+        if raw is None and isinstance(item.get("value"), str):
+            raw = item["value"]
+        if raw is None:
+            raw = _first_file(item)
+    if not isinstance(raw, str) or not raw.strip():
+        raise FlowError("chosen file/media member needs a path")
+    path = Path(raw)
+    if not path.is_file():
+        path = Path(run_dir) / raw
+    if not path.is_file():
+        raise FlowError(f"chosen file/media member does not exist: {raw}")
+    return path.resolve()
+
+
+def _member_extension(path: Path, kind: str) -> str:
+    suffix = path.suffix.lower().lstrip(".")
+    if suffix and re.fullmatch(r"[a-z0-9]{1,10}", suffix):
+        return suffix
+    return _kind_ext(kind)
+
+
+def materialize_chosen_output(
+    run_dir: Path,
+    flow: dict[str, Any],
+    step: dict[str, Any],
+    result: dict[str, Any],
+    *,
+    receipt: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Commit one judge-approved candidate as this milestone's only chosen bundle."""
+    run_dir = Path(run_dir).resolve()
+    target = chosen_output_path(run_dir, step["id"])
+    if target.exists():
+        raise FlowError(f"{step['id']}: chosen output already exists; use --replace-milestone")
+    candidate_outputs = result.get("outputs")
+    if not isinstance(candidate_outputs, dict):
+        raise FlowError(f"{step['id']}: candidate must return an outputs object")
+    declared = step.get("outputs") or []
+    declared_ids = {str(item.get("id") or "") for item in declared}
+    unknown = sorted(set(candidate_outputs) - declared_ids)
+    if unknown:
+        raise FlowError(f"{step['id']}: candidate returned undeclared outputs: {unknown}")
+
+    out_dir = target.parent
+    members_root = out_dir / "members"
+    members_root.mkdir(parents=True, exist_ok=True)
+    manifest_outputs: list[dict[str, Any]] = []
+    manifest_members: list[dict[str, Any]] = []
+    seen_members: set[str] = set()
+
+    for declaration in declared:
+        output_id = str(declaration["id"])
+        cardinality = str(declaration["cardinality"])
+        kind = str(declaration["kind"])
+        present = output_id in candidate_outputs and candidate_outputs[output_id] is not None
+        if not present:
+            if declaration.get("required"):
+                raise FlowError(f"{step['id']}: required output {output_id} is missing")
+            continue
+        raw = candidate_outputs[output_id]
+        values = raw if cardinality == "many" else [raw]
+        if cardinality == "many" and not isinstance(values, list):
+            raise FlowError(f"{step['id']}.{output_id}: cardinality many requires an array")
+        if declaration.get("required") and not values:
+            raise FlowError(f"{step['id']}: required output {output_id} is empty")
+        member_ids: list[str] = []
+        for index, item in enumerate(values):
+            if cardinality == "many":
+                if not isinstance(item, dict):
+                    raise FlowError(f"{step['id']}.{output_id}[{index}] needs id and name")
+                member_id = str(item.get("id") or "").strip()
+                member_name = str(item.get("name") or "").strip()
+            else:
+                member_id = output_id
+                member_name = str(declaration["name"])
+            if not re.fullmatch(r"[a-z][a-z0-9_]*", member_id):
+                raise FlowError(f"{step['id']}.{output_id}: invalid member id {member_id}")
+            if not member_name:
+                raise FlowError(f"{step['id']}.{output_id}: member {member_id} needs a name")
+            if member_id in seen_members:
+                raise FlowError(f"{step['id']}: duplicate member id {member_id}")
+            seen_members.add(member_id)
+            member_ids.append(member_id)
+            member_dir = members_root / member_id
+            member_dir.mkdir(parents=True, exist_ok=True)
+            if kind in {"json", "data"}:
+                member_path = member_dir / "asset.json"
+                write_json(member_path, _candidate_value(item), overwrite=False)
+                mime_type = "application/json"
+            else:
+                source = _candidate_file(run_dir, item)
+                member_path = member_dir / f"asset.{_member_extension(source, kind)}"
+                if source != member_path.resolve():
+                    shutil.copy2(source, member_path)
+                mime_type = mimetypes.guess_type(member_path.name)[0] or "application/octet-stream"
+            manifest_members.append(
+                {
+                    "id": member_id,
+                    "output_id": output_id,
+                    "name": member_name,
+                    "kind": kind,
+                    "path": member_path.relative_to(run_dir).as_posix(),
+                    "mime_type": mime_type,
+                    "order": len(manifest_members),
+                }
+            )
+        manifest_outputs.append(
+            {
+                "id": output_id,
+                "name": str(declaration["name"]),
+                "kind": kind,
+                "cardinality": cardinality,
+                "required": bool(declaration["required"]),
+                "member_ids": member_ids,
+            }
+        )
+
+    accepted_receipt = dict(receipt) if isinstance(receipt, dict) else {"ok": True, "mode": "schema"}
+    accepted_receipt.setdefault("ok", True)
+    receipt_path = judge_receipt_path(run_dir, step["id"])
+    write_json(receipt_path, accepted_receipt, overwrite=False)
+    manifest = {
+        "schema": "m8m_chosen_output_v1",
+        "run_id": run_dir.name,
+        "flow_id": flow["flow_id"],
+        "milestone_id": step["id"],
+        "output_contract": step["output_contract"],
+        "status": "chosen",
+        "outputs": manifest_outputs,
+        "members": manifest_members,
+        "judge_receipt": receipt_path.relative_to(run_dir).as_posix(),
+        "created_at": utc_now(),
+    }
+    write_json(target, manifest, overwrite=False)
+    return manifest
+
+
+def load_chosen_output(run_dir: Path, milestone_id: str) -> dict[str, Any]:
+    path = chosen_output_path(run_dir, milestone_id)
+    if not path.is_file():
+        raise FlowError(f"missing chosen output: {milestone_id}")
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    if manifest.get("schema") != "m8m_chosen_output_v1" or manifest.get("status") != "chosen":
+        raise FlowError(f"invalid chosen output: {milestone_id}")
+    seen: set[str] = set()
+    for member in manifest.get("members") or []:
+        member_id = str(member.get("id") or "")
+        if not member_id or member_id in seen:
+            raise FlowError(f"{milestone_id}: invalid or duplicate chosen member id {member_id}")
+        seen.add(member_id)
+        member_path = assert_in_run(run_dir, str(member.get("path") or ""))
+        if not member_path.is_file():
+            raise FlowError(f"{milestone_id}: chosen member disappeared: {member_id}")
+    receipt = assert_in_run(run_dir, str(manifest.get("judge_receipt") or ""))
+    if not receipt.is_file():
+        raise FlowError(f"{milestone_id}: chosen judge receipt disappeared")
+    return manifest
+
+
+def resolve_chosen_output(
+    run_dir: Path,
+    milestone_id: str,
+    *,
+    output_id: str | None = None,
+    member_id: str | None = None,
+) -> Any:
+    manifest = load_chosen_output(run_dir, milestone_id)
+    members = {str(item["id"]): item for item in manifest.get("members") or []}
+
+    def resolve_member(item: dict[str, Any]) -> Any:
+        path = assert_in_run(run_dir, str(item["path"]))
+        if item.get("kind") in {"json", "data"}:
+            return json.loads(path.read_text(encoding="utf-8"))
+        resolved = dict(item)
+        resolved["path"] = str(path)
+        return resolved
+
+    if member_id:
+        item = members.get(member_id)
+        if item is None or (output_id and item.get("output_id") != output_id):
+            raise FlowError(f"{milestone_id}: chosen member not found: {member_id}")
+        return resolve_member(item)
+    grouped: dict[str, Any] = {}
+    for output in manifest.get("outputs") or []:
+        oid = str(output.get("id") or "")
+        values = [resolve_member(members[mid]) for mid in output.get("member_ids") or []]
+        grouped[oid] = values if output.get("cardinality") == "many" else (values[0] if values else None)
+    if output_id:
+        if output_id not in grouped:
+            raise FlowError(f"{milestone_id}: chosen output not found: {output_id}")
+        return grouped[output_id]
+    return grouped
+
+
+def record_chosen_output(run_dir: Path, step: dict[str, Any], manifest: dict[str, Any]) -> None:
+    path = Path(run_dir) / "manifest.json"
+    data = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {
+        "schema": "m8m_run_manifest_v1",
+        "run_id": Path(run_dir).name,
+    }
+    chosen = [
+        item
+        for item in (data.get("chosen_outputs") or [])
+        if item.get("milestone") != step["id"]
+    ]
+    chosen.append(
+        {
+            "milestone": step["id"],
+            "contract": step["output_contract"],
+            "path": chosen_output_path(run_dir, step["id"]).relative_to(Path(run_dir)).as_posix(),
+            "members": [str(item.get("id") or "") for item in manifest.get("members") or []],
+        }
+    )
+    data["chosen_outputs"] = chosen
+    data["updated_at"] = utc_now()
+    write_json(path, data, overwrite=True)
 
 
 def address_for(
@@ -334,10 +581,16 @@ def purge_cycle_live(run_dir: Path, steps: list[dict[str, Any]]) -> None:
             continue
         live = run_dir / "milestones" / mid / "out"
         work = run_dir / "milestones" / mid / "work"
+        # run_flow also persists model drafts in the public work/<milestone>/
+        # slot.  A completed cycle row must never feed that draft into the
+        # next row (for example, a 1080x688 scene into a 920x978 chart row).
+        public_work = run_dir / "work" / mid
         if live.exists():
             shutil.rmtree(live, ignore_errors=True)
         if work.exists():
             shutil.rmtree(work, ignore_errors=True)
+        if public_work.exists():
+            shutil.rmtree(public_work, ignore_errors=True)
         (run_dir / "milestones" / mid / "out" / "files").mkdir(parents=True, exist_ok=True)
         (run_dir / "milestones" / mid / "work" / "attempts").mkdir(parents=True, exist_ok=True)
 
@@ -368,3 +621,240 @@ def promote_cycle_round(
             shutil.copy2(envelope, dest / "asset.json")
         prefix = f"milestones/{mid}/items/{row_id}"
     return prefix.replace("\\", "/")
+
+
+RUN_ROSTER_SCHEMA = "m8m_run_roster_v1"
+_OPEN_ROW = {"unfinished", "waiting"}
+
+
+def run_roster_path(run_dir: Path) -> Path:
+    return Path(run_dir) / "roster.json"
+
+
+def wait_draft_slot(step_id: str) -> str:
+    return f"milestones/{step_id}/work/draft.json"
+
+
+def wait_draft_path(run_dir: Path, step_id: str) -> Path:
+    return Path(run_dir) / "milestones" / str(step_id) / "work" / "draft.json"
+
+
+def load_run_roster(run_dir: Path) -> dict[str, Any] | None:
+    path = run_roster_path(run_dir)
+    if not path.is_file():
+        return None
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def save_run_roster(run_dir: Path, roster: dict[str, Any]) -> Path:
+    path = run_roster_path(run_dir)
+    payload = dict(roster)
+    payload.setdefault("schema", RUN_ROSTER_SCHEMA)
+    payload["run_id"] = Path(run_dir).name
+    payload["updated_at"] = utc_now()
+    write_json(path, payload, overwrite=True)
+    return path
+
+
+def freeze_run_roster(run_dir: Path, flow: dict[str, Any]) -> dict[str, Any]:
+    """One unfinished row per canvas milestone. Not a cycle ledger. Not a canvas node."""
+    existing = load_run_roster(run_dir)
+    if existing:
+        return existing
+    steps = flow.get("steps") or flow.get("milestones") or []
+    rows: list[dict[str, Any]] = []
+    for step in steps:
+        if not isinstance(step, dict):
+            continue
+        mid = str(step.get("id") or "")
+        if mid:
+            rows.append({"id": mid, "status": "unfinished"})
+    completed: set[str] = set()
+    skipped: set[str] = set()
+    exec_path = Path(run_dir) / "flow-execution-record.json"
+    if exec_path.is_file():
+        try:
+            record = json.loads(exec_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            record = {}
+        if isinstance(record, dict):
+            completed = {str(item.get("step_id") or "") for item in (record.get("steps") or []) if item}
+            skipped = {str(item.get("step_id") or "") for item in (record.get("skipped") or []) if item}
+    for row in rows:
+        mid = str(row.get("id") or "")
+        if mid in skipped:
+            row["status"] = "skipped"
+        elif mid in completed:
+            row["status"] = "done"
+    roster = {
+        "schema": RUN_ROSTER_SCHEMA,
+        "flow_id": flow.get("flow_id"),
+        "run_id": Path(run_dir).name,
+        "status": "running",
+        "current": "",
+        "rows": rows,
+        "created_at": utc_now(),
+    }
+    roster = _set_current(roster)
+    if not first_open_roster_row(roster):
+        roster["status"] = "complete"
+    save_run_roster(run_dir, roster)
+    return roster
+
+
+def first_open_roster_row(roster: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(roster, dict):
+        return None
+    for row in roster.get("rows") or []:
+        if isinstance(row, dict) and str(row.get("status") or "unfinished") in _OPEN_ROW:
+            return row
+    return None
+
+
+def waiting_roster_row(roster: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(roster, dict):
+        return None
+    for row in roster.get("rows") or []:
+        if isinstance(row, dict) and str(row.get("status") or "") == "waiting":
+            return row
+    return None
+
+
+def _set_current(roster: dict[str, Any]) -> dict[str, Any]:
+    nxt = first_open_roster_row(roster)
+    roster["current"] = str((nxt or {}).get("id") or "")
+    return roster
+
+
+def mark_roster_row(
+    run_dir: Path,
+    milestone_id: str,
+    *,
+    status: str,
+    slot: str | None = None,
+) -> dict[str, Any] | None:
+    roster = load_run_roster(run_dir)
+    if not roster:
+        return None
+    roster = mark_row(roster, milestone_id, status=status, slot=slot)
+    if status == "waiting":
+        roster["status"] = "paused"
+        roster["current"] = str(milestone_id)
+    else:
+        roster = _set_current(roster)
+        if roster.get("status") not in {"blocked"}:
+            if not first_open_roster_row(roster):
+                roster["status"] = "complete"
+            elif roster.get("status") == "paused" and status != "waiting":
+                roster["status"] = "running"
+            elif not roster.get("status"):
+                roster["status"] = "running"
+    save_run_roster(run_dir, roster)
+    return roster
+
+
+def pause_run(run_dir: Path, milestone_id: str, *, slot: str | None = None) -> dict[str, Any] | None:
+    return mark_roster_row(
+        run_dir,
+        milestone_id,
+        status="waiting",
+        slot=slot or wait_draft_slot(milestone_id),
+    )
+
+
+def resume_run(run_dir: Path) -> dict[str, Any] | None:
+    roster = load_run_roster(run_dir)
+    if not roster:
+        return None
+    if str(roster.get("status") or "") == "paused":
+        roster["status"] = "running"
+        save_run_roster(run_dir, roster)
+    return roster
+
+
+def reset_roster_rows(run_dir: Path, ids: set[str]) -> dict[str, Any] | None:
+    roster = load_run_roster(run_dir)
+    if not roster:
+        return None
+    for row_id in ids:
+        roster = mark_row(roster, row_id, status="unfinished")
+    roster = _set_current(roster)
+    if str(roster.get("status") or "") not in {"paused", "blocked"}:
+        roster["status"] = "running"
+    save_run_roster(run_dir, roster)
+    return roster
+
+
+def mark_roster_blocked(run_dir: Path, milestone_id: str | None = None) -> dict[str, Any] | None:
+    roster = load_run_roster(run_dir)
+    if not roster:
+        return None
+    roster["status"] = "blocked"
+    if milestone_id:
+        roster["current"] = str(milestone_id)
+    save_run_roster(run_dir, roster)
+    return roster
+
+
+def mark_roster_complete(run_dir: Path) -> dict[str, Any] | None:
+    roster = load_run_roster(run_dir)
+    if not roster:
+        return None
+    roster["status"] = "complete"
+    roster["current"] = ""
+    save_run_roster(run_dir, roster)
+    return roster
+
+
+def find_paused_run(root: Path, flow_id: str | None = None) -> Path | None:
+    """Newest paused roster under a codebase, runs folder, or the run itself."""
+    root = Path(root)
+    hits: list[tuple[str, float, Path]] = []
+
+    def consider(path: Path) -> None:
+        if not path.is_file():
+            return
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return
+        if not isinstance(data, dict) or data.get("schema") != RUN_ROSTER_SCHEMA:
+            return
+        if str(data.get("status") or "") != "paused":
+            return
+        if flow_id and str(data.get("flow_id") or "") not in {"", str(flow_id)}:
+            return
+        stamp = str(data.get("updated_at") or "")
+        try:
+            mtime = path.stat().st_mtime
+        except OSError:
+            mtime = 0.0
+        hits.append((stamp, mtime, path.parent))
+
+    consider(root / "roster.json")
+    patterns = (
+        "*/roster.json",
+        "*/*/roster.json",
+        "runs/*/roster.json",
+        "runs/*/*/roster.json",
+        "flowsteps/runs/*/roster.json",
+        "flowsteps/runs/*/*/roster.json",
+    )
+    extra: tuple[str, ...] = ()
+    if flow_id:
+        extra = (
+            f"{flow_id}/*/roster.json",
+            f"runs/{flow_id}/*/roster.json",
+            f"flowsteps/runs/{flow_id}/*/roster.json",
+        )
+    for pattern in (*patterns, *extra):
+        try:
+            found = root.glob(pattern)
+        except OSError:
+            continue
+        for path in found:
+            consider(path)
+    if not hits:
+        return None
+    hits.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    return hits[0][2]

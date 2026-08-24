@@ -1,4 +1,4 @@
-"""Generate a v3 milestone flow: seed toolbox, audit-driven YAML, product skill."""
+"""Generate a v4 milestone flow with named, judge-approved chosen outputs."""
 
 from __future__ import annotations
 
@@ -257,11 +257,91 @@ PASSTHROUGH_SCHEMA = {
 }
 
 
+def _output_declarations(spec: dict[str, Any], *, milestone_id: str, kind: str) -> list[dict[str, Any]]:
+    declared = spec.get("outputs")
+    if isinstance(declared, list) and declared:
+        outputs = []
+        for item in declared:
+            if not isinstance(item, dict):
+                raise FlowError(f"{milestone_id}.outputs must contain mappings")
+            outputs.append(
+                {
+                    "id": str(item.get("id") or ""),
+                    "name": str(item.get("name") or ""),
+                    "kind": str(item.get("kind") or kind),
+                    "cardinality": str(item.get("cardinality") or "one"),
+                    "required": bool(item.get("required", True)),
+                }
+            )
+        return outputs
+    return [
+        {
+            "id": "result",
+            "name": milestone_id.replace("_", " ").title(),
+            "kind": kind,
+            "cardinality": "one",
+            "required": True,
+        }
+    ]
+
+
+def _candidate_output_schema(
+    payload_schema: dict[str, Any],
+    *,
+    milestone_id: str,
+    outputs: list[dict[str, Any]],
+) -> dict[str, Any]:
+    payload = {
+        key: value
+        for key, value in payload_schema.items()
+        if key not in {"$schema", "$id"}
+    }
+    properties: dict[str, Any] = {}
+    required: list[str] = []
+    for index, output in enumerate(outputs):
+        output_id = str(output["id"])
+        if output.get("required"):
+            required.append(output_id)
+        if output.get("cardinality") == "many":
+            properties[output_id] = {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": True,
+                    "required": ["id", "name"],
+                    "properties": {
+                        "id": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+                        "name": {"type": "string", "minLength": 1},
+                    },
+                },
+            }
+        elif index == 0:
+            properties[output_id] = payload
+        else:
+            properties[output_id] = {}
+    return {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": f"{milestone_id}.output.schema.json",
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["outputs"],
+        "properties": {
+            "outputs": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": required,
+                "properties": properties,
+            },
+            "receipt": {"type": "object"},
+        },
+    }
+
+
 def _write_json(path: Path, value: Any, *, overwrite: bool) -> bool:
     return _write_text(path, json.dumps(value, indent=2, ensure_ascii=False) + "\n", overwrite=overwrite)
 
 
-def generate_v3_flow(
+def generate_v4_flow(
     codebase: Path,
     flow_id: str,
     milestones: list[str],
@@ -321,14 +401,29 @@ def generate_v3_flow(
             tools=spec.get("tools") or tools,
         )
         is_last = index == len(milestones) - 1
-        spec_asset = spec.get("asset") if isinstance(spec.get("asset"), dict) else {}
-        output_obj, asset_kind = harness_output_schema(
+        declared_outputs = spec.get("outputs") if isinstance(spec.get("outputs"), list) else []
+        declared_kind = ""
+        if declared_outputs and isinstance(declared_outputs[0], dict):
+            declared_kind = str(declared_outputs[0].get("kind") or "")
+        declared_asset = spec.get("asset") if isinstance(spec.get("asset"), dict) else {}
+        requested_kind = declared_kind or str(declared_asset.get("kind") or "")
+        payload_schema, asset_kind = harness_output_schema(
             spec.get("output_schema_object") if isinstance(spec.get("output_schema_object"), dict) else None,
             step_id=mid,
-            kind=str(spec_asset.get("kind") or "") or None,
+            kind=requested_kind or None,
+        )
+        output_declarations = _output_declarations(
+            spec,
+            milestone_id=mid,
+            kind=asset_kind,
+        )
+        output_obj = _candidate_output_schema(
+            payload_schema,
+            milestone_id=mid,
+            outputs=output_declarations,
         )
         if asset_kind in {"file", "image"} and "hash_bind" not in step_tools:
-            notes.append(f"{mid}: file/image asset; table may list hash_bind as a preferred FlowStep")
+            notes.append(f"{mid}: file/image output; table may list hash_bind as a preferred FlowStep")
         intel_value = spec.get("intelligence") or ("completion" if mid in intel else "none")
         on_tool_fail = spec.get("on_tool_fail") or "need_model"
         item: dict[str, Any] = {
@@ -342,18 +437,47 @@ def generate_v3_flow(
             "on_tool_fail": on_tool_fail,
             "handler": f"milestones/{mid}/assemble.py",
             "test": f"milestones/{mid}/tests/test_assemble.py",
-            "asset": {"kind": asset_kind},
+            "outputs": output_declarations,
             "draft_schema": f"milestones/{mid}/draft.schema.json",
             "_output_schema_object": output_obj,
             "_input_schema_object": spec.get("input_schema_object"),
             "_is_last": is_last,
             "_asset_kind": asset_kind,
         }
-        if previous is None:
-            item["inputs"] = spec.get("inputs") or {"request": "user.request"}
+        if isinstance(spec.get("cache"), dict):
+            item["cache"] = dict(spec["cache"])
+        if spec.get("inputs"):
+            item["inputs"] = spec["inputs"]
+        elif previous is None:
+            item["inputs"] = {"request": "user.request"}
         else:
-            item["inputs"] = spec.get("inputs") or {
-                previous["id"]: f"{previous['id']}.{previous['output_contract']}"
+            source = previous
+            on_path = str(spec.get("on_path") or "")
+            if on_path:
+                same_path = [prior for prior in items if str(prior.get("on_path") or "") == on_path]
+                if same_path:
+                    source = same_path[-1]
+                else:
+                    branch_origins = [
+                        prior
+                        for prior in items
+                        if any(
+                            isinstance(path, dict) and str(path.get("id") or "") == on_path
+                            for path in ((prior.get("branch") or {}).get("paths") or [])
+                        )
+                    ]
+                    if branch_origins:
+                        source = branch_origins[-1]
+            else:
+                join_origins = [
+                    prior
+                    for prior in items
+                    if str((prior.get("branch") or {}).get("join") or "") == mid
+                ]
+                if join_origins:
+                    source = join_origins[-1]
+            item["inputs"] = {
+                source["id"]: f"{source['id']}.{source['output_contract']}"
             }
         if intel_value != "none":
             item["model_justification"] = spec.get("model_justification") or "judgment that is not a typed transform"
@@ -424,9 +548,10 @@ def generate_v3_flow(
                 notes.append(f"{worker}: generate-new stub")
         previous = item
     flow = {
-        "schema": "flowstep_flow_v3",
+        "schema": "flowstep_flow_v4",
         "flow_id": flow_id,
         "version": 1,
+        "context_policy": "isolated",
         "max_run_seconds": 3600,
         "artifact_root": "artifacts",
         "milestones": items,
@@ -439,7 +564,7 @@ def generate_v3_flow(
         public_items.append(public)
     flow_public = dict(flow)
     flow_public["milestones"] = public_items
-    if _write_text(flow_path, yaml_dump_v3(flow_public), overwrite=overwrite or not flow_path.exists()):
+    if _write_text(flow_path, yaml_dump_v4(flow_public), overwrite=overwrite or not flow_path.exists()):
         created.append(str(flow_path))
     previous_id = None
     for item in items:
@@ -477,6 +602,7 @@ def generate_v3_flow(
             "INTELLIGENCE": item["intelligence"],
             "IS_LAST": "True" if item["_is_last"] else "False",
             "ASSET_KIND": item.get("_asset_kind") or "file",
+            "OUTPUTS_JSON": json.dumps(item.get("outputs") or []),
             "WORKER": item.get("worker") or "",
             "LOOP": item.get("loop") or "none",
         }
@@ -584,7 +710,7 @@ def generate_v3_flow(
     table_path.write_text(json.dumps(table, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     created.append(str(table_path))
     return {
-        "schema": "flowstep_harness_generate_v3",
+        "schema": "flowstep_harness_generate_v4",
         "status": "PASS",
         "harness_dir": str(harness),
         "codebase": str(Path(codebase).resolve()),
@@ -599,6 +725,10 @@ def generate_v3_flow(
         "written": created,
         "notes": notes,
     }
+
+
+# Python import compatibility only. This function now always emits v4 YAML.
+generate_v3_flow = generate_v4_flow
 
 
 def load_audit_report(path: Path) -> dict[str, Any]:
@@ -713,7 +843,7 @@ def generate_from_audit(
             "output_contract": item.get("output_contract") or f"{item['id']}_v1",
             "output_schema_object": item.get("output_schema"),
             "input_schema_object": item.get("input_schema"),
-            "asset": item.get("asset") if isinstance(item.get("asset"), dict) else None,
+            "outputs": item.get("outputs") if isinstance(item.get("outputs"), list) else None,
             "inputs": item.get("inputs"),
             "model_justification": item.get("model_justification"),
             "loop": item.get("loop"),
@@ -730,6 +860,7 @@ def generate_from_audit(
             "success": item.get("success"),
             "gem": item.get("gem"),
             "max_model_attempts": item.get("max_model_attempts"),
+            "cache": item.get("cache") if isinstance(item.get("cache"), dict) else None,
             "_gate_schemas": {
                 str(edge["when"]): edge["schema"]
                 for edge in (item.get("next") or [])
@@ -737,7 +868,7 @@ def generate_from_audit(
             },
         }
         specs.append(spec)
-    result = generate_v3_flow(
+    result = generate_v4_flow(
         codebase,
         raw_flow_id,
         [item["id"] for item in specs],
@@ -781,11 +912,12 @@ def generate_from_audit(
     return result
 
 
-def yaml_dump_v3(flow: dict[str, Any]) -> str:
+def yaml_dump_v4(flow: dict[str, Any]) -> str:
     lines = [
         f"schema: {flow['schema']}",
         f"flow_id: {flow['flow_id']}",
         f"version: {flow['version']}",
+        f"context_policy: {flow.get('context_policy', 'isolated')}",
         f"max_run_seconds: {flow['max_run_seconds']}",
         f"artifact_root: {flow['artifact_root']}",
         "milestones:",
@@ -794,14 +926,23 @@ def yaml_dump_v3(flow: dict[str, Any]) -> str:
         lines.append(f"  - id: {item['id']}")
         lines.append(f"    output_contract: {item['output_contract']}")
         lines.append(f"    output_schema: {item['output_schema']}")
-        asset_kind = ((item.get("asset") or {}).get("kind") if isinstance(item.get("asset"), dict) else None) or ""
-        if asset_kind:
-            lines.append("    asset:")
-            lines.append(f"      kind: {asset_kind}")
+        lines.append("    outputs:")
+        for output in item.get("outputs") or []:
+            lines.append(f"      - id: {output['id']}")
+            lines.append(f"        name: {json.dumps(str(output['name']), ensure_ascii=False)}")
+            lines.append(f"        kind: {output['kind']}")
+            lines.append(f"        cardinality: {output['cardinality']}")
+            lines.append(f"        required: {'true' if output.get('required') else 'false'}")
         if item.get("success"):
             lines.append(f"    success: {json.dumps(str(item['success']), ensure_ascii=False)}")
         if item.get("gem"):
             lines.append(f"    gem: {item['gem']}")
+        if isinstance(item.get("cache"), dict):
+            cache = item["cache"]
+            lines.append("    cache:")
+            lines.append(f"      reuse: {cache.get('reuse')}")
+            lines.append(f"      ttl_seconds: {cache.get('ttl_seconds')}")
+            lines.append(f"      side_effects: {cache.get('side_effects')}")
         if (
             item.get("worker")
             and item.get("loop") not in {"for", "judge"}
@@ -829,6 +970,17 @@ def yaml_dump_v3(flow: dict[str, Any]) -> str:
         if item.get("draft_schema"):
             lines.append(f"    draft_schema: {item['draft_schema']}")
         lines.append(f"    handler: {item['handler']}")
+        lines.append("    inputs:")
+        for input_name, binding in (item.get("inputs") or {}).items():
+            if isinstance(binding, str):
+                lines.append(f"      {input_name}: {binding}")
+            elif isinstance(binding, dict):
+                lines.append(f"      {input_name}:")
+                lines.append(f"        from: {binding.get('from')}")
+                if binding.get("output"):
+                    lines.append(f"        output: {binding.get('output')}")
+                if binding.get("member"):
+                    lines.append(f"        member: {binding.get('member')}")
         if item.get("loop") in {"for", "judge"}:
             lines.append(f"    loop: {item['loop']}")
             if item.get("worker"):
@@ -894,101 +1046,10 @@ def generate_harness(
     write_skill_md: bool = False,
     intelligence: list[str] | None = None,
 ) -> dict[str, Any]:
-    skill_dir = resolve_harness_dir(codebase=codebase, flow_id=flow_id, skill_dir=skill_dir)
-    assert_product_harness_location(skill_dir)
-    skill_dir.mkdir(parents=True, exist_ok=True)
-    name = skill_name or skill_dir.name
-    created: list[str] = []
-    flows_dir = skill_dir / "flows"
-    existing_flow: Path | None = None
-    if flows_dir.is_dir() and list(flows_dir.glob("*.yaml")) + list(flows_dir.glob("*.yml")):
-        try:
-            existing_flow = find_flow_path(skill_dir)
-        except FlowError:
-            existing_flow = None
-
-    if existing_flow and not step_ids:
-        flow = load_flow(skill_dir, existing_flow)
-    else:
-        if not flow_id:
-            raise FlowError("--flow-id is required when creating a flow")
-        if not FLOW_ID_RE.match(flow_id):
-            raise FlowError(f"invalid flow_id: {flow_id}")
-        if not step_ids:
-            raise FlowError("pass at least one --step")
-        for step_id in step_ids:
-            if not STEP_ID_RE.match(step_id):
-                raise FlowError(f"invalid step id: {step_id}")
-        if len(step_ids) != len(set(step_ids)):
-            raise FlowError("duplicate --step values")
-        steps = [_step_yaml(step_id) for step_id in step_ids]
-        _chain_inputs(steps)
-        intelligence_ids = set(intelligence or [])
-        unknown = sorted(intelligence_ids - set(step_ids))
-        if unknown:
-            raise FlowError(f"--intelligence names unknown steps: {unknown}")
-        for step in steps:
-            if step["id"] in intelligence_ids:
-                step["class"] = "intelligence"
-                step["model"] = "completion"
-                step["model_justification"] = "judgment that is not a typed transform"
-                step["draft_schema"] = f"steps/{step['id']}/draft.schema.json"
-        flow = {
-            "schema": "flowstep_flow_v2",
-            "flow_id": flow_id,
-            "version": 1,
-            "max_run_seconds": 3600,
-            "artifact_root": "artifacts",
-            "steps": steps,
-        }
-        flow_path = skill_dir / "flows" / f"{flow_id}.yaml"
-        if _write_text(flow_path, _dump_flow(flow), overwrite=overwrite or not flow_path.exists()):
-            created.append(str(flow_path))
-        flow["_flow_path"] = flow_path
-
-    previous_id = None
-    for step in flow["steps"]:
-        written = _write_step_package(
-            skill_dir,
-            step["id"],
-            previous_id=previous_id,
-            overwrite=overwrite,
-        )
-        if step.get("class") == "intelligence":
-            draft = skill_dir / "steps" / step["id"] / "draft.schema.json"
-            if _write_text(draft, _render("step/draft.schema.json", {"STEP_ID": step["id"]}), overwrite=overwrite):
-                written.append(str(draft))
-        created.extend(written)
-        previous_id = step["id"]
-
-    mapping = {
-        "SKILL_NAME": name,
-        "FLOW_ID": str(flow["flow_id"]),
-        "BUILDER_ROOT": str(DEFAULT_BUILDER),
-    }
-    if write_skill_md:
-        skill_md = skill_dir / "SKILL.md"
-        if _write_text(skill_md, _render("SKILL.md", mapping), overwrite=overwrite or not skill_md.exists()):
-            created.append(str(skill_md))
-    run_py = skill_dir / "scripts" / "run.py"
-    if _write_text(run_py, _render("run.py", mapping), overwrite=overwrite or not run_py.exists()):
-        created.append(str(run_py))
-
-    flow_for_table = load_flow(skill_dir, flow.get("_flow_path") or find_flow_path(skill_dir))
-    instruction = write_instruction(skill_dir, flow_for_table)
-    created.append(str(instruction))
-
-    return {
-        "schema": "flowstep_harness_generate_v2",
-        "status": "PASS",
-        "skill_dir": str(skill_dir),
-        "harness_dir": str(skill_dir),
-        "codebase": str(Path(codebase).resolve()) if codebase else None,
-        "flow_id": flow_for_table["flow_id"],
-        "steps": [step["id"] for step in flow_for_table["steps"]],
-        "instruction_path": str(instruction),
-        "written": created,
-    }
+    raise FlowError(
+        "legacy v2 harness generation was removed; regenerate with "
+        "m8m-harness-builder 2.0 using --from-audit or --milestone"
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1004,11 +1065,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--intelligence", action="append", default=[], help="Milestone ids that may NEED_MODEL.")
     parser.add_argument("--skill-name")
     parser.add_argument("--force", action="store_true")
-    parser.add_argument(
-        "--legacy-v2",
-        action="store_true",
-        help="Forbidden default. Only for the text_pipeline fixture tests.",
-    )
     parser.add_argument(
         "--write-skill-md",
         action="store_true",
@@ -1038,7 +1094,7 @@ def main(argv: list[str] | None = None) -> int:
             if not args.codebase or not args.flow_id:
                 raise FlowError("--milestone requires --codebase and --flow-id")
             tool_ids = [part.strip() for part in (args.tools or "").split(",") if part.strip()]
-            result = generate_v3_flow(
+            result = generate_v4_flow(
                 args.codebase,
                 args.flow_id,
                 args.milestones,
@@ -1052,17 +1108,9 @@ def main(argv: list[str] | None = None) -> int:
                     args.codebase, name, args.flow_id, overwrite=args.force
                 )
         elif args.steps:
-            if not args.legacy_v2:
-                raise FlowError("v2 --step is forbidden; pass --from-audit or --milestone")
-            result = generate_harness(
-                args.skill_dir,
-                codebase=args.codebase,
-                flow_id=args.flow_id,
-                step_ids=args.steps,
-                skill_name=args.skill_name,
-                overwrite=args.force,
-                write_skill_md=args.write_skill_md,
-                intelligence=args.intelligence,
+            raise FlowError(
+                "v2 --step generation was removed; regenerate with "
+                "m8m-harness-builder 2.0 using --from-audit or --milestone"
             )
         else:
             raise FlowError("pass --from-audit, --milestone, or --tool")

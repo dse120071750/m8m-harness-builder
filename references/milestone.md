@@ -1,173 +1,202 @@
 # Milestone nodes (M8M — milestone to milestone)
 
-The builder **writes** the split (chart + table + stubs). **FlowSteps and
-tools** may be sketches. **Milestones are the harness.**
+The builder writes the split. Milestones are the compulsory harness;
+FlowSteps and tools live inside them.
 
-Three words. Do not mix them.
-
-| Word | Meaning | Path |
+| Word | Meaning | Runtime role |
 | --- | --- | --- |
-| **Milestone** | Canvas node. Harness checkpoint. `this.in` **is** `previous.out`. Required asset or BLOCK. | `flowsteps/flows/<flow_id>/` |
-| **FlowStep** | Atomic goal **inside** a milestone. Prefers one tool. Table order is a guide, not a compulsory path. If the tool fails, recover like a normal agent. | listed on that milestone |
-| **Tool** | Preferred Python for that FlowStep. Optional. Builder should develop it. Generate-new is a sketch. | `flowsteps/tools/<tool_id>/` |
-
-n8n’s canvas is too stiff: every HTTP call and crop is its own node.
-Keep n8n’s good parts (typed units, reusable pieces, AI does not invent
-IO) and invert the grain:
+| **Milestone** | One canvas node with a success rule and declared output ports. | Commits exactly one chosen output bundle or BLOCKS. |
+| **FlowStep** | An atomic goal inside a milestone. | Generates or refines the current candidate. |
+| **Tool** | The preferred implementation for one FlowStep. | May be retried or replaced during candidate work. |
+| **Judge** | The milestone-specific success evaluator. | PASS commits the current candidate; rejection loops. |
 
 ```text
-n8n:     node = one action
-M8M:     node = one milestone (harness)
-         next.in = previous.out
-         FlowSteps = atomic goals *inside* that milestone (guide)
-         Tool = the one preferred Python for a FlowStep (optional)
+n8n: node = one action
+M8M: node = one milestone
+     FlowSteps = internal actions
+     declared outputs = canvas ports
+     chosen-output.json = accepted run-time port values
 ```
 
-The driver advances milestone → milestone. Crop/hash stay FlowSteps
-inside a milestone. **Judge** is a milestone (retry until ok).
-**Branch** is after a milestone. **Cycle** wraps milestones over a
-frozen ledger: pass preserves the round and updates the ledger; fail
-purges unfinished residue. Intelligence may draft; it may not set
-`ok`, `branch`, or `cycle`. Do not call these FOR or IF.
+## Milestone contract
 
-Intelligence is optional *on* a milestone (`NEED_MODEL`). It is not a
-third canvas node.
-
-## Milestone rules (the harness)
-
-A milestone is a person doing one checkpoint in a workflow:
-`source_ready`, `plan_frozen`, `assets_bound`, `cards_rendered`,
-`release_decided`. You either produced the thing or you did not.
-
-It is **not** `crop_4x5` or `fetch_record`. Those are FlowSteps (and
-tools). A name like that is a **note** on the chart, not a reason to
-refuse to draw.
-
-Each milestone declares a **required asset**. Kind is one of:
-
-| Kind | Proof |
-| --- | --- |
-| `file` | `asset.path` + `asset.sha256` |
-| `image` | same file receipt (bytes of a picture) |
-| `json` | closed JSON object with required fields (a proof, not an open bag) |
-| `data` | same as json: typed required fields |
-
-The output schema is closed (`additionalProperties: false`) and has
-`required` fields. An empty passthrough object is not a milestone.
-
-The next milestone starts **only** when this asset is produced (output
-schema PASS). That payload **is** the next milestone’s input schema.
-If the asset is missing or invalid: **BLOCK**. No semantic approval.
-No “close enough.” Intelligence may draft until the schema PASSes or
-the budget is exhausted; it may not skip the asset.
-
-YAML:
+A valid `flowstep_flow_v4` milestone declares all of:
 
 ```yaml
-- id: source_ready
-  asset:
-    kind: file
-  output_contract: source_ready_v1
-  flowsteps:
-    - id: fetch_record
-      tool: fetch_record
-    - id: hash_bind
-      tool: hash_bind
-  on_tool_fail: need_model
-```
-
-`flowsteps` is the **guide**. Try `fetch_record`, then `hash_bind`. Either
-tool may be missing or fail — then recover like a normal agent. The
-**file asset** is still compulsory.
-
-Default `on_tool_fail` is `need_model` (agent recovery). Set `BLOCKED`
-only when a tool fail must stop the run before the asset check.
-Missing the asset is always BLOCK, even after recovery.
-
-`intelligence` on a milestone is optional judgment for producing the
-asset. It is not required for tool-fail recovery, and it must not skip
-the preferred tool.
-
-## FlowStep rules (guide, not harness)
-
-- One FlowStep prefers **one** tool. The builder should develop that
-  tool (MCP fetch, table read, crop, hash, …).
-- Sequence comes from the table. Proceed in that order.
-- The tool is optional. How the FlowStep reaches the milestone goal is
-  like a normal skill.
-- If the tool fails: find a way (draft / retry / another approach).
-  Still aimed at the milestone asset.
-- Do not draw a FlowStep as a canvas node.
-
-## Toolbox rules
-
-A **tool** is the Python package. A **FlowStep** is the atomic goal that
-*prefers* that tool. Adding a missing capability means adding
-`flowsteps/tools/<id>/`, not drawing another milestone. See
-`references/tool-vs-intelligence.md`.
-
-## Rule of success (gem)
-
-Every milestone has a gem and **one worker that looks at that gem**.
-The gem is teaching, not a canvas node. The worker is developed per
-box (`<id>_judge` or a listed gate tool), not shared `ok_receipt`.
-
-- Exist boxes: worker `hash_bind` / `schema_validate`. No `loop: judge`.
-- Good boxes: `loop: judge` + named worker. Stay until `{ok}`.
-- Wait-for-response: a **milestone** (`response_ready`), not `loop: wait`.
-  Same inside: N FlowSteps + judge. No draft → pause. Gem fail → keep
-  working. Pass + asset → next. Resume via `work/draft.json`.
-- Cycle / branch keep their own receipts. Not a second milestone
-  after the doer.
-
-YAML: `success:`, `gem: references/<id>.md`, `worker:`. The product
-`SKILL.md` points at the gems. It is not the recipe book.
-
-## Cycle, judge, and branch
-
-Judge is a canvas milestone. Branch is **after** a checkpoint. Cycle
-wraps a stretch of checkpoints over a **frozen ledger**. No exclusive
-`next.when`. Skip is not BLOCK. `remaining == 0` is not the cycle gate.
-
-- **cycle:** first freeze a ledger (typed rows, resumable
-  `cycles/<id>/ledger.json`). Wrap milestones. After the last wrap
-  asset PASSes, AI drafts pass|fail. `cycle_receipt` updates the
-  ledger. Pass → preserve `items/NNN`. Fail → purge live `out/`
-  residue; the row stays unfinished so the run can resume.
-- **judge:** retry until the worker receipt is `ok: true`. Image
-  generation and spatial alignment always use this.
-- **branch:** after this milestone’s asset PASSes, AI drafts which
-  generation path to take. The worker writes `{ok, branch}`.
-- **worker:** required Python at `flowsteps/tools/<id>/`. Writes a closed
-  receipt. The model must not set `ok`, `branch`, or `cycle`.
-
-```yaml
-- id: images_bound
-  loop: for
-  ledger:
-    path: items
-    item_schema: schemas/image_item_v1.json
-    max_items: 32
-  worker: ledger_receipt
-- id: card_aligned
+- id: cards_rendered
+  success: Seven approved cards satisfy the layout and source-grounding rules.
+  output_contract: cards_rendered_v1
+  output_schema: milestones/cards_rendered/output.schema.json
+  outputs:
+    - id: cards
+      name: Approved cards
+      kind: image
+      cardinality: many
+      required: true
+    - id: render_receipt
+      name: Render receipt
+      kind: json
+      cardinality: one
+      required: true
   loop: judge
-  worker: alignment_judge
-  intelligence: image
+  worker: cards_rendered_judge
+  flowsteps:
+    - { id: render_cards, tool: render_cards }
+    - { id: compare_layout, tool: compare_layout }
+    - { id: refine_cards, tool: image_edit }
 ```
 
-Audit infers `loop: for` from a previous array with `maxItems`, and
-`loop: judge` from image/align/generate names or `intelligence: image|judge`.
-The model does not approve proceed.
+Kinds are provider-neutral: `json`, `data`, `file`, `image`, `video`, or
+`audio`. Cardinality is `one` or `many`. Every candidate collection item
+has a unique filesystem-safe `id` and a non-empty display `name`.
 
-The one chart is `planning/m8m-flowchart.md` plus
-`planning/m8m-flowchart.jpg`. The JPEG is the audit copy: humanizer
-names each milestone and FlowStep; it is portable; a person can review
-it without mermaid. Generate writes both. Every step edit (`write` /
-`mark`) rewrites both.
+A milestone is not complete merely because its handler returned. It is
+complete only when:
 
-Teaching contracts (`references/*.md` on a Codex or Claude skill) belong
-on the flow: `<repo>/flowsteps/flows/<id>/references/`. Same ownership as
-tools. The skill folder may point at them. It must not be the only copy.
+1. the current candidate satisfies its output schema;
+2. every required output and member exists;
+3. the judge accepts the declared `success` rule; and
+4. the runtime writes `out/chosen-output.json` last.
 
-A name like `crop_4x5` or `if_ready` is a **note** on the chart, not a
-reason to refuse to draw.
+Only that chosen manifest is queryable downstream. Rejected attempts may
+remain under `work/attempts`, but they are diagnostics—not candidates a
+later milestone may select.
+
+## Rule of success and candidate loop
+
+Every milestone has a gem and a dedicated worker that reads its Rule of
+success. The gem and judge sit on the milestone; neither is a second
+canvas node.
+
+```text
+FlowStep candidate work
+  → validate named outputs
+  → judge Rule of success
+       not ok: keep working, then return a new current candidate
+       ok:     commit this current candidate as the chosen bundle
+```
+
+The judge receipt has no candidate hash or lock ID. PASS is immediately
+followed by materialization, so there is no separate “candidate lock”
+entity. Missing outputs, duplicate IDs, invalid paths, missing bytes,
+schema errors, exhausted attempts, or a missing chosen manifest BLOCK.
+
+## Output bindings
+
+Bind all declared outputs:
+
+```yaml
+inputs:
+  rendered_content: cards_rendered.cards_rendered_v1
+```
+
+Bind one port, preserving one/many cardinality:
+
+```yaml
+inputs:
+  cards:
+    from: cards_rendered.cards_rendered_v1
+    output: cards
+```
+
+Bind one exact member:
+
+```yaml
+inputs:
+  hero:
+    from: cards_rendered.cards_rendered_v1
+    output: cards
+    member: hero_image
+```
+
+The canvas reads the static `outputs` declarations. The local frontend
+reads `chosen-output.json` for chosen status, ordered members, paths, and
+previews.
+
+## FlowStep rules
+
+- Keep atomic operations inside the milestone instead of multiplying
+  canvas nodes.
+- Prefer one tool per FlowStep. The sequence is a guide for producing the
+  candidate, not a substitute for the milestone success rule.
+- If a preferred tool fails, recover within the milestone when possible.
+- Generated-new tools can be implementation sketches; declared milestone
+  outputs cannot be sketches.
+- Intelligence may draft content but cannot set `ok`, `branch`, or
+  `cycle`.
+
+## Fresh context, resume, and repair
+
+Fresh is the default invocation mode. It creates a new cache-off run with
+`chat_history_allowed: false`. An `ACTION_REQUIRED` draft must come from the
+fresh no-history worker described by its context capsule, using only the
+capsule's allowlisted files. Never use prior chat or another case's assets as
+an implicit input.
+
+On resume, validate each chosen manifest and skip completed nodes without
+calling their handler or judge. Start at the first node without a valid
+chosen output. Resume names one exact run and reuses its state; it is not a
+cache hit.
+
+After an intentional workflow fix, `--continue-after-edit <id>` adopts only
+changes owned by that milestone/downstream graph, preserves compatible
+upstream chosen bundles, and invalidates the selected/downstream state.
+Milestone reordering or incompatible preserved ports requires a fresh run.
+
+Use `--replace-milestone <id>` only for intentional regeneration. It
+clears that milestone and all transitively downstream chosen/work state,
+then reruns from the selected node. The replacement is in-place: one
+current chosen bundle, no revisions. External side effects retain their
+existing idempotency contract.
+
+For a repeated goal, create an outer goal ledger and one fresh cache-off
+child run per row. The next row receives a new roster, milestone ledger, and
+model context. Repair the current row in place, or explicitly abandon it to
+create a new attempt; do not process all rows through one accumulating chat.
+
+## Optional candidate cache
+
+Cache is not milestone state. A milestone may opt in only with:
+
+```yaml
+cache: { reuse: candidate, ttl_seconds: 86400, side_effects: none }
+```
+
+The run must also enable cache. A hit is copied into this run, checked
+against the current output schema, and passed to the current judge. It is
+never directly chosen. Rejection or cache failure continues with the
+normal FlowSteps and does not consume their attempt budget.
+
+Resume of a chosen milestone never reads cache. Replacement bypasses cache
+reads for the selected/downstream nodes. Wait, branch/cycle-control, side
+effects, and legacy `loop: for` are ineligible. Cache status is attached
+metadata under `work/cache-receipt.json`; it is not a canvas node or downstream input.
+
+## Cycle, judge, branch, and wait
+
+- **judge:** retries candidate production on this milestone until the
+  named worker accepts it or the attempt budget is exhausted.
+- **branch:** runs only after the current milestone has a chosen bundle;
+  the selected path continues and other paths are skipped.
+- **cycle:** walks a frozen item ledger. A pass preserves the completed
+  item; a fail removes unfinished live residue and leaves it resumable.
+- **wait:** is a normal milestone whose roster row becomes `waiting`.
+  Resume supplies the reply, reruns its candidate/judge loop, and commits
+  a chosen bundle only when accepted.
+
+Roster and cycle ledger are state books, not canvas milestones and not
+chosen-output substitutes.
+
+## Session result
+
+```text
+milestones/<milestone_id>/out/
+  chosen-output.json
+  judge-receipt.json
+  members/<member_id>/asset.<ext>
+```
+
+JSON and data are serialized as JSON assets. File/media members are
+copied into their member folders. Member ordering follows the accepted
+candidate. The manifest contains relative paths and no selection hashes,
+lock identifiers, or revision chain.

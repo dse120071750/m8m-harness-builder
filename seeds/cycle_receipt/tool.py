@@ -1,6 +1,6 @@
 """Cycle receipt worker. AI drafts pass|fail; this tool writes the receipt.
 
-It does not treat remaining==0 as the gate. The driver updates the run ledger.
+It does not treat remaining==0 as the gate. The driver updates the cycle ledger.
 """
 
 from __future__ import annotations

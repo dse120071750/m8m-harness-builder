@@ -1,6 +1,6 @@
 ---
 name: text-pipeline
-description: Reference FlowStep v2 skill. Normalize text, segment sentences, then label the first sentence from a typed draft.
+description: Reference M8M 2.0 flowstep_flow_v4 skill with chosen JSON milestone outputs.
 ---
 
 # text-pipeline

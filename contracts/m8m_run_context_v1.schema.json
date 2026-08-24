@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "m8m_run_context_v1.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "run_id",
+    "flow_id",
+    "origin",
+    "context_policy",
+    "chat_history_allowed",
+    "cross_run_cache_mode",
+    "request_path",
+    "created_at"
+  ],
+  "properties": {
+    "schema": { "const": "m8m_run_context_v1" },
+    "run_id": { "type": "string", "minLength": 1 },
+    "flow_id": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+    "origin": { "enum": ["fresh", "goal_child"] },
+    "context_policy": { "const": "isolated" },
+    "chat_history_allowed": { "const": false },
+    "cross_run_cache_mode": { "enum": ["off", "read", "write", "read-write"] },
+    "request_path": { "const": "request.json" },
+    "parent_goal": { "type": "string", "minLength": 1 },
+    "goal_row": { "type": "string", "minLength": 1 },
+    "created_at": { "type": "string", "format": "date-time" }
+  }
+}

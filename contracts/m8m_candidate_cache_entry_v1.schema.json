@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "m8m_candidate_cache_entry_v1.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "flow_id",
+    "flow_version",
+    "milestone_id",
+    "output_contract",
+    "namespace_sha256",
+    "cache_key_sha256",
+    "input_fingerprint_sha256",
+    "implementation_fingerprint_sha256",
+    "created_at",
+    "expires_at",
+    "outputs",
+    "members"
+  ],
+  "properties": {
+    "schema": { "const": "m8m_candidate_cache_entry_v1" },
+    "flow_id": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+    "flow_version": { "type": "integer", "minimum": 1 },
+    "milestone_id": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+    "output_contract": { "type": "string", "minLength": 3 },
+    "namespace_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "cache_key_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "input_fingerprint_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "implementation_fingerprint_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "created_at": { "type": "string", "format": "date-time" },
+    "expires_at": { "type": "string", "format": "date-time" },
+    "outputs": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/output" }
+    },
+    "members": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/member" }
+    }
+  },
+  "$defs": {
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "kind", "cardinality", "required", "member_ids"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+        "name": { "type": "string", "minLength": 1 },
+        "kind": { "enum": ["json", "data", "file", "image", "video", "audio"] },
+        "cardinality": { "enum": ["one", "many"] },
+        "required": { "type": "boolean" },
+        "member_ids": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" }
+        }
+      }
+    },
+    "member": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "output_id", "name", "kind", "path", "mime_type", "order", "sha256"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+        "output_id": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+        "name": { "type": "string", "minLength": 1 },
+        "kind": { "enum": ["json", "data", "file", "image", "video", "audio"] },
+        "path": { "type": "string", "minLength": 1 },
+        "mime_type": { "type": "string", "minLength": 1 },
+        "order": { "type": "integer", "minimum": 0 },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    }
+  }
+}

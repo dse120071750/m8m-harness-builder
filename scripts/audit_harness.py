@@ -18,8 +18,10 @@ from flowstep_runtime import (
     TOOL_ID_HINTS,
     FlowError,
     add_harness_location_args,
+    cache_side_effect_risk,
     harness_dir_from_args,
     infer_asset_kind,
+    is_builder_fixture,
     is_stub_output_schema,
     normalize_flowsteps,
     is_under_home_skills,
@@ -30,7 +32,7 @@ from flowstep_runtime import (
 )
 from flowstep_tools import infer_codebase, tools_root, validate_library_tool
 from m8m_flowchart import write_flowchart
-from milestone_pair import needs_judge, pair_milestone
+from milestone_pair import is_wait_milestone, needs_judge, pair_milestone
 from teaching_contracts import build_teaching_plan, render_teaching_plan_markdown
 from toolbox_plan import build_toolbox_plan, render_toolbox_plan_markdown
 from tool_vs_intelligence import from_audit as classification_from_audit
@@ -49,6 +51,7 @@ TOOLBOX_RE = re.compile(r"flowsteps[/\\]tools[/\\]([a-z][a-z0-9_]*)")
 MILESTONE_LINE_RE = re.compile(r"^\d+\.\s+`([a-z][a-z0-9_]*)`")
 DRIVER_STEMS = {
     "audit_harness",
+    "candidate_cache",
     "emit_step",
     "flowstep_instruction",
     "flowstep_runtime",
@@ -56,7 +59,9 @@ DRIVER_STEMS = {
     "generate_harness",
     "run",
     "run_flow",
+    "run_goal",
     "run_flow_sequence",
+    "m8m_cache",
     "m8m_flowchart",
     "toolbox_plan",
     "teaching_contracts",
@@ -81,7 +86,18 @@ ACTION_HINTS = TOOL_ID_HINTS + (
     "release",
 )
 INTEL_HINTS = INTEL_ID_HINTS + ("label", "caption", "plan", "select")
-ENVELOPE_CONTRACTS = {"flowstep_output_v2", "flow_sequence_action_v2", "file_ref_v2"}
+ENVELOPE_CONTRACTS = {
+    "flowstep_flow_v4",
+    "flowstep_output_v3",
+    "m8m_chosen_output_v1",
+    "m8m_candidate_cache_entry_v1",
+    "m8m_cache_receipt_v1",
+    "m8m_run_context_v1",
+    "m8m_context_capsule_v1",
+    "m8m_goal_ledger_v1",
+    "flow_sequence_action_v2",
+    "file_ref_v2",
+}
 BUCKETS = (
     ("source_ready", ("fetch", "ingest", "load", "query", "resolve", "bootstrap", "normalize", "source"), "none"),
     ("plan_frozen", ("plan", "select", "choose", "label", "draft", "candidate", "describe"), "completion"),
@@ -442,23 +458,18 @@ def audit_harness(root: Path) -> dict[str, Any]:
     if infer_codebase(root) is not None:
         location = "flowsteps_flow"
 
-    if flow_schema == "flowstep_flow_v1":
+    if flow_schema in {"flowstep_flow_v1", "flowstep_flow_v2", "flowstep_flow_v3"}:
         findings.append(
             {
                 "severity": "P0",
                 "id": "schema",
-                "note": "v1 worker/in_process harness; not a milestone+toolbox flow",
+                "note": (
+                    f"{flow_schema} has no chosen milestone outputs; regenerate with "
+                    "m8m-harness-builder 2.0"
+                ),
             }
         )
-    elif flow_schema == FLOW_SCHEMA:
-        findings.append(
-            {
-                "severity": "P1",
-                "id": "schema",
-                "note": "v2 one-step-one-script; upgrade to v3 milestones that call flowsteps/tools",
-            }
-        )
-    elif flow_schema != FLOW_SCHEMA_V3:
+    elif flow_schema != FLOW_SCHEMA:
         findings.append({"severity": "P0", "id": "schema", "note": f"unknown schema {flow_schema}"})
 
     if raw.get("persistent_worker") or raw.get("max_subagent_roles"):
@@ -472,12 +483,12 @@ def audit_harness(root: Path) -> dict[str, Any]:
     if int(raw.get("max_run_repair_cycles") or 0) > 0:
         findings.append({"severity": "P1", "id": "repair", "note": "repair loops are forbidden"})
 
-    if location == "home_skill" and flow_schema == FLOW_SCHEMA_V3:
+    if location == "home_skill" and flow_schema == FLOW_SCHEMA and not is_builder_fixture(root):
         findings.append(
             {
                 "severity": "P0",
                 "id": "location",
-                "note": "v3 product flow must live under <repo>/flowsteps/flows/<id>, not ~/.codex/skills or ~/.claude/skills",
+                "note": "v4 product flow must live under <repo>/flowsteps/flows/<id>, not ~/.codex/skills or ~/.claude/skills",
             }
         )
 
@@ -513,6 +524,9 @@ def audit_harness(root: Path) -> dict[str, Any]:
             "output_contract": item.get("output_contract"),
             "input_schema": item.get("input_schema"),
             "output_schema": item.get("output_schema"),
+            "outputs": item.get("outputs") if isinstance(item.get("outputs"), list) else [],
+            "success": item.get("success"),
+            "flowsteps": item.get("flowsteps") if isinstance(item.get("flowsteps"), list) else [],
             "tools": tools,
             "intelligence": intel if intel is not None else item.get("model", "none"),
             "model": item.get("model"),
@@ -521,6 +535,7 @@ def audit_harness(root: Path) -> dict[str, Any]:
             "next": item.get("next"),
             "else": item.get("else"),
             "foreach": item.get("foreach"),
+            "cache": item.get("cache") if isinstance(item.get("cache"), dict) else None,
             "issues": [],
         }
         if item.get("next"):
@@ -542,7 +557,7 @@ def audit_harness(root: Path) -> dict[str, Any]:
             if runner:
                 row["issues"].append(f"local handler {runner} is flow-private; promote reusable work to flowsteps/tools")
                 findings.append({"severity": "P1", "id": step_id, "note": row["issues"][-1]})
-        if flow_schema == FLOW_SCHEMA_V3:
+        if flow_schema == FLOW_SCHEMA:
             if not tools:
                 row["issues"].append("no toolbox listed; writer will add hash_bind or generate-new")
             for tool_id in tools:
@@ -558,15 +573,39 @@ def audit_harness(root: Path) -> dict[str, Any]:
                 row["issues"].append("name looks like control (if/loop); still drawn as a checkpoint")
             if str(item.get("loop") or "none") in {"for", "judge"} and not item.get("worker"):
                 row["issues"].append("for/judge milestone needs a repo worker for the ok/not-ok receipt")
+            if not str(item.get("success") or "").strip():
+                row["issues"].append("missing milestone success goal")
+                findings.append({"severity": "P0", "id": step_id, "note": row["issues"][-1]})
+            if not isinstance(item.get("outputs"), list) or not item.get("outputs"):
+                row["issues"].append("missing named chosen-output declarations")
+                findings.append({"severity": "P0", "id": step_id, "note": row["issues"][-1]})
+            if item.get("cache") is not None:
+                cache = item.get("cache") if isinstance(item.get("cache"), dict) else {}
+                cache_problem = ""
+                if cache.get("reuse") != "candidate":
+                    cache_problem = "cache.reuse must be candidate"
+                elif not isinstance(cache.get("ttl_seconds"), int) or cache.get("ttl_seconds", 0) < 1:
+                    cache_problem = "cache.ttl_seconds must be a positive integer"
+                elif cache.get("side_effects") != "none":
+                    cache_problem = "cache.side_effects must be none"
+                elif item.get("branch") or item.get("cycle") or str(item.get("loop") or "none") == "for" or is_wait_milestone(item):
+                    cache_problem = "wait/branch/cycle control milestones cannot use cross-run cache"
+                elif cache_side_effect_risk(item):
+                    cache_problem = (
+                        f"cache is unsafe because {cache_side_effect_risk(item)} may have external side effects"
+                    )
+                if cache_problem:
+                    row["issues"].append(cache_problem)
+                    findings.append({"severity": "P0", "id": step_id, "note": cache_problem})
         if not item.get("output_contract"):
             row["issues"].append(f"no output_contract; writer will invent {step_id or 'step'}_v1")
         step_reports.append(row)
 
     p0 = [item for item in findings if item["severity"] == "P0"]
     status = "PASS" if not p0 else "FINDINGS"
-    if flow_schema == FLOW_SCHEMA_V3 and not p0:
+    if flow_schema == FLOW_SCHEMA and not p0:
         status = "PASS"
-    elif flow_schema != FLOW_SCHEMA_V3:
+    elif flow_schema != FLOW_SCHEMA:
         status = "FINDINGS"
 
     return {
@@ -584,7 +623,7 @@ def audit_harness(root: Path) -> dict[str, Any]:
         "p1_count": len(findings) - len(p0),
         "verdict": (
             "MILESTONE_TOOLBOX"
-            if flow_schema == FLOW_SCHEMA_V3 and not p0
+            if flow_schema == FLOW_SCHEMA and not p0
             else "NEEDS_UPGRADE"
         ),
     }
@@ -603,6 +642,13 @@ def _is_action_step(step: dict[str, Any]) -> bool:
     if step.get("hint") == "tool" or _action_name(step_id):
         return True
     if str(step.get("class") or "") == "tool" and not _has_milestone_suffix(step_id):
+        return True
+    if (
+        not step.get("class")
+        and str(step.get("intelligence") or "none") == "none"
+        and step.get("handler")
+        and not _has_milestone_suffix(step_id)
+    ):
         return True
     return False
 
@@ -624,18 +670,28 @@ def _attach_schemas(root: Path, milestone: dict[str, Any]) -> dict[str, Any]:
     output_raw = _schema_from_step(root, milestone.get("output_schema_path"))
     input_summary = summarize_schema(input_raw) if input_raw else None
     output_summary = summarize_schema(output_raw) if output_raw else None
-    milestone["input_schema"] = proposed_schema_object(
+    milestone["input_schema"] = dict(input_raw) if isinstance(input_raw, dict) else proposed_schema_object(
         step_id=milestone["id"],
         kind="input",
         summary=input_summary,
         inputs=milestone.get("inputs") or {"request": "user.request"},
     )
-    milestone["output_schema"] = proposed_schema_object(
+    milestone["output_schema"] = dict(output_raw) if isinstance(output_raw, dict) else proposed_schema_object(
         step_id=milestone["id"],
         kind="output",
         summary=output_summary,
     )
-    milestone["asset"] = {"kind": infer_asset_kind(milestone["output_schema"])}
+    asset_kind = infer_asset_kind(milestone["output_schema"])
+    if not isinstance(milestone.get("outputs"), list) or not milestone.get("outputs"):
+        milestone["outputs"] = [
+            {
+                "id": "result",
+                "name": str(milestone["id"]).replace("_", " ").title(),
+                "kind": asset_kind,
+                "cardinality": "one",
+                "required": True,
+            }
+        ]
     flowsteps, tools = normalize_flowsteps(
         flowsteps=milestone.get("flowsteps"),
         tools=milestone.get("tools"),
@@ -764,7 +820,7 @@ def infer_schema_control(milestones: list[dict[str, Any]]) -> list[dict[str, Any
                     "worker": "cycle_receipt",
                     "ledger": prev["id"],
                     "start": item["id"],
-                    "pass": "current ledger row produced its asset; cycle_receipt updates the ledger",
+                    "pass": "current ledger row committed its chosen output; cycle_receipt updates the ledger",
                     "receipt_schema": f"schemas/{item['id']}_cycle_v1.json",
                     "max_rounds": int(picked.get("max_items") or 8),
                 }
@@ -979,6 +1035,9 @@ def propose_from_flow(root: Path, grade: dict[str, Any]) -> tuple[list[dict[str,
             "input_schema_path": first.get("input_schema"),
             "output_schema_path": last.get("output_schema"),
             "inspects": "bound source / first typed payload",
+            "outputs": last.get("outputs"),
+            "success": last.get("success"),
+            "cache": last.get("cache") if isinstance(last.get("cache"), dict) else None,
         }
         flush_pending(row)
         milestones.append(_attach_schemas(root, row))
@@ -1014,6 +1073,10 @@ def propose_from_flow(root: Path, grade: dict[str, Any]) -> tuple[list[dict[str,
             "input_schema_path": step.get("input_schema"),
             "output_schema_path": step.get("output_schema"),
             "inspects": f"PASS payload `{step.get('output_contract') or milestone_id}`",
+            "outputs": step.get("outputs"),
+            "success": step.get("success"),
+            "cache": step.get("cache") if isinstance(step.get("cache"), dict) else None,
+            "flowsteps": step.get("flowsteps"),
         }
         if step.get("next"):
             row["next"] = step["next"]
@@ -1045,6 +1108,9 @@ def propose_from_flow(root: Path, grade: dict[str, Any]) -> tuple[list[dict[str,
             "input_schema_path": pending[0].get("input_schema"),
             "output_schema_path": last.get("output_schema"),
             "inspects": "bound source / first typed payload",
+            "outputs": last.get("outputs"),
+            "success": last.get("success"),
+            "cache": last.get("cache") if isinstance(last.get("cache"), dict) else None,
         }
         flush_pending(row)
         milestones.append(_attach_schemas(root, row))
@@ -1217,10 +1283,10 @@ def goal_text(inventory: dict[str, Any], grade: dict[str, Any], milestones: list
         shape = "This skill has no FlowStep YAML; work lives in markdown, workers, and scripts."
     elif grade.get("flow_schema") == "flowstep_flow_v1":
         shape = "Current shape is a v1 in-process worker graph (n8n-style actions / persistent workers)."
+    elif grade.get("flow_schema") in {"flowstep_flow_v2", FLOW_SCHEMA_V3}:
+        shape = "Current shape predates chosen outputs. Regenerate it as v4 milestones."
     elif grade.get("flow_schema") == FLOW_SCHEMA:
-        shape = "Current shape is v2 one-script-per-step. Fold action scripts into milestone toolboxes."
-    elif grade.get("flow_schema") == FLOW_SCHEMA_V3:
-        shape = "Current shape is v3 milestones. Keep the checkpoints; finish Python toolbox coverage."
+        shape = "Current shape is v4 milestones with named chosen outputs."
     else:
         shape = "Current shape is not a milestone + toolbox harness."
     n_tools = len({item["id"] for item in inventory.get("scripts") or [] if item.get("standardize")})
@@ -1241,7 +1307,7 @@ def audit_skill(root: Path) -> dict[str, Any]:
     grade = audit_harness(grade_root)
     if grade.get("steps"):
         milestones, python_tools = propose_from_flow(root, grade)
-        if grade.get("flow_schema") != FLOW_SCHEMA_V3:
+        if grade.get("flow_schema") != FLOW_SCHEMA:
             extra_ms, extra_tools = propose_from_inventory(root, inventory)
             known = {item["id"] for item in milestones}
             for item in extra_ms:
@@ -1272,7 +1338,7 @@ def audit_skill(root: Path) -> dict[str, Any]:
                 "id": "judge_overuse",
                 "note": (
                     "every milestone is judge; schema PASS is success unless exists is not enough. "
-                    "Do not drop a shared judge module onto cycle, branch, or every asset."
+                    "Do not drop a shared judge module onto cycle, branch, or every milestone."
                 ),
             }
         )
@@ -1470,15 +1536,19 @@ def render_audit_markdown(report: dict[str, Any]) -> str:
     lines.extend(
         [
             "",
-            "| # | Milestone | Asset | Success | Intelligence | Python tools | Output contract | Human inspects |",
+            "| # | Milestone | Declared output ports | Success | Intelligence | Python tools | Output contract | Human inspects |",
             "| ---: | --- | --- | --- | --- | --- | --- | --- |",
         ]
     )
     for index, item in enumerate(report.get("proposed_milestones") or [], start=1):
         tools = ", ".join(f"`{tool}`" for tool in item.get("tools") or []) or "none"
-        asset = ((item.get("asset") or {}).get("kind") if isinstance(item.get("asset"), dict) else None) or "required"
+        ports = ", ".join(
+            f"`{output.get('id')}` ({output.get('kind')}, {output.get('cardinality')})"
+            for output in (item.get("outputs") or [])
+            if isinstance(output, dict)
+        ) or "missing"
         lines.append(
-            f"| {index} | `{item['id']}` | `{asset}` | {item.get('success') or ''} | `{item.get('intelligence') or 'none'}` | {tools} | "
+            f"| {index} | `{item['id']}` | {ports} | {item.get('success') or ''} | `{item.get('intelligence') or 'none'}` | {tools} | "
             f"`{item['output_contract']}` | {item.get('inspects') or ''} |"
         )
     lines.extend(
@@ -1502,8 +1572,8 @@ def render_audit_markdown(report: dict[str, Any]) -> str:
             "",
             "## Schema control",
             "",
-            "Rule of success lives on each milestone gem. Schema PASS is exist.",
-            "judge = stay on this box until the worker says the asset is good (exists ≠ good).",
+            "Rule of success lives on each milestone gem. Candidate schema PASS validates declared ports.",
+            "judge = stay on this box until the worker accepts the current candidate; only then commit chosen-output.json.",
             "cycle and branch keep their own receipts. Do not wrap them in a shared judge module.",
             "",
         ]
@@ -1622,7 +1692,9 @@ def main(argv: list[str] | None = None) -> int:
         json_path.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
         report["report_path"] = str(report_path)
         report["report_json_path"] = str(json_path)
-    print(json.dumps(report, indent=2, ensure_ascii=False))
+    # Keep the CLI machine-readable on Windows shells whose active code page
+    # cannot encode arrows or other Unicode found in audited documentation.
+    print(json.dumps(report, indent=2, ensure_ascii=True))
     return 0 if report["verdict"] == "MILESTONE_TOOLBOX" else 3
 
 

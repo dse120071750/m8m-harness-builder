@@ -20,7 +20,22 @@
     "tools": { "type": "array", "items": { "type": "string" } },
     "blockers": { "type": "array", "items": { "type": "string" } },
     "run_id": { "type": "string" },
+    "run_dir": { "type": "string" },
+    "roster_path": { "type": "string" },
+    "paused": { "type": "boolean" },
+    "on_tool_fail": { "type": "string" },
+    "context_policy": { "const": "isolated" },
+    "context_capsule_path": { "type": "string", "minLength": 1 },
     "steps": { "type": "integer", "minimum": 0 }
   },
-  "additionalProperties": false
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": { "state": { "const": "ACTION_REQUIRED" } },
+        "required": ["state"]
+      },
+      "then": { "required": ["context_policy", "context_capsule_path"] }
+    }
+  ]
 }

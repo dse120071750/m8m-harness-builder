@@ -1,26 +1,125 @@
-schema: m8m_factory_v1
+schema: flowstep_flow_v4
 flow_id: m8m_build_v1
-driver: scripts/run_m8m.py
+version: 1
+context_policy: isolated
+max_run_seconds: 3600
+artifact_root: artifacts
 milestones:
   - id: audit_complete
+    success: The source skill has a complete milestone and toolbox audit.
     output_contract: flowstep_skill_audit_v1
+    output_schema: contracts/m8m_builder_output_v1.schema.json
+    outputs:
+      - id: result
+        name: Source audit
+        kind: json
+        cardinality: one
+        required: true
+    handler: scripts/m8m_build_steps.py
+    input_schema: contracts/m8m_builder_input_v1.schema.json
+    inputs:
+      request: user.request
+    flowsteps:
+      - id: audit_source
+        tool: audit_skill
     tools: [audit_skill]
     intelligence: none
+    on_tool_fail: BLOCKED
   - id: toolbox_ready
+    success: The staged codebase contains every existing, promoted, or generated toolbox entry.
     output_contract: toolbox_install_v1
+    output_schema: contracts/m8m_builder_output_v1.schema.json
+    outputs:
+      - id: result
+        name: Staged toolbox
+        kind: json
+        cardinality: one
+        required: true
+    handler: scripts/m8m_build_steps.py
+    input_schema: contracts/m8m_builder_input_v1.schema.json
+    inputs:
+      request: user.request
+      audit:
+        from: audit_complete.flowstep_skill_audit_v1
+        output: result
+    flowsteps:
+      - id: stage_toolbox
+        tool: install_toolbox
     tools: [install_toolbox]
     intelligence: none
+    on_tool_fail: BLOCKED
   - id: flow_generated
+    success: A complete v4 workflow and product skill are staged inside this builder session.
     output_contract: flow_generate_v1
+    output_schema: contracts/m8m_builder_output_v1.schema.json
+    outputs:
+      - id: result
+        name: Staged M8M harness
+        kind: json
+        cardinality: one
+        required: true
+    handler: scripts/m8m_build_steps.py
+    input_schema: contracts/m8m_builder_input_v1.schema.json
+    inputs:
+      request: user.request
+      audit:
+        from: audit_complete.flowstep_skill_audit_v1
+        output: result
+      toolbox:
+        from: toolbox_ready.toolbox_install_v1
+        output: result
+    flowsteps:
+      - id: generate_v4_harness
+        tool: generate_from_audit
     tools: [generate_from_audit]
     intelligence: none
+    on_tool_fail: BLOCKED
   - id: harness_validated
+    success: The staged workflow loads as v4 and every declared output and portable planning artifact exists.
     output_contract: harness_validate_v1
+    output_schema: contracts/m8m_builder_output_v1.schema.json
+    outputs:
+      - id: result
+        name: Harness validation
+        kind: json
+        cardinality: one
+        required: true
+    handler: scripts/m8m_build_steps.py
+    input_schema: contracts/m8m_builder_input_v1.schema.json
+    inputs:
+      request: user.request
+      generated:
+        from: flow_generated.flow_generate_v1
+        output: result
+    flowsteps:
+      - id: validate_staged_harness
+        tool: validate_harness
     tools: [validate_harness]
     intelligence: none
-    optional: true
+    on_tool_fail: BLOCKED
   - id: skill_shipped
+    success: Only the validated staged workflow, toolbox, planning artifacts, and local pointer skill are installed.
     output_contract: product_skill_v1
+    output_schema: contracts/m8m_builder_output_v1.schema.json
+    outputs:
+      - id: result
+        name: Local installation receipt
+        kind: json
+        cardinality: one
+        required: true
+    handler: scripts/m8m_build_steps.py
+    input_schema: contracts/m8m_builder_input_v1.schema.json
+    inputs:
+      request: user.request
+      generated:
+        from: flow_generated.flow_generate_v1
+        output: result
+      validation:
+        from: harness_validated.harness_validate_v1
+        output: result
+    flowsteps:
+      - id: install_validated_skill
+        tool: ship_product_skill
     tools: [ship_product_skill]
     intelligence: none
-    last_payload: asset
+    on_tool_fail: BLOCKED

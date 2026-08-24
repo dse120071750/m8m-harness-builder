@@ -96,9 +96,10 @@ class MilestoneTests(unittest.TestCase):
                 self.assertFalse(is_passthrough_schema(schema), mid)
                 self.assertEqual(schema.get("additionalProperties"), False)
                 self.assertTrue(schema.get("required"), mid)
-                self.assertIn("kind: file", flow_text)
+                self.assertIn("outputs:", flow_text)
+                self.assertIn("cardinality: one", flow_text)
             chart = Path(result["flowchart_path"]).read_text(encoding="utf-8")
-            self.assertIn("asset:file", chart)
+            self.assertIn("out:result", chart)
             loaded = load_flow(harness)
             self.assertEqual(loaded["steps"][0]["asset"]["kind"], "file")
             self.assertTrue(loaded["steps"][0].get("flowsteps"))
@@ -116,6 +117,30 @@ class MilestoneTests(unittest.TestCase):
             self.assertEqual(loaded["steps"][0]["flowsteps"], [])
             schema = json.loads((harness / "schemas" / "source_ready_v1.json").read_text(encoding="utf-8"))
             self.assertFalse(is_passthrough_schema(schema))
+
+    def test_generator_preserves_only_explicit_cache_policy(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            codebase = Path(temp) / "repo"
+            policy = {"reuse": "candidate", "ttl_seconds": 900, "side_effects": "none"}
+            result = generate_v3_flow(
+                codebase,
+                "cache_policy_v1",
+                ["source_ready", "result_ready"],
+                tools=[],
+                milestone_specs=[
+                    {"id": "source_ready", "cache": policy},
+                    {"id": "result_ready"},
+                ],
+            )
+            harness = Path(result["harness_dir"])
+            loaded = load_flow(harness)
+            self.assertEqual(loaded["steps"][0]["cache"], policy)
+            self.assertIsNone(loaded["steps"][1]["cache"])
+            flow_text = (harness / "flow.yaml").read_text(encoding="utf-8")
+            self.assertEqual(flow_text.count("reuse: candidate"), 1)
+            chart = Path(result["flowchart_path"]).read_text(encoding="utf-8")
+            self.assertIn("cache:candidate", chart)
+            self.assertIn("TTL 900s", chart)
 
     def test_default_tool_fail_recovers_like_agent(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -166,7 +191,7 @@ class MilestoneTests(unittest.TestCase):
             blocked = advance(harness, Path(temp) / "run-miss", request_path=request)
             self.assertEqual(blocked["state"], "BLOCKED")
             self.assertTrue(
-                any("asset not produced" in item for item in blocked.get("blockers") or [])
+                any("chosen output" in item for item in blocked.get("blockers") or [])
             )
 
     def test_v3_instruction_lists_toolbox(self) -> None:
@@ -190,7 +215,7 @@ class MilestoneTests(unittest.TestCase):
             self.assertIn("source_ready", chart)
             self.assertIn("### `source_ready`", text)
             flow = load_flow(Path(result["harness_dir"]))
-            self.assertTrue(flow.get("_v3"))
+            self.assertTrue(flow.get("_v4"))
             self.assertEqual(flow["steps"][1]["intelligence"], "completion")
 
     def test_article_v3_flow_validates(self) -> None:
@@ -214,9 +239,9 @@ class MilestoneTests(unittest.TestCase):
             ],
         )
 
-    def test_v2_fixture_still_loads(self) -> None:
+    def test_v4_fixture_loads(self) -> None:
         flow = load_flow(EXAMPLE)
-        self.assertFalse(flow.get("_v3"))
+        self.assertTrue(flow.get("_v4"))
         self.assertEqual(flow["steps"][0]["id"], "ingest")
 
 

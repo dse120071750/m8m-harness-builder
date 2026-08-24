@@ -91,10 +91,10 @@ def render_instruction(
         "",
         "This file is the skill instruction. Each section is a milestone.",
         "A milestone input schema is the previous milestone output schema.",
-        "Each milestone is a harness checkpoint: a required asset (file, image, json proof, or data).",
-        "Mark DONE when that asset is produced (output schema PASS). Missing it is BLOCKED.",
+        "Each milestone declares named output ports: FlowSteps refine candidates, the judge commits one chosen bundle, and only that bundle is downstream-visible.",
+        "Mark DONE only after the judge-approved current result is materialized as chosen-output.json.",
         "FlowSteps inside a milestone are a guide: prefer one tool each, in table order.",
-        "The tool is optional. If it fails, recover like a normal agent. Do not skip the asset.",
+        "The tool is optional. If it fails, recover like a normal agent. Do not skip required named outputs.",
         "",
         f"- harness: `{skill_dir}`",
         f"- flow_id: `{flow['flow_id']}`",
@@ -118,7 +118,7 @@ def render_instruction(
         render_classification_markdown(classification_from_flow(flow)),
         "",
     ]
-    if flow.get("_v3"):
+    if flow.get("_v4"):
         lines.extend(
             [
                 "## Milestones",
@@ -243,7 +243,7 @@ def write_instruction(
         encoding="utf-8",
         newline="\n",
     )
-    if flow.get("_v3"):
+    if flow.get("_v4"):
         refresh_chart(skill_dir, flow, statuses=merged, source=source)
     return path
 

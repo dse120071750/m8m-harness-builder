@@ -15,7 +15,7 @@ def run(input_data: dict[str, Any], params: dict[str, Any] | None = None, **_: A
     else:
         gem = input_data.get("gem_path") or "the milestone gem"
         raise ValueError(
-            f"__STEP_ID__ looks at {gem} and the asset. "
+            f"__STEP_ID__ looks at {gem} and the current named-output candidate. "
             "Draft {ok: true|false} for the rule of success. This tool writes the receipt."
         )
     receipt: dict[str, Any] = {"ok": ok, "code": "pass" if ok else "fail"}

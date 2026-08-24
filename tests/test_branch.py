@@ -34,7 +34,7 @@ def _passthrough(path: Path, extra: str = "") -> None:
         "    if isinstance(draft, dict):\n"
         "        payload.update(draft)\n"
         + extra
-        + "    return payload\n",
+        + "    return {'outputs': {'result': payload}}\n",
     )
 
 
@@ -46,7 +46,8 @@ def _intake_assemble(path: Path) -> None:
             "    case_type = payload.get('case_type') or req.get('case_type') or 'restyle'\n"
             "    branch = 'floorplan_source_case' if case_type == 'source_case' else 'direct'\n"
             "    skipped = ['floorplan_source_case'] if branch == 'direct' else ['direct']\n"
-            "    return {'case_type': case_type, 'receipt': {'ok': True, 'branch': branch, 'skipped': skipped, 'reason': str(case_type)}}\n"
+            "    receipt = {'ok': True, 'branch': branch, 'skipped': skipped, 'reason': str(case_type)}\n"
+            "    return {'outputs': {'result': {'case_type': case_type, 'receipt': receipt}}, 'receipt': receipt}\n"
         ),
     )
 
@@ -189,7 +190,7 @@ class BranchRunTests(unittest.TestCase):
                 run_dir,
                 request_path=_write_request(run_dir, {"case_type": "restyle"}),
             )
-            self.assertEqual(result["state"], "COMPLETE")
+            self.assertEqual(result["state"], "COMPLETE", result)
             record = read_json(run_dir / "flow-execution-record.json")
             self.assertEqual(record.get("active_branch"), "direct")
             skipped = {item["step_id"] for item in record.get("skipped") or []}
@@ -212,7 +213,7 @@ class BranchRunTests(unittest.TestCase):
                 run_dir,
                 request_path=_write_request(run_dir, {"case_type": "source_case"}),
             )
-            self.assertEqual(result["state"], "COMPLETE")
+            self.assertEqual(result["state"], "COMPLETE", result)
             record = read_json(run_dir / "flow-execution-record.json")
             self.assertEqual(record.get("active_branch"), "floorplan_source_case")
             skipped = {item["step_id"] for item in record.get("skipped") or []}
@@ -228,7 +229,7 @@ class BranchRunTests(unittest.TestCase):
             codebase, harness = _scaffold(temp)
             _passthrough(
                 harness / "milestones" / "intake_ready" / "assemble.py",
-                extra="    return {'case_type': 'x', 'receipt': {'ok': True, 'branch': 'other', 'skipped': []}}\n",
+                extra="    receipt = {'ok': True, 'branch': 'other', 'skipped': []}\n    return {'outputs': {'result': {'case_type': 'x', 'receipt': receipt}}, 'receipt': receipt}\n",
             )
             run_dir = codebase / "runs" / "bad2"
             action = advance(harness, run_dir, request_path=_write_request(run_dir, {"case_type": "x"}))
@@ -239,7 +240,7 @@ class BranchRunTests(unittest.TestCase):
             codebase, harness = _scaffold(temp)
             _passthrough(
                 harness / "milestones" / "intake_ready" / "assemble.py",
-                extra="    return {'case_type': 'restyle'}\n",
+                extra="    return {'outputs': {'result': {'case_type': 'restyle'}}}\n",
             )
             run_dir = codebase / "runs" / "noreceipt"
             action = advance(harness, run_dir, request_path=_write_request(run_dir, {"case_type": "restyle"}))

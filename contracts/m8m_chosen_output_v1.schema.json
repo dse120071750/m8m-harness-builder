@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "m8m_chosen_output_v1.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "run_id",
+    "flow_id",
+    "milestone_id",
+    "output_contract",
+    "status",
+    "outputs",
+    "members",
+    "judge_receipt",
+    "created_at"
+  ],
+  "properties": {
+    "schema": { "const": "m8m_chosen_output_v1" },
+    "run_id": { "type": "string", "minLength": 1 },
+    "flow_id": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+    "milestone_id": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+    "output_contract": { "type": "string", "minLength": 3 },
+    "status": { "const": "chosen" },
+    "outputs": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/output" }
+    },
+    "members": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/member" }
+    },
+    "judge_receipt": { "type": "string", "minLength": 1 },
+    "created_at": { "type": "string", "format": "date-time" }
+  },
+  "$defs": {
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "kind", "cardinality", "required", "member_ids"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+        "name": { "type": "string", "minLength": 1 },
+        "kind": { "enum": ["json", "data", "file", "image", "video", "audio"] },
+        "cardinality": { "enum": ["one", "many"] },
+        "required": { "type": "boolean" },
+        "member_ids": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" }
+        }
+      }
+    },
+    "member": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "output_id", "name", "kind", "path", "mime_type", "order"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+        "output_id": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+        "name": { "type": "string", "minLength": 1 },
+        "kind": { "enum": ["json", "data", "file", "image", "video", "audio"] },
+        "path": { "type": "string", "minLength": 1 },
+        "mime_type": { "type": "string", "minLength": 1 },
+        "order": { "type": "integer", "minimum": 0 }
+      }
+    }
+  }
+}

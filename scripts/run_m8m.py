@@ -1,4 +1,4 @@
-"""Run the M8M writer: identify milestones, write chart/table, scaffold stubs."""
+"""Launch the builder's canonical v4 M8M workflow."""
 
 from __future__ import annotations
 
@@ -18,6 +18,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--flow-id")
     parser.add_argument("--skill-name")
     parser.add_argument("--force", action="store_true")
+    parser.add_argument("--run-dir", type=Path, help="Resume one exact builder session")
+    parser.add_argument("--replace-milestone", help="Replace one chosen builder milestone and its dependents")
+    parser.add_argument(
+        "--continue-after-edit",
+        help="Adopt builder workflow edits and continue from this milestone using the same run-local assets",
+    )
     return parser
 
 
@@ -30,6 +36,9 @@ def main(argv: list[str] | None = None) -> int:
             flow_id=args.flow_id,
             skill_name=args.skill_name,
             overwrite=args.force,
+            run_dir=args.run_dir,
+            replace_milestone=args.replace_milestone,
+            continue_after_edit=args.continue_after_edit,
         )
     except FlowError as exc:
         print(json.dumps({"status": "BLOCKED", "blockers": [str(exc)]}, indent=2), file=sys.stderr)

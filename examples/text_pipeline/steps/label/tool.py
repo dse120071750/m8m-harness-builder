@@ -22,4 +22,4 @@ def run(input_data: dict[str, Any], draft: dict[str, Any] | None = None, **_: An
     label = draft.get("label")
     if label not in ALLOWED:
         raise ValueError(f"draft.label must be one of {ALLOWED}")
-    return {"label": label, "sentence": sentence}
+    return {"outputs": {"result": {"label": label, "sentence": sentence}}}

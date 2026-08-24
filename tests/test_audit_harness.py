@@ -45,10 +45,65 @@ class AuditHarnessTests(unittest.TestCase):
         self.assertEqual(report["flow_schema"], "flowstep_flow_v3")
         self.assertEqual(report["p0_count"], 0)
 
-    def test_v2_fixture_is_not_milestone_toolbox(self) -> None:
+    def test_v4_fixture_is_milestone_toolbox(self) -> None:
         report = audit_harness(EXAMPLE)
-        self.assertEqual(report["verdict"], "NEEDS_UPGRADE")
-        self.assertEqual(report["flow_schema"], "flowstep_flow_v2")
+        self.assertEqual(report["verdict"], "MILESTONE_TOOLBOX")
+        self.assertEqual(report["flow_schema"], "flowstep_flow_v4")
+
+    def test_invalid_cache_policy_is_a_p0_finding(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "repo" / "flowsteps" / "flows" / "bad_cache_v1"
+            root.mkdir(parents=True)
+            (root / "flow.yaml").write_text(
+                "\n".join(
+                    [
+                        "schema: flowstep_flow_v4",
+                        "flow_id: bad_cache_v1",
+                        "version: 1",
+                        "artifact_root: artifacts",
+                        "milestones:",
+                        "  - id: result_ready",
+                        "    success: A result is ready.",
+                        "    output_contract: result_v1",
+                        "    output_schema: output.schema.json",
+                        "    outputs:",
+                        "      - {id: result, name: Result, kind: json, cardinality: one, required: true}",
+                        "    handler: assemble.py",
+                        "    input_schema: input.schema.json",
+                        "    inputs: {request: user.request}",
+                        "    intelligence: none",
+                        "    cache:",
+                        "      reuse: candidate",
+                        "      side_effects: none",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            report = audit_harness(root)
+            self.assertEqual(report["verdict"], "NEEDS_UPGRADE")
+            self.assertTrue(
+                any(
+                    item["severity"] == "P0" and "ttl_seconds" in item["note"]
+                    for item in report["findings"]
+                )
+            )
+            text = (root / "flow.yaml").read_text(encoding="utf-8")
+            text = text.replace(
+                "    cache:\n",
+                "    tools: [upload_asset]\n    cache:\n",
+            ).replace(
+                "      side_effects: none\n",
+                "      ttl_seconds: 60\n      side_effects: none\n",
+            )
+            (root / "flow.yaml").write_text(text, encoding="utf-8")
+            report = audit_harness(root)
+            self.assertTrue(
+                any(
+                    item["severity"] == "P0" and "external side effects" in item["note"]
+                    for item in report["findings"]
+                )
+            )
 
 
 class AuditWorkerTests(unittest.TestCase):
@@ -69,8 +124,10 @@ class AuditWorkerTests(unittest.TestCase):
         self.assertIn("tool_vs_intelligence", report)
         self.assertEqual(report["tool_vs_intelligence"]["schema"], "tool_vs_intelligence_table_v1")
         self.assertTrue(report["tool_vs_intelligence"]["rows"])
-        self.assertIn("sentences", source["output_schema"]["properties"])
-        self.assertIn("label", labeled["output_schema"]["properties"])
+        source_result = source["output_schema"]["properties"]["outputs"]["properties"]["result"]
+        label_result = labeled["output_schema"]["properties"]["outputs"]["properties"]["result"]
+        self.assertIn("sentences", source_result["properties"])
+        self.assertIn("label", label_result["properties"])
         self.assertIn("source_ready", labeled["inputs"])
         self.assertIn("flowsteps", labeled)
         markdown = render_audit_markdown(report)
@@ -178,7 +235,7 @@ class AuditWorkerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             report_path = Path(temp) / "flowstep-audit.md"
             code = main(["--target", str(EXAMPLE), "--write-report", str(report_path)])
-            self.assertEqual(code, 3)
+            self.assertEqual(code, 0)
             text = report_path.read_text(encoding="utf-8")
             for heading in REQUIRED_HEADINGS:
                 self.assertIn(heading, text)

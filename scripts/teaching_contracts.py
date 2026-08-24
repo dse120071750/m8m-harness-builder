@@ -6,6 +6,7 @@ import shutil
 from pathlib import Path
 from typing import Any
 
+from gem_text import render_flowstep_gem_sections
 from milestone_pair import is_wait_milestone
 
 
@@ -139,7 +140,8 @@ def write_milestone_gems(
     *,
     overwrite: bool = False,
 ) -> list[str]:
-    """One gem per milestone: rule of success lives here, not in a shared judge module."""
+    """One gem per milestone: rule of success + one prompt section per FlowStep."""
+    from flowstep_runtime import normalize_flowsteps
     from humanize_chart import success_line, title_id
 
     written: list[str] = []
@@ -155,25 +157,30 @@ def write_milestone_gems(
         dest = dest_dir / f"{mid}.md"
         if dest.exists() and not overwrite:
             continue
+        declared_outputs = item.get("outputs") if isinstance(item.get("outputs"), list) else []
         kind = str(
-            ((item.get("asset") or {}).get("kind") if isinstance(item.get("asset"), dict) else "")
-            or item.get("asset_kind")
+            ((declared_outputs[0] or {}).get("kind") if declared_outputs and isinstance(declared_outputs[0], dict) else "")
             or "required"
         )
         loop = str(item.get("loop") or "none")
         worker = str(item.get("worker") or "")
         if is_wait_milestone(item):
             judge_line = (
-                "- Loop: judge (wait). No draft yet → pause (ACTION_REQUIRED). "
-                "Gem fail → keep working on this box. Pass receipt → next. "
-                "Resume by writing work/draft.json."
+                "- Loop: judge (wait). No draft yet → pause the roster "
+                "(row waiting, session exits). Resume: find <run>/roster.json, "
+                "write milestones/<id>/work/draft.json, judge the gem. "
+                "Gem fail → keep working on this box. Pass receipt → next."
             )
         elif loop == "judge":
             judge_line = "- Loop: judge. Stay on this box until that worker receipt is ok. Exists is not enough."
         elif worker:
-            judge_line = "- Loop: none. The worker certifies the gem in one shot (exist). Not a retry loop."
+            judge_line = "- Loop: none. The worker accepts the current candidate in one shot."
         else:
-            judge_line = "- Loop: none. Exist check is the closed output schema PASS."
+            judge_line = "- Loop: none. The closed candidate schema is the default judge."
+        flowsteps, _ = normalize_flowsteps(
+            flowsteps=item.get("flowsteps"),
+            tools=item.get("tools"),
+        )
         text = (
             body.replace("__TITLE__", title_id(mid))
             .replace("__SUCCESS__", str(item.get("success") or success_line(item)))
@@ -181,6 +188,7 @@ def write_milestone_gems(
             .replace("__KIND__", kind)
             .replace("__WORKER__", worker or "—")
             .replace("__JUDGE_LINE__", judge_line)
+            .replace("__FLOWSTEP_SECTIONS__", render_flowstep_gem_sections(flowsteps))
         )
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_text(text, encoding="utf-8", newline="\n")
