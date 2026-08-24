@@ -17,6 +17,7 @@ from candidate_cache import (
     store_chosen_candidate,
     validate_cache_mode,
 )
+from gem_text import read_gem_section
 from milestone_pair import is_wait_milestone
 from schema_gate import ledger_items, read_receipt, schema_accepts
 from session_layout import (
@@ -487,6 +488,7 @@ def _recover_or_block(
 
 
 def _need_model_action(
+    skill_dir: Path,
     run_dir: Path,
     step: dict[str, Any],
     folder: Path,
@@ -494,7 +496,22 @@ def _need_model_action(
     result: dict[str, Any],
     bindings: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    request = result.get("model_request")
+    raw_request = result.get("model_request")
+    request = dict(raw_request) if isinstance(raw_request, dict) else {}
+    flowsteps = step.get("flowsteps") or []
+    fallback_flowstep = ""
+    if flowsteps:
+        first = flowsteps[0]
+        fallback_flowstep = str(first.get("id") or first.get("tool") or "") if isinstance(first, dict) else str(first)
+    flowstep_id = str(request.get("flowstep") or fallback_flowstep).strip()
+    if flowstep_id:
+        request["flowstep"] = flowstep_id
+        gem_path = skill_dir / str(step.get("gem") or f"references/{step['id']}.md")
+        section = read_gem_section(gem_path, flowstep_id)
+        instruction = str(request.get("instruction") or "").strip()
+        if section and section not in instruction:
+            request["instruction"] = f"{instruction}\n\n{section}".strip()
+        request.setdefault("gem_path", relative_to(skill_dir, gem_path) if gem_path.is_file() else str(gem_path))
     request_path = folder / "model_request.json"
     write_json(request_path, request)
     draft_path = folder / "draft.json"
@@ -591,7 +608,7 @@ def _run_handler(
                     run_dir, flow, step, bindings, fingerprint, ["NEED_MODEL requires model_request"]
                 )
             }
-        return {"action": _need_model_action(run_dir, step, folder, task, result, bindings)}
+        return {"action": _need_model_action(skill_dir, run_dir, step, folder, task, result, bindings)}
     return {"result": result}
 
 
