@@ -110,6 +110,31 @@
     "grade": { "type": "object" },
     "contracts": { "type": "array" },
     "agents": { "type": "array" },
-    "scripts": { "type": "array" }
+    "scripts": { "type": "array" },
+    "source_context": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["task", "reuse", "gaps"],
+      "properties": {
+        "task": { "type": "string" },
+        "reuse": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["canvas", "milestones", "tools", "gems"],
+          "properties": {
+            "canvas": { "type": "boolean" },
+            "flow_schema": { "type": ["string", "null"] },
+            "milestones": { "type": "array", "items": { "type": "string" } },
+            "tools": { "type": "array", "items": { "type": "string" } },
+            "gems": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        "gaps": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "runtime_ownership": { "enum": ["codebase", "builder", "mixed", "none"] },
+    "ownership_gaps": { "type": "array", "items": { "type": "string" } },
+    "builder_runtime_hits": { "type": "array", "items": { "type": "string" } },
+    "equivalence_claimed": { "type": "boolean" }
   }
 }

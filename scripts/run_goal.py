@@ -19,13 +19,24 @@ from flowstep_runtime import (
     implementation_lock,
     load_flow,
     read_json,
+    run_storage_contract_schema_path,
     utc_now,
     validate_against_schema,
     write_json,
 )
 from flowstep_tools import infer_codebase
 from run_flow import advance
-from session_layout import chosen_output_path, default_run_dir
+from runtime_release import RuntimeReleaseError, bind_runtime_to_run
+from session_layout import (
+    absolutize_request_file_refs,
+    build_run_storage_contract,
+    chosen_output_path,
+    default_harness_root,
+    default_run_dir,
+    validate_fresh_harness_root,
+    validate_fresh_run_dir,
+    validate_run_storage_contract,
+)
 
 
 ROW_ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
@@ -41,9 +52,8 @@ def _save_ledger(goal_dir: Path, ledger: dict[str, Any]) -> None:
     write_json(_ledger_path(goal_dir), ledger, overwrite=True)
 
 
-def _new_goal_dir(codebase: Path, flow_id: str) -> Path:
-    run = default_run_dir(codebase, f"goal_{flow_id}")
-    return codebase / "flowsteps" / "goals" / flow_id / run.name
+def _new_goal_dir(harness_root: Path, flow_id: str) -> Path:
+    return default_run_dir(harness_root, f"goal_{flow_id}")
 
 
 def _initialize_goal(
@@ -51,6 +61,9 @@ def _initialize_goal(
     skill_dir: Path,
     flow: dict[str, Any],
     source_path: Path | None,
+    *,
+    harness_root: Path,
+    source_code_root: Path,
 ) -> dict[str, Any]:
     ledger_path = _ledger_path(goal_dir)
     if ledger_path.is_file():
@@ -76,12 +89,17 @@ def _initialize_goal(
             {
                 "id": row_id,
                 "name": str(raw.get("name") or row_id),
-                "request": raw["request"],
+                "request": absolutize_request_file_refs(raw["request"], source_base=source_path.parent),
                 "status": "pending",
                 "attempt": 0,
             }
         )
     goal_dir.mkdir(parents=True, exist_ok=True)
+    write_json(
+        goal_dir / "run-storage-contract.json",
+        build_run_storage_contract(source_code_root, harness_root, goal_dir),
+        overwrite=False,
+    )
     shutil.copy2(source_path, goal_dir / "goal-request.json")
     lock = implementation_lock(skill_dir, flow)
     write_json(goal_dir / "implementation-lock.json", lock, overwrite=False)
@@ -139,11 +157,45 @@ def advance_goal(
     draft_path: Path | None = None,
     continue_after_edit: str | None = None,
     abandon_row: bool = False,
+    harness_root: Path | None = None,
+    source_code_root: Path | None = None,
 ) -> dict[str, Any]:
     skill_dir = skill_dir.resolve()
     goal_dir = goal_dir.resolve()
     flow = load_flow(skill_dir)
-    ledger = _initialize_goal(goal_dir, skill_dir, flow, goal_path)
+    source_root = (source_code_root or infer_codebase(skill_dir) or skill_dir).resolve()
+    existing_goal = _ledger_path(goal_dir).is_file()
+    requested_root = (harness_root or default_harness_root()).resolve()
+    storage_path = goal_dir / "run-storage-contract.json"
+    if existing_goal and storage_path.is_file():
+        goal_storage = read_json(storage_path)
+        validate_against_schema(goal_storage, run_storage_contract_schema_path())
+        validate_run_storage_contract(goal_dir, goal_storage)
+        configured_root = Path(goal_storage["execution_root"]).resolve()
+    elif existing_goal:
+        configured_root = requested_root
+    else:
+        configured_root = validate_fresh_harness_root(requested_root)
+    if not existing_goal:
+        validate_fresh_run_dir(configured_root, goal_dir)
+    try:
+        bind_runtime_to_run(
+            skill_dir,
+            goal_dir,
+            run_mode="resume" if existing_goal else "fresh",
+            executing_entrypoint=Path(__file__),
+        )
+    except RuntimeReleaseError as exc:
+        raise FlowError(str(exc)) from exc
+    ledger = _initialize_goal(
+        goal_dir,
+        skill_dir,
+        flow,
+        goal_path,
+        harness_root=configured_root,
+        source_code_root=source_root,
+    )
+    legacy_goal = not storage_path.is_file()
     if ledger.get("flow_id") != flow["flow_id"]:
         raise FlowError("goal ledger belongs to a different workflow")
     row = _current_row(ledger, allow_blocked=bool(continue_after_edit or abandon_row))
@@ -199,6 +251,20 @@ def advance_goal(
         if row["status"] == "pending":
             request_path = _start_row(goal_dir, ledger, row)
         child = Path(str(row["child_run_dir"])).resolve()
+        child_execution_root = child.parent if legacy_goal else configured_root
+        try:
+            bind_runtime_to_run(
+                skill_dir,
+                child,
+                run_mode=(
+                    "resume"
+                    if (child / "flow-execution-record.json").is_file()
+                    else "fresh"
+                ),
+                executing_entrypoint=Path(__file__),
+            )
+        except RuntimeReleaseError as exc:
+            raise FlowError(str(exc)) from exc
         action = advance(
             skill_dir,
             child,
@@ -209,6 +275,8 @@ def advance_goal(
             origin="goal_child",
             parent_goal=ledger["goal_id"],
             goal_row=row["id"],
+            harness_root=child_execution_root,
+            source_code_root=source_root,
         )
         pending_draft = None
         if adoption:
@@ -254,6 +322,11 @@ def advance_goal(
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     add_harness_location_args(parser)
+    parser.add_argument(
+        "--harness-root",
+        type=Path,
+        help="Mutable execution root (default: M8M_HARNESS_ROOT or %SystemDrive%\\NisanRuntime)",
+    )
     parser.add_argument("--goal", type=Path, help="Goal JSON with rows of {id, name, request}")
     parser.add_argument("--goal-dir", type=Path, help="Existing goal folder to resume")
     parser.add_argument("--draft", type=Path, help="Draft for the current child ACTION_REQUIRED")
@@ -267,8 +340,12 @@ def main(argv: list[str] | None = None) -> int:
     try:
         skill_dir = harness_dir_from_args(args, require_existing=True)
         flow = load_flow(skill_dir)
-        codebase = infer_codebase(skill_dir) or skill_dir
-        goal_dir = args.goal_dir or _new_goal_dir(codebase, flow["flow_id"])
+        codebase = (infer_codebase(skill_dir) or skill_dir).resolve()
+        harness_root = (args.harness_root or default_harness_root()).resolve()
+        goal_dir = args.goal_dir.resolve() if args.goal_dir else _new_goal_dir(harness_root, flow["flow_id"])
+        if not _ledger_path(goal_dir).is_file():
+            harness_root = validate_fresh_harness_root(harness_root)
+            validate_fresh_run_dir(harness_root, goal_dir)
         result = advance_goal(
             skill_dir,
             goal_dir,
@@ -276,6 +353,8 @@ def main(argv: list[str] | None = None) -> int:
             draft_path=args.draft,
             continue_after_edit=args.continue_after_edit,
             abandon_row=args.abandon_row,
+            harness_root=harness_root,
+            source_code_root=codebase,
         )
     except FlowError as exc:
         print(json.dumps({"schema": "m8m_goal_action_v1", "state": "BLOCKED", "blockers": [str(exc)]}, indent=2), file=sys.stderr)

@@ -1,0 +1,5 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "toolbox_ready_judge.input.schema.json",
+  "$ref": "../../../contracts/m8m_milestone_judge_request_v1.schema.json"
+}

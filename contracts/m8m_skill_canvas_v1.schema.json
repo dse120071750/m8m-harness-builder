@@ -1,0 +1,118 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "m8m_skill_canvas_v1.schema.json",
+  "title": "M8M skill canvas v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "flow_id",
+    "version",
+    "context_policy",
+    "workflow_contracts",
+    "entry",
+    "milestones",
+    "graph",
+    "terminal_states",
+    "observer"
+  ],
+  "properties": {
+    "schema": { "const": "m8m_skill_canvas_v1" },
+    "flow_id": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+    "version": { "type": "integer", "minimum": 1 },
+    "context_policy": { "const": "isolated" },
+    "entry": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+    "max_run_seconds": { "type": "integer", "minimum": 1 },
+    "artifact_root": { "type": "string", "minLength": 1 },
+    "implementation_dependencies": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "workflow_contracts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "request_schema",
+        "configuration_schema",
+        "result_schema",
+        "terminal_bindings"
+      ],
+      "properties": {
+        "request_schema": { "$ref": "#/$defs/schema_ref" },
+        "configuration_schema": { "$ref": "#/$defs/schema_ref" },
+        "result_schema": { "$ref": "#/$defs/schema_ref" },
+        "terminal_bindings": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "from", "output"],
+            "properties": {
+              "name": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+              "from": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_]*\\.[A-Za-z][A-Za-z0-9_.-]*$"
+              },
+              "output": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" }
+            }
+          }
+        }
+      }
+    },
+    "milestones": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" }
+    },
+    "graph": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["from", "to"],
+        "properties": {
+          "from": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+          "to": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" }
+          }
+        }
+      }
+    },
+    "terminal_states": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["success", "blocked"],
+      "properties": {
+        "success": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" }
+        },
+        "blocked": { "const": "BLOCKED" }
+      }
+    },
+    "observer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["title", "summary"],
+      "properties": {
+        "title": { "type": "string", "minLength": 1 },
+        "summary": { "type": "string", "minLength": 1 }
+      }
+    }
+  },
+  "$defs": {
+    "schema_ref": {
+      "type": "string",
+      "minLength": 6,
+      "pattern": "^(?!/)(?![A-Za-z]:)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\)(?!.*[*?\\[]).+\\.json$"
+    }
+  }
+}

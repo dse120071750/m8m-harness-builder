@@ -1,0 +1,9 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "m8m_builder_configuration_v1.schema.json",
+  "title": "M8M Builder configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "maxProperties": 0,
+  "properties": {}
+}

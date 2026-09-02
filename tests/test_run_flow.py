@@ -42,7 +42,7 @@ class RunFlowTests(unittest.TestCase):
             envelope = read_json(run_dir / "artifacts" / "label.label_v1.json")
             self.assertEqual(envelope["evidence"]["handler"], "steps/label/tool.py")
 
-    def test_invalid_draft_blocks(self) -> None:
+    def test_invalid_draft_is_recoverable_in_same_run(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             run_dir = Path(temp) / "run-2"
             request = self._request(Path(temp), "Is this a question?")
@@ -50,11 +50,43 @@ class RunFlowTests(unittest.TestCase):
             self.assertEqual(first["state"], "ACTION_REQUIRED")
             draft = Path(temp) / "draft.json"
             draft.write_text(json.dumps({"label": "poem"}), encoding="utf-8")
-            blocked = advance(EXAMPLE, run_dir, draft_path=draft)
-            self.assertEqual(blocked["state"], "BLOCKED")
-            self.assertTrue(
-                any("draft.schema.json" in item or "draft.label" in item for item in blocked["blockers"])
-            )
+            retry = advance(EXAMPLE, run_dir, draft_path=draft)
+            self.assertEqual(retry["state"], "ACTION_REQUIRED")
+            self.assertEqual(retry["step_id"], "label")
+            self.assertEqual(read_json(run_dir / "flow-execution-record.json")["status"], "IN_PROGRESS")
+
+    def test_targeted_draft_is_not_consumed_by_a_downstream_milestone(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            run_dir = Path(temp) / "run-targeted-draft"
+            request = self._request(Path(temp), "Hello, world.")
+            first = advance(EXAMPLE, run_dir, request_path=request)
+            self.assertEqual(first["step_id"], "label")
+
+            draft = Path(temp) / "draft.json"
+            draft.write_text(json.dumps({"label": "statement"}), encoding="utf-8")
+            deferred = advance(EXAMPLE, run_dir, draft_path=draft, draft_for="segment")
+
+            self.assertEqual(deferred["state"], "ACTION_REQUIRED")
+            self.assertEqual(deferred["step_id"], "label")
+            self.assertEqual(deferred["deferred_draft_for"], "segment")
+            self.assertFalse((run_dir / "artifacts" / "label.label_v1.json").is_file())
+
+            done = advance(EXAMPLE, run_dir, draft_path=draft, draft_for="label")
+            self.assertEqual(done["state"], "COMPLETE")
+
+    def test_unknown_draft_target_is_rejected_without_blocking_the_run(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            run_dir = Path(temp) / "run-unknown-draft-target"
+            request = self._request(Path(temp), "Hello, world.")
+            advance(EXAMPLE, run_dir, request_path=request)
+            draft = Path(temp) / "draft.json"
+            draft.write_text(json.dumps({"label": "statement"}), encoding="utf-8")
+
+            with self.assertRaisesRegex(FlowError, "unknown --draft-for milestone"):
+                advance(EXAMPLE, run_dir, draft_path=draft, draft_for="missing")
+
+            record = read_json(run_dir / "flow-execution-record.json")
+            self.assertEqual(record["status"], "IN_PROGRESS")
 
     def test_schema_mismatch_blocks(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

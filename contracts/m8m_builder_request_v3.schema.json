@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "m8m_builder_request_v3.schema.json",
+  "title": "M8M Builder 3 request",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["target", "codebase", "flow_id", "skill_name", "overwrite"],
+  "properties": {
+    "target": { "type": "string", "minLength": 1 },
+    "codebase": { "type": "string", "minLength": 1 },
+    "flow_id": {
+      "anyOf": [
+        { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+        { "type": "null" }
+      ]
+    },
+    "skill_name": {
+      "anyOf": [
+        { "type": "string", "minLength": 1 },
+        { "type": "null" }
+      ]
+    },
+    "overwrite": { "type": "boolean" }
+  }
+}

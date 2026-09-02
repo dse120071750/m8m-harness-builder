@@ -2,11 +2,40 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "__STEP_ID__.input.schema.json",
   "type": "object",
-  "additionalProperties": true,
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "milestone_id",
+    "attempt",
+    "max_attempts",
+    "expectation",
+    "inputs",
+    "candidate"
+  ],
   "properties": {
-    "gem_path": { "type": "string" },
-    "asset": { "type": "object" },
-    "draft": { "type": "object" },
-    "ok": { "type": "boolean" }
+    "schema": { "const": "m8m.milestone_judge_request.v1" },
+    "milestone_id": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+    "attempt": { "type": "integer", "minimum": 1 },
+    "max_attempts": { "type": "integer", "minimum": 1 },
+    "expectation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema", "milestone_id", "success", "output_contract", "output_schema_ref", "outputs"],
+      "properties": {
+        "schema": { "const": "m8m.milestone_expectation.v1" },
+        "milestone_id": { "type": "string" },
+        "success": { "type": "string", "minLength": 1 },
+        "output_contract": { "type": "string", "minLength": 1 },
+        "output_schema_ref": { "type": "string", "minLength": 1 },
+        "outputs": { "type": "array", "minItems": 1 }
+      }
+    },
+    "inputs": { "type": "object" },
+    "candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["outputs"],
+      "properties": { "outputs": { "type": "object" } }
+    }
   }
 }

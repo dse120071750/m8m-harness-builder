@@ -78,7 +78,7 @@ def _kind(node: dict[str, Any]) -> str:
 
 
 def success_line(node: dict[str, Any]) -> str:
-    """Rule of success: humanizer sentence. Explicit YAML wins."""
+    """Expectation summary for review artifacts. Explicit YAML wins."""
     explicit = str(node.get("success") or "").strip()
     if explicit:
         return explicit
@@ -87,7 +87,7 @@ def success_line(node: dict[str, Any]) -> str:
     loop = str(node.get("loop") or "none")
     extra = ""
     if loop == "judge":
-        extra += " Retry until the worker receipt is ok."
+        extra += " Retry until the semantic judge returns PASS."
     cycle = node.get("cycle") if isinstance(node.get("cycle"), dict) else None
     if cycle:
         declared = str(cycle.get("pass") or "").strip()
@@ -113,7 +113,7 @@ def humanize_milestone(node: dict[str, Any]) -> dict[str, str]:
     if loop == "for" and ledger:
         extra = f" Walks ledger `{ledger.get('path')}` until remaining is 0."
     elif loop == "judge":
-        extra = " Retry until the worker receipt is ok."
+        extra = " Retry until the semantic judge returns PASS."
     cycle = node.get("cycle") if isinstance(node.get("cycle"), dict) else None
     if cycle:
         extra = (extra + " Then cycle: pass preserves the round and updates the ledger; fail purges residue.").strip()

@@ -1,0 +1,117 @@
+{
+  "schema": "flowstep_flow_v4",
+  "flow_id": "canonical_union",
+  "version": 4,
+  "context_policy": "isolated",
+  "max_run_seconds": 900,
+  "artifact_root": "artifacts/canonical_union",
+  "implementation_dependencies": ["handlers/shared.py"],
+  "graph": {
+    "semantics": "m8m.graph.dag.v1",
+    "roots": ["source_ready"],
+    "terminal": "result_ready",
+    "edges": [
+      {"id": "source_to_result", "from": "source_ready", "to": "result_ready"}
+    ]
+  },
+  "milestones": [
+    {
+      "id": "source_ready",
+      "success": "One source record is structurally ready.",
+      "output_contract": "m8m.source.v1",
+      "output_schema": "schemas/source.schema.json",
+      "outputs": [
+        {"id": "source", "name": "Source record", "kind": "json", "cardinality": "one", "required": true}
+      ],
+      "asset": {"kind": "json"},
+      "handler": "handlers/source.py",
+      "implementation_dependencies": ["handlers/shared.py"],
+      "test": "tests/test_source.py",
+      "input_schema": "schemas/request.schema.json",
+      "inputs": {"request": "user.request"},
+      "flowsteps": [{"id": "bind_source", "tool": "bind_source@3.1.0"}],
+      "tools": ["bind_source"],
+      "intelligence": "none",
+      "execution": {
+        "candidate_executor": {"ref": "handler.canonical_union.source_ready@3.1.0"},
+        "tool_bindings": [{"tool": "bind_source", "ref": "bind_source@3.1.0"}]
+      },
+      "on_tool_fail": "retryable",
+      "max_tool_attempts": 2,
+      "side_effects": "external",
+      "phase_journal": {
+        "path": "work/source-journal.json",
+        "operator_result_path": "work/source-result.json",
+        "resume": "query_exact_operation"
+      },
+      "loop": "none",
+      "ledger": {"mode": "single"},
+      "branch": {
+        "worker": "choose_path",
+        "default": "direct",
+        "join": "result_ready",
+        "paths": [
+          {"id": "direct", "then": "result_ready"},
+          {"id": "review", "then": "result_ready"}
+        ]
+      },
+      "on_path": "direct",
+      "cycle": {
+        "id": "source_rows",
+        "worker": "row_worker",
+        "ledger": "row_ledger",
+        "start": "source_ready",
+        "join": "result_ready",
+        "max_rounds": 2,
+        "pass": "Every source row is accepted."
+      },
+      "on_cycle": "source_rows",
+      "gem": "references/source-ready.md",
+      "next": ["result_ready"],
+      "else": "result_ready",
+      "join": ["result_ready"],
+      "cache": {"reuse": "candidate", "ttl_seconds": 60, "side_effects": "none"}
+    },
+    {
+      "id": "result_ready",
+      "success": "One accepted result is ready for downstream use.",
+      "output_contract": "m8m.result.v1",
+      "output_schema": "schemas/result.schema.json",
+      "outputs": [
+        {"id": "result", "name": "Accepted result", "kind": "json", "cardinality": "one", "required": true},
+        {"id": "previews", "name": "Optional previews", "kind": "image", "cardinality": "many", "required": false}
+      ],
+      "handler": "handlers/result.py",
+      "inputs": {"source": {"from": "source_ready.m8m.source.v1", "output": "source"}},
+      "flowsteps": [{"id": "build_result", "tool": "build_result@3.1.0"}],
+      "tools": ["build_result"],
+      "intelligence": "judge",
+      "model_justification": "The declared success rule requires semantic review.",
+      "execution": {
+        "candidate_executor": {
+          "ref": "handler.canonical_union.result_ready@3.1.0",
+          "profile": {
+            "ref": "profiles/result-worker.json",
+            "model_configuration": {"model": "gpt-5", "reasoning": "medium", "temperature": 0},
+            "token_budget": {"max_input_tokens": 8000, "max_output_tokens": 2000},
+            "timeout_seconds": 120,
+            "tools": ["build_result"],
+            "capabilities": ["filesystem.read"]
+          }
+        },
+        "judge": {"ref": "judge.canonical_union.result_ready@3.1.0"},
+        "tool_bindings": [{"tool": "build_result", "ref": "build_result@3.1.0"}]
+      },
+      "draft_schema": "schemas/result-draft.schema.json",
+      "on_tool_fail": "need_model",
+      "max_model_attempts": 2,
+      "side_effects": "none",
+      "loop": "judge",
+      "worker": "judge.canonical_union.result_ready@3.1.0",
+      "judge_abi": "m8m_milestone_judge_v1",
+      "receipt_schema": "schemas/judge-receipt.schema.json",
+      "max_attempts": 3,
+      "gem": "references/result-ready.md"
+    }
+  ]
+}

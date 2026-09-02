@@ -3,10 +3,19 @@
   "$id": "__STEP_ID__.output.schema.json",
   "type": "object",
   "additionalProperties": false,
-  "required": ["ok"],
+  "required": ["decision", "reasons", "blockers"],
   "properties": {
-    "ok": { "type": "boolean" },
-    "code": { "type": "string" },
-    "gem": { "type": "string" }
+    "decision": { "enum": ["PASS", "RETRY", "BLOCKED"] },
+    "reasons": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 8,
+      "items": { "type": "string", "minLength": 1, "maxLength": 512 }
+    },
+    "blockers": {
+      "type": "array",
+      "maxItems": 8,
+      "items": { "type": "string", "minLength": 1, "maxLength": 512 }
+    }
   }
 }

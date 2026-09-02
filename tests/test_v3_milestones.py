@@ -14,6 +14,58 @@ from run_flow import advance
 from validate_harness import validate_harness
 
 
+def _closed_milestone_spec(
+    flow_id: str,
+    milestone_id: str,
+    *,
+    tool_ref: str | None = "hash_bind@1.0.0",
+    cache: dict | None = None,
+) -> dict:
+    flowsteps = []
+    tool_bindings = []
+    if tool_ref:
+        tool_id = tool_ref.rsplit("@", 1)[0]
+        flowsteps = [{"id": tool_id, "tool": tool_ref}]
+        tool_bindings = [{"tool": tool_id, "ref": tool_ref}]
+    spec = {
+        "id": milestone_id,
+        "success": f"The {milestone_id} result satisfies its declared output.",
+        "output_contract": f"m8m.{milestone_id}.v1",
+        "output_schema_object": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "$id": f"{milestone_id}.payload.schema.json",
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["path"],
+            "properties": {
+                "path": {"type": "string", "minLength": 1},
+                "sha256": {"type": "string", "minLength": 1},
+            },
+        },
+        "outputs": [
+            {
+                "id": "result",
+                "name": "Result asset",
+                "kind": "file",
+                "cardinality": "one",
+                "required": True,
+            }
+        ],
+        "flowsteps": flowsteps,
+        "tools": [item["id"] for item in flowsteps],
+        "execution": {
+            "candidate_executor": {
+                "ref": f"handler.{flow_id}.{milestone_id}@3.1.0"
+            },
+            "tool_bindings": tool_bindings,
+        },
+        "loop": "none",
+    }
+    if cache is not None:
+        spec["cache"] = dict(cache)
+    return spec
+
+
 class ToolLibraryTests(unittest.TestCase):
     def test_library_ignores_shadowed_runtime(self) -> None:
         import importlib
@@ -23,7 +75,7 @@ class ToolLibraryTests(unittest.TestCase):
         fake = types.ModuleType("flowstep_runtime")
         previous = sys.modules.get("flowstep_runtime")
         sys.modules["flowstep_runtime"] = fake
-        sys.modules.pop("flowstep_builder_runtime", None)
+        sys.modules.pop("flowstep_local_runtime", None)
         sys.modules.pop("flowstep_tools", None)
         try:
             tools = importlib.import_module("flowstep_tools")
@@ -55,10 +107,34 @@ class ToolLibraryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             codebase = Path(temp) / "repo"
             generate_tool(codebase, "hash_bind", overwrite=True)
-            first = generate_v3_flow(codebase, "flow_a_v1", ["source_ready"], tools=["hash_bind"])
-            second = generate_v3_flow(codebase, "flow_b_v1", ["assets_bound"], tools=["hash_bind"])
+            first = generate_v3_flow(
+                codebase,
+                "flow_a_v1",
+                ["source_ready"],
+                tools=["hash_bind"],
+                milestone_specs=[
+                    _closed_milestone_spec("flow_a_v1", "source_ready")
+                ],
+            )
+            second = generate_v3_flow(
+                codebase,
+                "flow_b_v1",
+                ["assets_bound"],
+                tools=["hash_bind"],
+                milestone_specs=[
+                    _closed_milestone_spec("flow_b_v1", "assets_bound")
+                ],
+            )
+            self.assertEqual(first["status"], "BUILD_REQUIRED")
+            self.assertEqual(second["status"], "BUILD_REQUIRED")
             self.assertTrue(Path(first["harness_dir"]).is_dir())
             self.assertTrue(Path(second["harness_dir"]).is_dir())
+            self.assertTrue(
+                (Path(first["harness_dir"]) / "BUILD_REQUIRED_RUNTIME").is_file()
+            )
+            self.assertTrue(
+                (Path(second["harness_dir"]) / "BUILD_REQUIRED_RUNTIME").is_file()
+            )
             self.assertTrue((codebase / "flowsteps" / "tools" / "hash_bind" / "tool.py").is_file())
             self.assertEqual(len(list((codebase / "flowsteps" / "tools").iterdir())), 1)
 
@@ -75,10 +151,20 @@ class MilestoneTests(unittest.TestCase):
     def test_crop_named_checkpoint_still_draws(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             codebase = Path(temp) / "repo"
-            result = generate_v3_flow(codebase, "bad_v1", ["crop_4x5"], tools=["hash_bind"])
-            self.assertEqual(result["status"], "PASS")
+            result = generate_v3_flow(
+                codebase,
+                "bad_v1",
+                ["crop_4x5"],
+                tools=["hash_bind"],
+                milestone_specs=[_closed_milestone_spec("bad_v1", "crop_4x5")],
+            )
+            self.assertEqual(result["status"], "BUILD_REQUIRED")
+            self.assertEqual(result["build_required_handlers"], ["crop_4x5"])
             self.assertTrue(any("crop_4x5" in note for note in result.get("notes") or []))
             self.assertTrue(Path(result["flowchart_path"]).is_file())
+            self.assertTrue(
+                (Path(result["harness_dir"]) / "BUILD_REQUIRED_RUNTIME").is_file()
+            )
 
     def test_every_milestone_has_closed_asset_schema(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -88,6 +174,10 @@ class MilestoneTests(unittest.TestCase):
                 "proof_v1",
                 ["source_ready", "plan_frozen"],
                 tools=["hash_bind"],
+                milestone_specs=[
+                    _closed_milestone_spec("proof_v1", "source_ready"),
+                    _closed_milestone_spec("proof_v1", "plan_frozen"),
+                ],
             )
             harness = Path(result["harness_dir"])
             flow_text = (harness / "flow.yaml").read_text(encoding="utf-8")
@@ -103,14 +193,27 @@ class MilestoneTests(unittest.TestCase):
             loaded = load_flow(harness)
             self.assertEqual(loaded["steps"][0]["asset"]["kind"], "file")
             self.assertTrue(loaded["steps"][0].get("flowsteps"))
-            self.assertEqual(loaded["steps"][0]["flowsteps"][0]["tool"], "hash_bind")
+            self.assertEqual(
+                loaded["steps"][0]["flowsteps"][0]["tool"],
+                "hash_bind@1.0.0",
+            )
             self.assertIn("## FlowSteps (guide)", chart)
 
     def test_empty_tools_still_draws(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             codebase = Path(temp) / "repo"
-            result = generate_v3_flow(codebase, "empty_v1", ["source_ready"], tools=[])
-            self.assertEqual(result["status"], "PASS")
+            result = generate_v3_flow(
+                codebase,
+                "empty_v1",
+                ["source_ready"],
+                tools=[],
+                milestone_specs=[
+                    _closed_milestone_spec(
+                        "empty_v1", "source_ready", tool_ref=None
+                    )
+                ],
+            )
+            self.assertEqual(result["status"], "BUILD_REQUIRED")
             harness = Path(result["harness_dir"])
             loaded = load_flow(harness)
             self.assertEqual(loaded["steps"][0]["tools"], [])
@@ -128,8 +231,15 @@ class MilestoneTests(unittest.TestCase):
                 ["source_ready", "result_ready"],
                 tools=[],
                 milestone_specs=[
-                    {"id": "source_ready", "cache": policy},
-                    {"id": "result_ready"},
+                    _closed_milestone_spec(
+                        "cache_policy_v1",
+                        "source_ready",
+                        tool_ref=None,
+                        cache=policy,
+                    ),
+                    _closed_milestone_spec(
+                        "cache_policy_v1", "result_ready", tool_ref=None
+                    ),
                 ],
             )
             harness = Path(result["harness_dir"])
@@ -146,7 +256,15 @@ class MilestoneTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             codebase = Path(temp) / "repo"
             generate_tool(codebase, "hash_bind")
-            result = generate_v3_flow(codebase, "agent_v1", ["source_ready"], tools=["hash_bind"])
+            result = generate_v3_flow(
+                codebase,
+                "agent_v1",
+                ["source_ready"],
+                tools=["hash_bind"],
+                milestone_specs=[
+                    _closed_milestone_spec("agent_v1", "source_ready")
+                ],
+            )
             harness = Path(result["harness_dir"])
             assemble = harness / "milestones" / "source_ready" / "assemble.py"
             assemble.write_text(
@@ -168,6 +286,9 @@ class MilestoneTests(unittest.TestCase):
                 ["plan_frozen"],
                 tools=["hash_bind"],
                 intelligence=["plan_frozen"],
+                milestone_specs=[
+                    _closed_milestone_spec("intel_v1", "plan_frozen")
+                ],
             )
             assemble = Path(result["harness_dir"]) / "milestones" / "plan_frozen" / "assemble.py"
             source = assemble.read_text(encoding="utf-8")
@@ -179,7 +300,15 @@ class MilestoneTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             codebase = Path(temp) / "repo"
             generate_tool(codebase, "hash_bind")
-            result = generate_v3_flow(codebase, "block_v1", ["source_ready"], tools=["hash_bind"])
+            result = generate_v3_flow(
+                codebase,
+                "block_v1",
+                ["source_ready"],
+                tools=["hash_bind"],
+                milestone_specs=[
+                    _closed_milestone_spec("block_v1", "source_ready")
+                ],
+            )
             harness = Path(result["harness_dir"])
             assemble = harness / "milestones" / "source_ready" / "assemble.py"
             assemble.write_text(
@@ -191,7 +320,10 @@ class MilestoneTests(unittest.TestCase):
             blocked = advance(harness, Path(temp) / "run-miss", request_path=request)
             self.assertEqual(blocked["state"], "BLOCKED")
             self.assertTrue(
-                any("chosen output" in item for item in blocked.get("blockers") or [])
+                any(
+                    "candidate must return an outputs object" in item
+                    for item in blocked.get("blockers") or []
+                )
             )
 
     def test_v3_instruction_lists_toolbox(self) -> None:
@@ -204,6 +336,10 @@ class MilestoneTests(unittest.TestCase):
                 ["source_ready", "assets_bound"],
                 tools=["hash_bind"],
                 intelligence=["assets_bound"],
+                milestone_specs=[
+                    _closed_milestone_spec("demo_v1", "source_ready"),
+                    _closed_milestone_spec("demo_v1", "assets_bound"),
+                ],
             )
             text = Path(result["instruction_path"]).read_text(encoding="utf-8")
             self.assertIn("planning/m8m-flowchart.md", text)

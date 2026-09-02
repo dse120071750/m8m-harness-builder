@@ -1,3 +1,8 @@
-jsonschema>=4.18
-PyYAML>=6.0
-Pillow>=10.0
+attrs==25.4.0
+jsonschema==4.26.0
+jsonschema-specifications==2025.9.1
+packaging==25.0
+PyYAML==6.0.3
+referencing==0.36.2
+rpds-py==0.30.0
+Pillow==12.1.0

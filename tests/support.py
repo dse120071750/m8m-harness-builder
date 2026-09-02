@@ -10,7 +10,6 @@ EXAMPLE = SKILL_ROOT / "examples" / "text_pipeline"
 if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
-
 def optional_product_repo() -> Path | None:
     raw = os.environ.get("M8M_PRODUCT_REPO")
     if not raw:

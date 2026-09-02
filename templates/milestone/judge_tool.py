@@ -1,4 +1,9 @@
-"""Judge worker for a milestone gem. Writes {ok}. The model may draft; it may not set ok."""
+"""Milestone-specific semantic judge scaffold.
+
+The runtime supplies a closed ``m8m.milestone_judge_request.v1`` after
+structural admission.  Implement the authored success rule here; never accept
+``decision`` from a candidate worker or model draft.
+"""
 
 from __future__ import annotations
 
@@ -7,18 +12,14 @@ from typing import Any
 
 def run(input_data: dict[str, Any], params: dict[str, Any] | None = None, **_: Any) -> dict[str, Any]:
     del params
-    draft = input_data.get("draft") if isinstance(input_data.get("draft"), dict) else {}
-    if "ok" in draft:
-        ok = bool(draft["ok"])
-    elif "ok" in input_data:
-        ok = bool(input_data["ok"])
-    else:
-        gem = input_data.get("gem_path") or "the milestone gem"
-        raise ValueError(
-            f"__STEP_ID__ looks at {gem} and the current named-output candidate. "
-            "Draft {ok: true|false} for the rule of success. This tool writes the receipt."
-        )
-    receipt: dict[str, Any] = {"ok": ok, "code": "pass" if ok else "fail"}
-    if input_data.get("gem_path"):
-        receipt["gem"] = str(input_data["gem_path"])
-    return receipt
+    if input_data.get("schema") != "m8m.milestone_judge_request.v1":
+        raise ValueError("__STEP_ID__ requires m8m.milestone_judge_request.v1")
+    if not isinstance(input_data.get("expectation"), dict):
+        raise ValueError("__STEP_ID__ requires the derived milestone expectation")
+    if not isinstance(input_data.get("candidate"), dict):
+        raise ValueError("__STEP_ID__ requires the admitted named-output candidate")
+    raise NotImplementedError(
+        "BUILD_REQUIRED: implement __STEP_ID__ semantic approval against "
+        "input_data['expectation']['success']; return exactly "
+        "{decision: PASS|RETRY|BLOCKED, reasons: [...], blockers: [...]}"
+    )

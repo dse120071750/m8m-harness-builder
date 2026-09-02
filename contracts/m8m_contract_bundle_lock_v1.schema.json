@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "m8m_contract_bundle_lock_v1.schema.json",
+  "title": "M8M contract bundle lock v1",
+  "description": "Exact identity of the normative contract bundle used by a local source compile.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "id", "digest"],
+  "properties": {
+    "schema": { "const": "m8m.contract_bundle_lock.v1" },
+    "id": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "digest": { "$ref": "#/$defs/sha256" }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    }
+  }
+}

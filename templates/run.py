@@ -1,43 +1,42 @@
-"""Delegate to $m8m-harness-builder so this skill does not fork the driver."""
+"""Point this built skill to its codebase-owned M8M launcher."""
 
 from __future__ import annotations
 
-import os
-import runpy
 import sys
+
+
+# A normal script launch prepends this product skill's scripts directory to
+# sys.path. Re-exec through the platform builtin before importing any non-builtin
+# module so a sibling hashlib.py/subprocess.py cannot run before verification.
+if not sys.flags.isolated:
+    _platform = __import__("nt" if "nt" in sys.builtin_module_names else "posix")
+    _arguments = [sys.executable, "-I", "-B", __file__, *sys.argv[1:]]
+    if hasattr(_platform, "spawnv"):
+        raise SystemExit(_platform.spawnv(0, sys.executable, _arguments))
+    _platform.execv(sys.executable, _arguments)
+    raise SystemExit("M8M isolated bootstrap exec unexpectedly returned")
+
+import hashlib
+import subprocess
 from pathlib import Path
 
-SKILL_DIR = Path(__file__).resolve().parents[1]
 
-
-def _builder_run_flow() -> Path:
-    env = os.environ.get("M8M_BUILDER") or os.environ.get("FLOWSTEP_BUILDER")
-    if env:
-        candidate = Path(env) / "scripts" / "run_flow.py"
-        if candidate.is_file():
-            return candidate
-    skills_parent = Path(__file__).resolve().parents[2]
-    for skill_name in ("m8m-harness-builder", "flowstep-harness-builder"):
-        sibling = skills_parent / skill_name / "scripts" / "run_flow.py"
-        if sibling.is_file():
-            return sibling
-    default = Path(r"__BUILDER_ROOT__") / "scripts" / "run_flow.py"
-    if default.is_file():
-        return default
-    raise SystemExit("Cannot find $m8m-harness-builder. Set M8M_BUILDER.")
-
-
-def main() -> None:
-    script = _builder_run_flow()
-    forwarded: list[str] = []
-    argv = sys.argv[1:]
-    if "--skill-dir" not in argv:
-        forwarded.extend(["--skill-dir", str(SKILL_DIR)])
-    forwarded.extend(argv)
-    sys.argv = [str(script), *forwarded]
-    sys.path.insert(0, str(script.parent))
-    runpy.run_path(str(script), run_name="__main__")
-
-
-if __name__ == "__main__":
-    main()
+M8M_SKILL_POINTER_ABI = "m8m_skill_pointer_v2"
+launcher = Path(r"__CODEBASE_LAUNCHER__").absolute()
+expected_launcher_sha256 = "__CODEBASE_LAUNCHER_SHA256__"
+if not launcher.is_file():
+    raise SystemExit(
+        "The built skill's codebase M8M launcher is unavailable: "
+        f"{launcher}. Rebuild/install the skill from its owning codebase."
+    )
+digest = hashlib.sha256(launcher.read_bytes()).hexdigest()
+if digest != expected_launcher_sha256:
+    raise SystemExit(
+        "The built skill's codebase M8M launcher failed its pinned digest check. "
+        "Rebuild/install the skill from its owning codebase."
+    )
+completed = subprocess.run(
+    [sys.executable, "-I", "-B", str(launcher), *sys.argv[1:]],
+    check=False,
+)
+raise SystemExit(completed.returncode)

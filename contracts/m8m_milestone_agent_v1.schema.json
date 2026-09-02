@@ -1,0 +1,438 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "m8m_milestone_agent_v1.schema.json",
+  "title": "M8M milestone agent v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "agent_id",
+    "role",
+    "success",
+    "output_contract",
+    "output_schema",
+    "outputs",
+    "handler",
+    "flowsteps",
+    "intelligence",
+    "execution",
+    "gem",
+    "read_paths",
+    "observer"
+  ],
+  "properties": {
+    "schema": { "const": "m8m_milestone_agent_v1" },
+    "agent_id": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+    "role": { "const": "milestone" },
+    "success": { "$ref": "#/$defs/nonemptyTrimmed" },
+    "output_contract": { "allOf": [{ "$ref": "#/$defs/nonemptyTrimmed" }, { "minLength": 3 }] },
+    "output_schema": { "$ref": "#/$defs/safePath" },
+    "outputs": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/output" },
+      "contains": {
+        "type": "object",
+        "required": ["required"],
+        "properties": { "required": { "const": true } }
+      },
+      "minContains": 1
+    },
+    "handler": { "type": "string", "minLength": 1 },
+    "test": { "type": "string", "minLength": 1 },
+    "input_schema": { "$ref": "#/$defs/safePath" },
+    "inputs": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/binding" }
+    },
+    "flowsteps": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/flowstep" }
+    },
+    "tools": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" }
+    },
+    "implementation_dependencies": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/safePath" }
+    },
+    "intelligence": { "enum": ["none", "completion", "image", "judge"] },
+    "model_justification": { "type": "string" },
+    "execution": { "$ref": "#/$defs/execution" },
+    "capabilities": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/capability" }
+    },
+    "draft_schema": { "$ref": "#/$defs/safePath" },
+    "on_tool_fail": { "enum": ["need_model", "retryable", "BLOCKED"] },
+    "max_model_attempts": { "type": "integer", "minimum": 1 },
+    "max_tool_attempts": { "type": "integer", "minimum": 1 },
+    "side_effects": { "enum": ["none", "external"] },
+    "phase_journal": { "$ref": "#/$defs/phaseJournal" },
+    "loop": { "enum": ["none", "for", "judge"] },
+    "worker": { "type": "string", "minLength": 1 },
+    "judge_abi": { "const": "m8m_milestone_judge_v1" },
+    "receipt_schema": { "$ref": "#/$defs/safePath" },
+    "max_attempts": { "type": "integer", "minimum": 1 },
+    "ledger": { "type": "object" },
+    "branch": { "$ref": "#/$defs/branch" },
+    "on_path": { "type": "string", "minLength": 1 },
+    "cycle": { "$ref": "#/$defs/cycle" },
+    "on_cycle": { "type": "string", "minLength": 1 },
+    "cache": { "$ref": "#/$defs/cache" },
+    "asset": { "$ref": "#/$defs/asset" },
+    "gem": { "$ref": "#/$defs/safePath" },
+    "read_paths": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/safePath" }
+    },
+    "write_paths": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/safePath" }
+    },
+    "rules": {
+      "type": "array",
+      "maxItems": 5,
+      "items": { "type": "string", "minLength": 1, "maxLength": 160 }
+    },
+    "resources": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/resource" }
+    },
+    "observer": { "$ref": "#/$defs/observer" }
+  },
+  "allOf": [
+    {
+      "if": {
+        "required": ["loop"],
+        "properties": { "loop": { "const": "judge" } }
+      },
+      "then": {
+        "required": ["worker", "judge_abi", "execution"],
+        "properties": { "execution": { "required": ["judge"] } }
+      }
+    },
+    {
+      "if": {
+        "required": ["execution"],
+        "properties": {
+          "execution": { "required": ["judge"] }
+        }
+      },
+      "then": {
+        "required": ["judge_abi", "receipt_schema", "loop"],
+        "properties": {
+          "judge_abi": { "const": "m8m_milestone_judge_v1" },
+          "loop": { "const": "judge" }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": ["loop"],
+        "properties": { "loop": { "const": "none" } }
+      },
+      "then": {
+        "allOf": [
+          {
+            "not": {
+              "anyOf": [
+                { "required": ["judge_abi"] },
+                {
+                  "required": ["execution"],
+                  "properties": { "execution": { "required": ["judge"] } }
+                }
+              ]
+            }
+          },
+          {
+            "if": {
+              "not": {
+                "anyOf": [
+                  { "required": ["branch"] },
+                  { "required": ["cycle"] }
+                ]
+              }
+            },
+            "then": { "not": { "required": ["worker"] } }
+          }
+        ]
+      }
+    }
+  ],
+  "$defs": {
+    "safePath": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!\\s)(?!.*\\s$)(?![A-Za-z]:)(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*[\\\\*?[]).+$"
+    },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "kind", "cardinality", "required"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+        "name": { "$ref": "#/$defs/nonemptyTrimmed" },
+        "kind": { "enum": ["json", "data", "file", "image", "video", "audio"] },
+        "cardinality": { "enum": ["one", "many"] },
+        "required": { "type": "boolean" }
+      }
+    },
+    "binding": {
+      "oneOf": [
+        { "type": "string", "minLength": 1 },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["from"],
+          "properties": {
+            "from": { "type": "string", "minLength": 3 },
+            "output": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+            "member": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" }
+          }
+        }
+      ]
+    },
+    "flowstep": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "tool"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+        "tool": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" }
+      }
+    },
+    "execution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["candidate_executor", "tool_bindings"],
+      "properties": {
+        "candidate_executor": { "$ref": "#/$defs/executorBinding" },
+        "judge": { "$ref": "#/$defs/executorBinding" },
+        "tool_bindings": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/toolBinding" }
+        }
+      }
+    },
+    "executorBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ref"],
+      "properties": {
+        "ref": { "$ref": "#/$defs/versionedRef" },
+        "profile": { "$ref": "#/$defs/profile" }
+      }
+    },
+    "toolBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tool", "ref"],
+      "properties": {
+        "tool": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+        "ref": { "$ref": "#/$defs/versionedRef" }
+      }
+    },
+    "profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ref",
+        "model_configuration",
+        "token_budget",
+        "timeout_seconds",
+        "tools",
+        "capabilities"
+      ],
+      "properties": {
+        "ref": { "type": "string", "minLength": 1, "pattern": "^(?:\\S|\\S.*\\S)$" },
+        "model_configuration": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["model", "reasoning"],
+          "properties": {
+            "model": { "type": "string", "minLength": 1, "pattern": "^(?:\\S|\\S.*\\S)$" },
+            "reasoning": {
+              "enum": ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]
+            },
+            "temperature": { "type": "number", "minimum": 0, "maximum": 2 }
+          }
+        },
+        "token_budget": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["max_input_tokens", "max_output_tokens"],
+          "properties": {
+            "max_input_tokens": { "type": "integer", "minimum": 1 },
+            "max_output_tokens": { "type": "integer", "minimum": 1 }
+          }
+        },
+        "timeout_seconds": { "type": "integer", "minimum": 1 },
+        "tools": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" }
+        },
+        "capabilities": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1, "pattern": "^(?:\\S|\\S.*\\S)$" }
+        }
+      }
+    },
+    "capability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "ref", "access", "side_effects"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "pattern": "^(?:\\S|\\S.*\\S)$" },
+        "ref": { "$ref": "#/$defs/versionedRef" },
+        "access": { "enum": ["read", "write", "execute", "use"] },
+        "side_effects": { "enum": ["none", "local", "external"] }
+      }
+    },
+    "versionedRef": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_.-]*@[0-9]+\\.[0-9]+\\.[0-9]+$"
+    },
+    "resource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "path"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z][a-z0-9_.-]*$" },
+        "kind": { "enum": ["gem", "schema", "reference", "fixture"] },
+        "path": { "$ref": "#/$defs/safePath" }
+      }
+    },
+    "observer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["title", "summary"],
+      "properties": {
+        "title": { "type": "string", "minLength": 1 },
+        "summary": { "type": "string", "minLength": 1 },
+        "facts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["label", "value"],
+            "properties": {
+              "label": { "type": "string", "minLength": 1 },
+              "value": { "type": "string", "minLength": 1 }
+            }
+          }
+        },
+        "actions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["flowstep_id", "title", "summary"],
+            "properties": {
+              "flowstep_id": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+              "title": { "type": "string", "minLength": 1 },
+              "summary": { "type": "string", "minLength": 1 }
+            }
+          }
+        },
+        "outputs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["output_id", "title", "summary"],
+            "properties": {
+              "output_id": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+              "title": { "type": "string", "minLength": 1 },
+              "summary": { "type": "string", "minLength": 1 }
+            }
+          }
+        }
+      }
+    },
+    "cache": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reuse", "ttl_seconds", "side_effects"],
+      "properties": {
+        "reuse": { "const": "candidate" },
+        "ttl_seconds": { "type": "integer", "minimum": 1 },
+        "side_effects": { "const": "none" }
+      }
+    },
+    "asset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {
+        "kind": { "enum": ["json", "data", "file", "image", "video", "audio"] }
+      }
+    },
+    "phaseJournal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "operator_result_path", "resume"],
+      "properties": {
+        "path": { "$ref": "#/$defs/safePath" },
+        "operator_result_path": { "$ref": "#/$defs/safePath" },
+        "resume": { "const": "query_exact_operation" }
+      }
+    },
+    "branch": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["worker", "default", "join", "paths"],
+      "properties": {
+        "worker": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+        "default": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+        "join": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+        "receipt_schema": { "$ref": "#/$defs/safePath" },
+        "paths": {
+          "type": "array",
+          "minItems": 2,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "then"],
+            "properties": {
+              "id": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+              "then": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" }
+            }
+          }
+        }
+      }
+    },
+    "cycle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "worker", "ledger", "start", "join", "max_rounds", "pass"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+        "worker": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+        "ledger": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+        "start": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+        "join": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+        "max_rounds": { "type": "integer", "minimum": 1 },
+        "pass": { "type": "string", "minLength": 1 },
+        "receipt_schema": { "$ref": "#/$defs/safePath" }
+      }
+    },
+    "nonemptyTrimmed": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?:\\S|\\S.*\\S)$"
+    }
+  }
+}

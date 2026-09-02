@@ -1,17 +1,34 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
-  "additionalProperties": true,
+  "additionalProperties": false,
+  "required": ["schema", "milestone_id", "inputs", "candidate", "control"],
   "properties": {
-    "paths": {
-      "type": "array",
-      "items": { "type": "string" },
-      "minItems": 2
+    "schema": { "const": "m8m.branch_control_request.v1" },
+    "milestone_id": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+    "inputs": { "type": "object" },
+    "candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["outputs"],
+      "properties": { "outputs": { "type": "object" } }
     },
-    "default": { "type": "string" },
-    "recommended_branch": { "type": "string" },
-    "case_type": { "type": "string" },
-    "draft": { "type": "object" },
-    "reason": { "type": "string" }
+    "control": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "paths", "default", "join"],
+      "properties": {
+        "kind": { "const": "branch" },
+        "paths": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+          "minItems": 2,
+          "maxItems": 32,
+          "uniqueItems": true
+        },
+        "default": { "type": "string" },
+        "join": { "type": "string" }
+      }
+    }
   }
 }

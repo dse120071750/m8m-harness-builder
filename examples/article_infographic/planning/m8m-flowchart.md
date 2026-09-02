@@ -37,7 +37,7 @@ develop this tool; a stub is a successful sketch.
 | `plan_frozen` | `file` | `completion` | `hash_bind`, `schema_validate` | linear (emits pages ledger) |
 | `prompts_frozen` | `file` | `completion` | `hash_bind`, `schema_validate` | linear |
 | `assets_bound` | `file` | `image` | `hash_bind`, `image_size_check`, `ledger_receipt` | for `pages` max=7 |
-| `cards_rendered` | `image` | `none` | `render_html_shell`, `footer_geometry_qa`, `hash_bind`, `ok_receipt` | judge until ok |
+| `cards_rendered` | `image` | `none` | `render_html_shell`, `footer_geometry_qa`, `hash_bind` | optional semantic judge until PASS |
 | `release_packaged` | `file` | `judge` | `footer_geometry_qa`, `hash_bind`, `materialize_package`, `io_manifest` | linear |
 
 ## FlowSteps (guide)
@@ -71,12 +71,12 @@ If it fails, recover like a normal agent. The milestone chosen output is still c
 
 `plan_frozen` freezes the page ledger. `assets_bound` walks it until remaining=0. One canvas node, not one node per page.
 
-## Judge (until ok)
+## Optional semantic judge
 
 | Milestone | Worker | Receipt schema |
 | --- | --- | --- |
-| `cards_rendered` | `ok_receipt` | `schemas/cards_rendered_receipt_v1.json` |
+| `cards_rendered` | `cards_rendered_judge` | `schemas/cards_rendered_judge_result_v1.json` |
 
-Render and spatial alignment stay on this milestone until the worker receipt is `ok: true`. Budget gone → BLOCK.
+Render and spatial alignment stay on this milestone while the separate judge returns `RETRY`. The judge reads the derived expectation and current admitted candidate; exhausted attempts or `BLOCKED` stop the milestone.
 
-Proceed only when the worker receipt is `ok: true`, the milestone judge PASSes, and `chosen-output.json` is committed.
+Proceed only after structural admission, semantic judge `PASS`, and `chosen-output.json` commit.

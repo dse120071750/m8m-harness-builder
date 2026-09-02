@@ -10,6 +10,7 @@ import support  # noqa: F401
 from generate_harness import generate_tool, generate_v3_flow
 from run_flow import advance
 from flowstep_runtime import read_json
+from flowstep_tools import validate_library_tool
 from session_layout import find_paused_run, load_run_roster, resolve_chosen_output, wait_draft_path
 
 
@@ -25,8 +26,30 @@ def _ok_test(path: Path) -> None:
 WAIT_SPEC = [
     {
         "id": "source_ready",
+        "success": "The source readiness record is available.",
+        "output_contract": "source_ready_v1",
+        "outputs": [
+            {
+                "id": "result",
+                "name": "Source readiness",
+                "kind": "json",
+                "cardinality": "one",
+                "required": True,
+            }
+        ],
         "asset": {"kind": "json"},
         "tools": ["hash_bind"],
+        "flowsteps": [
+            {"id": "hash_bind", "tool": "hash_bind@1.0.0"}
+        ],
+        "execution": {
+            "candidate_executor": {
+                "ref": "handler.wait_v1.source_ready@3.1.0"
+            },
+            "tool_bindings": [
+                {"tool": "hash_bind", "ref": "hash_bind@1.0.0"}
+            ],
+        },
         "output_schema_object": {
             "type": "object",
             "additionalProperties": False,
@@ -36,10 +59,54 @@ WAIT_SPEC = [
     },
     {
         "id": "response_ready",
+        "success": "One non-empty operator reply is available for the next milestone.",
+        "output_contract": "response_ready_v1",
+        "outputs": [
+            {
+                "id": "result",
+                "name": "Operator reply",
+                "kind": "json",
+                "cardinality": "one",
+                "required": True,
+            }
+        ],
         "asset": {"kind": "json"},
         "intelligence": "completion",
+        "model_justification": "The operator reply arrives after a paused run.",
+        "input_schema": "milestones/response_ready/input.schema.json",
+        "draft_schema": "milestones/response_ready/draft.schema.json",
         "loop": "judge",
-        "worker": "response_ready_judge",
+        "worker": "response_ready_judge@3.1.0",
+        "judge_abi": "m8m_milestone_judge_v1",
+        "receipt_schema": "schemas/response_ready_judge_v1.json",
+        "max_attempts": 3,
+        "tools": ["hash_bind"],
+        "flowsteps": [
+            {"id": "hash_bind", "tool": "hash_bind@1.0.0"}
+        ],
+        "execution": {
+            "candidate_executor": {
+                "ref": "handler.wait_v1.response_ready@3.1.0",
+                "profile": {
+                    "ref": "agent_profile.wait_v1.response_ready.candidate.v1",
+                    "model_configuration": {
+                        "model": "codex",
+                        "reasoning": "low",
+                    },
+                    "token_budget": {
+                        "max_input_tokens": 2048,
+                        "max_output_tokens": 512,
+                    },
+                    "timeout_seconds": 60,
+                    "tools": ["hash_bind"],
+                    "capabilities": [],
+                },
+            },
+            "judge": {"ref": "response_ready_judge@3.1.0"},
+            "tool_bindings": [
+                {"tool": "hash_bind", "ref": "hash_bind@1.0.0"}
+            ],
+        },
         "output_schema_object": {
             "type": "object",
             "additionalProperties": False,
@@ -52,8 +119,30 @@ WAIT_SPEC = [
     },
     {
         "id": "plan_frozen",
+        "success": "The plan is frozen after the accepted reply.",
+        "output_contract": "plan_frozen_v1",
+        "outputs": [
+            {
+                "id": "result",
+                "name": "Frozen plan",
+                "kind": "json",
+                "cardinality": "one",
+                "required": True,
+            }
+        ],
         "asset": {"kind": "json"},
         "tools": ["hash_bind"],
+        "flowsteps": [
+            {"id": "hash_bind", "tool": "hash_bind@1.0.0"}
+        ],
+        "execution": {
+            "candidate_executor": {
+                "ref": "handler.wait_v1.plan_frozen@3.1.0"
+            },
+            "tool_bindings": [
+                {"tool": "hash_bind", "ref": "hash_bind@1.0.0"}
+            ],
+        },
         "output_schema_object": {
             "type": "object",
             "additionalProperties": False,
@@ -65,12 +154,13 @@ WAIT_SPEC = [
 
 
 def _assemble(path: Path, body: str) -> None:
-    _write(path, "def run(input_data, draft=None, **_):\n" + body)
+    _write(path, "def run(input_data, draft=None, run_dir=None, **_):\n" + body)
 
 
 def _scaffold(temp: str) -> tuple[Path, Path]:
     codebase = Path(temp) / "repo"
     generate_tool(codebase, "hash_bind")
+    generate_tool(codebase, "response_ready_judge")
     generate_v3_flow(
         codebase,
         "wait_v1",
@@ -79,6 +169,50 @@ def _scaffold(temp: str) -> tuple[Path, Path]:
         milestone_specs=WAIT_SPEC,
     )
     harness = codebase / "flowsteps" / "flows" / "wait_v1"
+    judge_schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["decision", "reasons", "blockers"],
+        "properties": {
+            "decision": {"enum": ["PASS", "RETRY", "BLOCKED"]},
+            "reasons": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 8,
+                "items": {"type": "string"},
+            },
+            "blockers": {
+                "type": "array",
+                "maxItems": 8,
+                "items": {"type": "string"},
+            },
+        },
+    }
+    _write(
+        harness / "schemas" / "response_ready_judge_v1.json",
+        json.dumps(judge_schema),
+    )
+    judge_dir = codebase / "flowsteps" / "tools" / "response_ready_judge"
+    _write(
+        judge_dir / "tool.py",
+        "def run(input_data, **_):\n"
+        "    reply = input_data['candidate']['outputs']['result'].get('reply')\n"
+        "    passed = isinstance(reply, str) and bool(reply.strip())\n"
+        "    return {'decision': 'PASS' if passed else 'BLOCKED', "
+        "'reasons': ['reply checked'], 'blockers': [] if passed else ['reply missing']}\n",
+    )
+    _write(judge_dir / "output.schema.json", json.dumps(judge_schema))
+    (judge_dir / "BUILD_REQUIRED").unlink()
+    blockers = validate_library_tool(codebase, "response_ready_judge")
+    if blockers:
+        raise AssertionError(f"invalid response_ready_judge fixture: {blockers}")
+    generate_v3_flow(
+        codebase,
+        "wait_v1",
+        [item["id"] for item in WAIT_SPEC],
+        tools=["hash_bind"],
+        milestone_specs=WAIT_SPEC,
+    )
     _assemble(
         harness / "milestones" / "source_ready" / "assemble.py",
         "    return {'outputs': {'result': {'ready': True}}}\n",
@@ -88,8 +222,7 @@ def _scaffold(temp: str) -> tuple[Path, Path]:
         "    if not isinstance(draft, dict) or not draft.get('reply'):\n"
         "        return {'_flowstep': 'NEED_MODEL', 'model': 'completion',\n"
         "                'model_request': {'instruction': 'wait for reply'}}\n"
-        "    receipt = {'ok': True, 'code': 'pass'}\n"
-        "    return {'outputs': {'result': {'reply': str(draft['reply']), 'receipt': receipt}}, 'receipt': receipt}\n",
+        "    return {'outputs': {'result': {'reply': str(draft['reply']), 'receipt': {'accepted': True}}}}\n",
     )
     _assemble(
         harness / "milestones" / "plan_frozen" / "assemble.py",
@@ -148,9 +281,13 @@ class RunRosterTests(unittest.TestCase):
             self.assertEqual(roster["status"], "paused")
             found = find_paused_run(codebase, "wait_v1")
             self.assertEqual(found.resolve(), run_dir.resolve())
+            capsule = run_dir / first["context_capsule_path"]
+            capsule_bytes = capsule.read_bytes()
 
             again = advance(harness, run_dir)
             self.assertEqual(again["state"], "ACTION_REQUIRED")
+            self.assertEqual(again["context_capsule_path"], first["context_capsule_path"])
+            self.assertEqual(capsule.read_bytes(), capsule_bytes)
             self.assertEqual(load_run_roster(run_dir)["status"], "paused")
 
             slot = wait_draft_path(run_dir, "response_ready")
@@ -180,15 +317,67 @@ class RunRosterTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             codebase = Path(temp) / "repo"
             generate_tool(codebase, "hash_bind")
-            generate_v3_flow(codebase, "plain_v1", ["source_ready"], tools=["hash_bind"])
+            generate_v3_flow(
+                codebase,
+                "plain_v1",
+                ["source_ready"],
+                tools=["hash_bind"],
+                milestone_specs=[
+                    {
+                        "id": "source_ready",
+                        "success": "One run-local source file is available.",
+                        "output_contract": "source_ready_v1",
+                        "outputs": [
+                            {
+                                "id": "result",
+                                "name": "Run-local source file",
+                                "kind": "file",
+                                "cardinality": "one",
+                                "required": True,
+                            }
+                        ],
+                        "asset": {"kind": "file"},
+                        "tools": ["hash_bind"],
+                        "flowsteps": [
+                            {
+                                "id": "hash_bind",
+                                "tool": "hash_bind@1.0.0",
+                            }
+                        ],
+                        "execution": {
+                            "candidate_executor": {
+                                "ref": "handler.plain_v1.source_ready@3.1.0"
+                            },
+                            "tool_bindings": [
+                                {
+                                    "tool": "hash_bind",
+                                    "ref": "hash_bind@1.0.0",
+                                }
+                            ],
+                        },
+                        "output_schema_object": {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "required": ["path"],
+                            "properties": {
+                                "path": {"type": "string"}
+                            },
+                        },
+                    }
+                ],
+            )
             harness = codebase / "flowsteps" / "flows" / "plain_v1"
             src = Path(temp) / "file.bin"
             src.write_bytes(b"abc")
             _assemble(
                 harness / "milestones" / "source_ready" / "assemble.py",
+                "    import shutil\n"
                 "    from pathlib import Path\n"
                 f"    SRC = r'''{src}'''\n"
-                "    return {'outputs': {'result': {'asset': {'path': SRC}}}}\n",
+                "    local = Path(run_dir) / 'work' / 'source.bin'\n"
+                "    local.parent.mkdir(parents=True, exist_ok=True)\n"
+                "    shutil.copy2(SRC, local)\n"
+                "    return {'outputs': {'result': {'path': str(local)}}}\n",
             )
             _ok_test(harness / "milestones" / "source_ready" / "tests" / "test_assemble.py")
             run_dir = Path(temp) / "run-plain"

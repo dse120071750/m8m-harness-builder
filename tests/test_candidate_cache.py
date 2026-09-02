@@ -75,6 +75,12 @@ class CandidateCacheTests(unittest.TestCase):
             "input_schema": "schemas/input.json",
             "inputs": {"request": "user.request"},
             "intelligence": "none",
+            "execution": {
+                "candidate_executor": {
+                    "ref": "handler.cache_demo_v1.result_ready@3.1.0"
+                },
+                "tool_bindings": [],
+            },
             "on_tool_fail": "BLOCKED",
         }
         if cache:
@@ -83,12 +89,16 @@ class CandidateCacheTests(unittest.TestCase):
             milestone.update(
                 {
                     "loop": "judge",
-                    "worker": "result_ready_judge",
-                    "tools": ["result_ready_judge"],
+                    "worker": "result_ready_judge@1.0.0",
+                    "judge_abi": "m8m_milestone_judge_v1",
+                    "tools": [],
                     "receipt_schema": "schemas/receipt.json",
                     "max_attempts": 3,
                 }
             )
+            milestone["execution"]["judge"] = {
+                "ref": "result_ready_judge@1.0.0"
+            }
         flow = {
             "schema": "flowstep_flow_v4",
             "flow_id": "cache_demo_v1",
@@ -106,8 +116,12 @@ class CandidateCacheTests(unittest.TestCase):
                 "$schema": "https://json-schema.org/draft/2020-12/schema",
                 "type": "object",
                 "additionalProperties": False,
-                "required": ["ok"],
-                "properties": {"ok": {"type": "boolean"}, "code": {"type": "string"}},
+                "required": ["decision", "reasons", "blockers"],
+                "properties": {
+                    "decision": {"enum": ["PASS", "RETRY", "BLOCKED"]},
+                    "reasons": {"type": "array", "items": {"type": "string"}},
+                    "blockers": {"type": "array", "items": {"type": "string"}},
+                },
             },
         )
         (harness / "handler.py").write_text(
@@ -118,7 +132,6 @@ class CandidateCacheTests(unittest.TestCase):
             "    count = int(marker.read_text()) + 1 if marker.exists() else 1\n"
             "    marker.write_text(str(count))\n"
             "    result = {'outputs': {'result': {'message': input_data['request']['message'], 'handler_call': count}}}\n"
-            + ("    result['receipt'] = {'ok': True, 'code': 'handler'}\n" if judge else "")
             + "    return result\n",
             encoding="utf-8",
         )
@@ -132,8 +145,12 @@ class CandidateCacheTests(unittest.TestCase):
                     "$schema": "https://json-schema.org/draft/2020-12/schema",
                     "type": "object",
                     "additionalProperties": False,
-                    "required": ["ok", "code"],
-                    "properties": {"ok": {"type": "boolean"}, "code": {"type": "string"}},
+                    "required": ["decision", "reasons", "blockers"],
+                    "properties": {
+                        "decision": {"enum": ["PASS", "RETRY", "BLOCKED"]},
+                        "reasons": {"type": "array", "items": {"type": "string"}},
+                        "blockers": {"type": "array", "items": {"type": "string"}},
+                    },
                 },
             )
             (tool / "tool.py").write_text(
@@ -143,8 +160,13 @@ class CandidateCacheTests(unittest.TestCase):
                 "    marker = codebase / 'judge-calls.txt'\n"
                 "    count = int(marker.read_text()) + 1 if marker.exists() else 1\n"
                 "    marker.write_text(str(count))\n"
-                "    reject = (codebase / 'reject-cache.txt').exists()\n"
-                "    return {'ok': not reject, 'code': 'cache-pass' if not reject else 'cache-reject'}\n",
+                "    handler_call = input_data['candidate']['outputs']['result']['handler_call']\n"
+                "    reject = (codebase / 'reject-cache.txt').exists() and handler_call == 1\n"
+                "    return {\n"
+                "        'decision': 'RETRY' if reject else 'PASS',\n"
+                "        'reasons': ['cache-reject' if reject else 'cache-pass'],\n"
+                "        'blockers': ['stale candidate'] if reject else [],\n"
+                "    }\n",
                 encoding="utf-8",
             )
         return harness, codebase
@@ -222,7 +244,8 @@ class CandidateCacheTests(unittest.TestCase):
             mutations = {
                 "success": "A different success rule.",
                 "output_contract": "different_v1",
-                "worker": "different_judge",
+                "worker": "different_judge@1.0.0",
+                "judge_abi": "m8m_milestone_judge_v1",
                 "model": "completion",
             }
             for field, value in mutations.items():
@@ -236,6 +259,40 @@ class CandidateCacheTests(unittest.TestCase):
             changed = copy.deepcopy(step)
             changed["outputs"][0]["name"] = "Different port"
             self.assertNotEqual(milestone_implementation_fingerprint(harness, changed), baseline)
+
+            with_execution = copy.deepcopy(step)
+            with_execution["execution"] = {
+                "candidate_executor": {
+                    "ref": "handler.cache_demo_v1.result_ready@3.1.0",
+                    "profile": {
+                        "ref": "profile.result_ready.candidate.v1",
+                        "model_configuration": {"model": "codex", "reasoning": "low"},
+                    },
+                },
+                "judge": {
+                    "ref": "judge.result_ready@1.0.0",
+                    "profile": {
+                        "ref": "profile.result_ready.judge.v1",
+                        "model_configuration": {"model": "codex", "reasoning": "medium"},
+                    },
+                },
+            }
+            execution_baseline = milestone_implementation_fingerprint(harness, with_execution)
+            for path, value in (
+                (("candidate_executor", "ref"), "handler.result_ready@2.0.0"),
+                (("judge", "ref"), "judge.result_ready@2.0.0"),
+                (("candidate_executor", "profile", "model_configuration", "model"), "other-model"),
+            ):
+                changed = copy.deepcopy(with_execution)
+                target = changed["execution"]
+                for key in path[:-1]:
+                    target = target[key]
+                target[path[-1]] = value
+                self.assertNotEqual(
+                    milestone_implementation_fingerprint(harness, changed),
+                    execution_baseline,
+                    path,
+                )
 
             schema_path = harness / step["output_schema"]
             original_schema = schema_path.read_text(encoding="utf-8")
@@ -256,7 +313,11 @@ class CandidateCacheTests(unittest.TestCase):
             tool.mkdir(parents=True)
             (tool / "tool.py").write_text("def run(input_data): return input_data\n", encoding="utf-8")
             with_tool = copy.deepcopy(step)
-            with_tool["tools"] = ["pure_tool"]
+            with_tool["flowsteps"] = [{"id": "pure_step", "tool": "pure_tool@1.0.0"}]
+            with_tool["tools"] = ["pure_step"]
+            with_tool["execution"]["tool_bindings"] = [
+                {"tool": "pure_step", "ref": "pure_tool@1.0.0"}
+            ]
             tool_baseline = milestone_implementation_fingerprint(harness, with_tool)
             (tool / "tool.py").write_text("def run(input_data): return {'changed': True}\n", encoding="utf-8")
             self.assertNotEqual(milestone_implementation_fingerprint(harness, with_tool), tool_baseline)
@@ -321,9 +382,10 @@ class CandidateCacheTests(unittest.TestCase):
             advance(harness, root / "run-1", request_path=_request(root), cache_mode="read-write")
             advance(harness, root / "run-2", request_path=_request(root), cache_mode="read-write")
             self.assertEqual((codebase / "handler-calls.txt").read_text(), "1")
-            self.assertEqual((codebase / "judge-calls.txt").read_text(), "1")
+            self.assertEqual((codebase / "judge-calls.txt").read_text(), "2")
             judge_receipt = read_json(root / "run-2" / "milestones" / "result_ready" / "out" / "judge-receipt.json")
-            self.assertEqual(judge_receipt["code"], "cache-pass")
+            self.assertEqual(judge_receipt["decision"], "PASS")
+            self.assertEqual(judge_receipt["reasons"], ["cache-pass"])
 
     def test_rejected_cache_falls_through_without_spending_handler_attempt(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -371,6 +433,9 @@ class CandidateCacheTests(unittest.TestCase):
                     },
                 }
             )
+            downstream["execution"]["candidate_executor"]["ref"] = (
+                "handler.cache_demo_v1.final_ready@3.1.0"
+            )
             flow["milestones"].append(downstream)
             flow_path.write_text(yaml.safe_dump(flow, sort_keys=False), encoding="utf-8")
             (harness / "final_handler.py").write_text(
@@ -398,7 +463,7 @@ class CandidateCacheTests(unittest.TestCase):
             root = Path(temp)
             harness, codebase = self._harness(root)
             advance(harness, root / "run-1", request_path=_request(root), cache_mode="read-write")
-            manifest_path = next((codebase / "flowsteps" / "cache").rglob("cache-entry.json"))
+            manifest_path = next((root / "cache").rglob("cache-entry.json"))
             entry = read_json(manifest_path)
             entry["created_at"] = (datetime.now(timezone.utc) - timedelta(seconds=2)).isoformat().replace(
                 "+00:00", "Z"
@@ -408,7 +473,7 @@ class CandidateCacheTests(unittest.TestCase):
             advance(harness, root / "run-2", request_path=_request(root), cache_mode="read-write")
             receipt = read_json(root / "run-2" / "milestones" / "result_ready" / "work" / "cache-receipt.json")
             self.assertEqual(receipt["lookup_status"], "expired")
-            manifest_path = next((codebase / "flowsteps" / "cache").rglob("cache-entry.json"))
+            manifest_path = next((root / "cache").rglob("cache-entry.json"))
             cached = read_json(manifest_path)
             member = manifest_path.parent / cached["members"][0]["path"]
             member.unlink()
@@ -422,7 +487,7 @@ class CandidateCacheTests(unittest.TestCase):
             root = Path(temp)
             harness, codebase = self._harness(root)
             advance(harness, root / "run-1", request_path=_request(root), cache_mode="read-write")
-            manifest_path = next((codebase / "flowsteps" / "cache").rglob("cache-entry.json"))
+            manifest_path = next((root / "cache").rglob("cache-entry.json"))
             entry = read_json(manifest_path)
             entry["members"].append(dict(entry["members"][0]))
             _write_json(manifest_path, entry)
@@ -439,7 +504,7 @@ class CandidateCacheTests(unittest.TestCase):
             root = Path(temp)
             harness, codebase = self._harness(root)
             advance(harness, root / "run-1", request_path=_request(root), cache_mode="read-write")
-            manifest_path = next((codebase / "flowsteps" / "cache").rglob("cache-entry.json"))
+            manifest_path = next((root / "cache").rglob("cache-entry.json"))
             entry = read_json(manifest_path)
             entry["created_at"] = (datetime.now(timezone.utc) - timedelta(seconds=120)).isoformat().replace(
                 "+00:00", "Z"
@@ -487,7 +552,7 @@ class CandidateCacheTests(unittest.TestCase):
                 ]
                 results = [future.result() for future in futures]
             self.assertTrue(all(item["state"] == "COMPLETE" for item in results), results)
-            manifests = list((codebase / "flowsteps" / "cache").rglob("cache-entry.json"))
+            manifests = list((root / "cache").rglob("cache-entry.json"))
             self.assertEqual(len(manifests), 1)
             entry = read_json(manifests[0])
             validate_against_schema(entry, candidate_cache_schema_path())
@@ -513,7 +578,7 @@ class CandidateCacheTests(unittest.TestCase):
             harness, codebase = self._harness(root)
             run = root / "run"
             advance(harness, run, request_path=_request(root), cache_mode="read-write")
-            shutil.rmtree(codebase / "flowsteps" / "cache")
+            shutil.rmtree(root / "cache")
             done = advance(harness, run)
             self.assertEqual(done["state"], "COMPLETE")
             self.assertEqual((codebase / "handler-calls.txt").read_text(), "1")
@@ -555,7 +620,7 @@ class CandidateCacheTests(unittest.TestCase):
             harness, codebase = self._harness(root)
             advance(harness, root / "run", request_path=_request(root), cache_mode="read-write")
             flow = load_flow(harness)
-            root_cache = cache_root(harness, flow)
+            root_cache = cache_root(harness, flow, runtime_root=root)
             manifest_path = next(root_cache.rglob("cache-entry.json"))
             entry = read_json(manifest_path)
             validate_against_schema(entry, candidate_cache_schema_path())
@@ -576,7 +641,13 @@ class CandidateCacheTests(unittest.TestCase):
             with self.assertRaises(FlowError):
                 load_flow(harness)
             flow["milestones"][0]["cache"]["ttl_seconds"] = 60
+            flow["milestones"][0]["flowsteps"] = [
+                {"id": "upload_asset", "tool": "upload_asset@1.0.0"}
+            ]
             flow["milestones"][0]["tools"] = ["upload_asset"]
+            flow["milestones"][0]["execution"]["tool_bindings"] = [
+                {"tool": "upload_asset", "ref": "upload_asset@1.0.0"}
+            ]
             flow_path.write_text(yaml.safe_dump(flow, sort_keys=False), encoding="utf-8")
             with self.assertRaisesRegex(FlowError, "external side effects"):
                 load_flow(harness)

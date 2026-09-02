@@ -1,0 +1,49 @@
+schema: m8m_milestone_agent_v1
+agent_id: audit_complete
+role: milestone
+success: The source skill has a closed Builder 3 audit that classifies its form, ownership, and runtime, and identifies every milestone, output port, resource, implementation requirement, profile, capability, and migration blocker.
+output_contract: m8m_builder_source_audit_v2
+output_schema: contracts/m8m_builder_source_audit_v2.schema.json
+outputs:
+  - id: source_audit
+    name: Closed source audit
+    kind: json
+    cardinality: one
+    required: true
+handler: scripts/m8m_build_steps.py
+test: flowsteps/tools/audit_skill/tests/test_tool.py
+input_schema: contracts/m8m_builder_input_v1.schema.json
+inputs:
+  request: user.request
+flowsteps:
+  - id: audit_source
+    tool: audit_skill
+tools:
+  - audit_source
+execution:
+  candidate_executor:
+    ref: handler.m8m_build_v2.audit_complete@3.1.0
+  tool_bindings:
+    - tool: audit_source
+      ref: audit_skill@3.1.0
+intelligence: none
+on_tool_fail: BLOCKED
+loop: none
+gem: references/audit_complete.md
+read_paths:
+  - references/audit_complete.md
+resources:
+  - id: builder_authoring
+    kind: reference
+    path: references/builder-authoring.md
+observer:
+  title: Source audit
+  summary: Inspect the requested skill and close the inventory needed for Builder 3 generation.
+  actions:
+    - flowstep_id: audit_source
+      title: Audit the source skill
+      summary: Identify the milestones, ports, resources, implementation needs, and migration blockers.
+  outputs:
+    - output_id: source_audit
+      title: Closed source audit
+      summary: A required JSON record that fixes the scope for downstream toolbox work.

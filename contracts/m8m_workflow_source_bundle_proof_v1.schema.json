@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "m8m_workflow_source_bundle_proof_v1.schema.json",
+  "title": "M8M workflow source bundle proof v1",
+  "description": "Deterministic component and whole-source digests for a base-independent workflow source bundle.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "contract_bundle_id",
+    "contract_bundle_digest",
+    "definition_digest",
+    "workflow_contracts_digest",
+    "resource_requirements_digest",
+    "implementation_requirements_digest",
+    "agent_profile_requirements_digest",
+    "capability_requirements_digest",
+    "observer_digest",
+    "local_validation_digest",
+    "source_bundle_digest"
+  ],
+  "properties": {
+    "schema": { "const": "m8m.workflow_source_bundle_proof.v1" },
+    "contract_bundle_id": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "contract_bundle_digest": { "$ref": "#/$defs/sha256" },
+    "definition_digest": { "$ref": "#/$defs/sha256" },
+    "workflow_contracts_digest": { "$ref": "#/$defs/sha256" },
+    "resource_requirements_digest": { "$ref": "#/$defs/sha256" },
+    "implementation_requirements_digest": { "$ref": "#/$defs/sha256" },
+    "agent_profile_requirements_digest": { "$ref": "#/$defs/sha256" },
+    "capability_requirements_digest": { "$ref": "#/$defs/sha256" },
+    "observer_digest": { "$ref": "#/$defs/sha256" },
+    "local_validation_digest": { "$ref": "#/$defs/sha256" },
+    "source_bundle_digest": { "$ref": "#/$defs/sha256" }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    }
+  }
+}

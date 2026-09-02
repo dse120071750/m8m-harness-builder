@@ -10,9 +10,10 @@ from typing import Any
 
 from jsonschema import Draft202012Validator, RefResolver
 
-from flowstep_instruction import sync_statuses_from_errors
-from flowstep_tools import infer_codebase
+from flowstep_instruction import instruction_path, sync_statuses_from_errors
+from flowstep_tools import infer_codebase, validate_library_tool
 from milestone_pair import is_wait_milestone
+from runtime_release import RuntimeReleaseError, verify_harness_runtime
 from schema_gate import is_control_name, schema_property_names, schema_required_names
 from flowstep_runtime import (
     FlowError,
@@ -22,14 +23,17 @@ from flowstep_runtime import (
     harness_dir_from_args,
     inspect_step_test,
     inspect_tool_source,
+    implementation_files,
     is_builder_fixture,
     is_passthrough_schema,
     is_stub_output_schema,
     lint_file_payload_schema,
+    local_tool_package_name,
     load_flow,
     load_tool,
     read_json,
     resolve_harness_dir,
+    runtime_package_name,
     skill_rel,
 )
 
@@ -72,12 +76,41 @@ def _validate_control(
     errors: list[str],
 ) -> None:
     step_id = step["id"]
-    fail = step.get("on_tool_fail") or "need_model"
-    if fail not in {"BLOCKED", "need_model"}:
-        errors.append(f"{step_id}: on_tool_fail must be BLOCKED or need_model")
+    fail = step.get("on_tool_fail") or (
+        "need_model" if step.get("model") != "none" else "BLOCKED"
+    )
+    if fail not in {"BLOCKED", "retryable", "need_model"}:
+        errors.append(
+            f"{step_id}: on_tool_fail must be BLOCKED, retryable, or need_model"
+        )
     attempts = step.get("max_model_attempts")
     if attempts is not None and (not isinstance(attempts, int) or attempts < 1):
         errors.append(f"{step_id}: max_model_attempts must be a positive integer")
+    tool_attempts = step.get("max_tool_attempts")
+    if tool_attempts is not None and (
+        not isinstance(tool_attempts, int) or tool_attempts < 1
+    ):
+        errors.append(f"{step_id}: max_tool_attempts must be a positive integer")
+    side_effects = str(step.get("side_effects") or "none")
+    journal = step.get("phase_journal") if isinstance(step.get("phase_journal"), dict) else None
+    risk = cache_side_effect_risk(step)
+    if risk and side_effects != "external":
+        errors.append(
+            f"{step_id}: {risk} may mutate external state; declare side_effects: external"
+        )
+    if side_effects == "external":
+        if not isinstance(journal, dict):
+            errors.append(f"{step_id}: external side effects require phase_journal")
+        else:
+            for key in ("path", "operator_result_path"):
+                if not str(journal.get(key) or "").strip():
+                    errors.append(f"{step_id}: phase_journal.{key} is required")
+            if journal.get("resume") != "query_exact_operation":
+                errors.append(
+                    f"{step_id}: phase_journal.resume must be query_exact_operation"
+                )
+    elif journal is not None:
+        errors.append(f"{step_id}: phase_journal requires side_effects: external")
     loop = str(step.get("loop") or "none")
     cache = step.get("cache") if isinstance(step.get("cache"), dict) else None
     if cache:
@@ -177,6 +210,9 @@ def _validate_control(
                 errors.append(f"{step_id}: cycle.start {start} is not on_cycle {on_cycle}")
     if loop in {"for", "judge"} and not step.get("worker"):
         errors.append(f"{step_id}: loop={loop} requires a repo worker tool")
+    judge_abi = str(step.get("judge_abi") or "")
+    if judge_abi and loop != "judge":
+        errors.append(f"{step_id}: judge_abi is valid only for loop=judge")
     if loop == "for":
         ledger = step.get("ledger") or {}
         if not isinstance(ledger, dict) or not ledger.get("path"):
@@ -211,9 +247,25 @@ def _validate_control(
             except FlowError as exc:
                 errors.append(str(exc))
             else:
-                names = schema_required_names(schema)
-                if "ok" not in names and "ok" not in (schema.get("properties") or {}):
-                    errors.append(f"{step_id}: receipt schema must require ok")
+                if judge_abi:
+                    properties = schema.get("properties") or {}
+                    expected = {"decision", "reasons", "blockers"}
+                    if schema.get("type") != "object":
+                        errors.append(f"{step_id}: strict judge result schema must be an object")
+                    if schema.get("additionalProperties") is not False:
+                        errors.append(f"{step_id}: strict judge result schema must be closed")
+                    if set(schema.get("required") or []) != expected:
+                        errors.append(
+                            f"{step_id}: strict judge result must require exactly decision, reasons, blockers"
+                        )
+                    if set(properties) != expected:
+                        errors.append(
+                            f"{step_id}: strict judge result properties must be exactly decision, reasons, blockers"
+                        )
+                else:
+                    names = schema_required_names(schema)
+                    if "ok" not in names and "ok" not in (schema.get("properties") or {}):
+                        errors.append(f"{step_id}: control receipt schema must require ok")
 
 
 def validate_harness(
@@ -222,10 +274,29 @@ def validate_harness(
     *,
     codebase: Path | None = None,
     flow_id: str | None = None,
+    update_instruction: bool = True,
 ) -> dict[str, Any]:
     skill_dir = resolve_harness_dir(codebase=codebase, flow_id=flow_id, skill_dir=skill_dir)
     flow = load_flow(skill_dir, find_flow_path(skill_dir, flow_arg) if flow_arg else None)
     errors: list[str] = []
+    if (skill_dir / "BUILD_REQUIRED_RUNTIME").is_file():
+        errors.append(
+            "harness has no codebase-owned runtime release; run the complete "
+            "m8m-harness-builder workflow before validation or execution"
+        )
+    product_codebase = infer_codebase(skill_dir)
+    if product_codebase is not None and not is_builder_fixture(skill_dir):
+        try:
+            verify_harness_runtime(skill_dir)
+        except RuntimeReleaseError as exc:
+            errors.append(str(exc))
+    implementation_closed = True
+    try:
+        implementation_files(skill_dir, flow)
+    except FlowError as exc:
+        implementation_closed = False
+        errors.append(str(exc))
+    validated_library_tools: set[str] = set()
     seen_contracts: dict[str, str] = {}
     declared = {step["id"] for step in flow["steps"]}
     for index, step in enumerate(flow["steps"]):
@@ -242,15 +313,57 @@ def validate_harness(
                 continue
             if not path.is_file():
                 errors.append(f"{step_id}: missing {key} at {path}")
-        try:
-            load_tool(skill_dir, step)
-        except FlowError as exc:
-            errors.append(f"{step_id}: {exc}")
+        if implementation_closed:
+            try:
+                handler_module = load_tool(skill_dir, step)
+            except FlowError as exc:
+                errors.append(f"{step_id}: {exc}")
+            else:
+                if getattr(handler_module, "M8M_BUILD_STATUS", None) == "BUILD_REQUIRED" or getattr(
+                    handler_module, "M8M_RUNNABLE", None
+                ) is False:
+                    errors.append(
+                        f"{step_id}: candidate handler declares BUILD_REQUIRED/non-runnable"
+                    )
         handler_path = skill_dir / step["handler"]
         if flow.get("_v4"):
             codebase = infer_codebase(skill_dir)
+            if codebase is None and is_builder_fixture(skill_dir):
+                local_tools = skill_dir / "flowsteps" / "tools"
+                if local_tools.is_dir():
+                    codebase = skill_dir
             if codebase is None and not is_builder_fixture(skill_dir):
                 errors.append(f"{step_id}: v4 flow must live at flowsteps/flows/<flow_id>")
+            elif codebase is not None:
+                tool_ids = [
+                    local_tool_package_name(
+                        str(item.get("ref") or ""),
+                        label=(
+                            f"{step_id}.execution.tool_bindings"
+                            f"[{item.get('tool')}].ref"
+                        ),
+                    )
+                    for item in (step.get("execution") or {}).get("tool_bindings") or []
+                    if isinstance(item, dict) and item.get("ref")
+                ]
+                worker = str(step.get("worker") or "")
+                if worker:
+                    tool_ids.append(
+                        runtime_package_name(worker, label=f"{step_id}.worker")
+                        if step.get("judge_abi")
+                        else worker
+                    )
+                for candidate in (
+                    (step.get("branch") or {}).get("worker") if isinstance(step.get("branch"), dict) else None,
+                    (step.get("cycle") or {}).get("worker") if isinstance(step.get("cycle"), dict) else None,
+                ):
+                    if candidate and str(candidate) not in tool_ids:
+                        tool_ids.append(str(candidate))
+                for tool_id in tool_ids:
+                    if tool_id in validated_library_tools:
+                        continue
+                    validated_library_tools.add(tool_id)
+                    errors.extend(validate_library_tool(codebase, tool_id))
         elif handler_path.is_file():
             errors.extend(
                 inspect_tool_source(
@@ -321,7 +434,11 @@ def validate_harness(
                 errors.append(
                     f"{step_id}.inputs.{name} expected {source['output_contract']}, got {contract_name}"
                 )
-    instruction = sync_statuses_from_errors(skill_dir, flow, errors)
+    instruction = (
+        sync_statuses_from_errors(skill_dir, flow, errors)
+        if update_instruction
+        else instruction_path(skill_dir)
+    )
     if errors:
         raise FlowError("harness invalid:\n- " + "\n- ".join(errors))
     return {

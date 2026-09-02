@@ -1,0 +1,18 @@
+{
+  "schema": "flowstep_flow_v4",
+  "flow_id": "judge_loop_unbound",
+  "version": 1,
+  "milestones": [
+    {
+      "id": "result_ready",
+      "success": "One result satisfies the goal.",
+      "output_contract": "m8m.result.v1",
+      "output_schema": "schemas/result.schema.json",
+      "outputs": [
+        {"id": "result", "name": "Result", "kind": "json", "cardinality": "one", "required": true}
+      ],
+      "handler": "handlers/result.py",
+      "loop": "judge"
+    }
+  ]
+}

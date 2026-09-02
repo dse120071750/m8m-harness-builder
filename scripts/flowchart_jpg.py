@@ -226,7 +226,12 @@ def render_flowchart_image(
     )
 
     draw.line((48, top_h - 24, width - 48, top_h - 24), fill=(210, 214, 220), width=2)
-    _text(draw, (48, top_h - 8), "2. Inside one milestone — N FlowSteps + one judge", title_font)
+    _text(
+        draw,
+        (48, top_h - 8),
+        "2. Inside one milestone — expectation + FlowSteps + admission + optional judge",
+        title_font,
+    )
 
     inner_top = top_h + 44
     inner_bot = height - 56
@@ -238,24 +243,26 @@ def render_flowchart_image(
     focus_h = humanize_milestone(focus)
     mid = str(focus.get("id") or "")
     gem = str(focus.get("gem") or f"references/{mid}.md")
-    worker = str(focus.get("worker") or f"{mid}_judge")
+    has_judge = str(focus.get("loop") or "none") == "judge"
+    worker = str(focus.get("worker") or "BLOCKED: missing judge")
     _text(draw, (64, inner_top + 14), f"MILESTONE  {mid}    gem  {gem}", h2_font)
     cap = focus_h.get("success") or (focus_h["title"] + " — " + focus_h["asset"])
-    _text(draw, (64, inner_top + 42), f"rule of success + FlowStep prompts: {cap}"[: 120], small_font, GRAY)
+    _text(draw, (64, inner_top + 42), f"expectation authority: {cap}"[: 120], small_font, GRAY)
 
     sh = 108
     sx = 64
     sy = inner_top + 78
     sequence = list(flowsteps)
-    sequence.append(
-        {
-            "id": "judge",
-            "title": "Judge",
-            "tool": worker,
-            "kind": "judge",
-            "gem": gem,
-        }
-    )
+    if has_judge:
+        sequence.append(
+            {
+                "id": "judge",
+                "title": "Judge",
+                "tool": worker,
+                "kind": "judge",
+                "gem": gem,
+            }
+        )
 
     for index, fs in enumerate(sequence):
         bx = sx + index * (sw + 28)
@@ -287,13 +294,14 @@ def render_flowchart_image(
     _box(draw, (out_x, sy - 4, out_x + 210, sy + 36), GREEN_BG, GREEN, radius=10, width=2)
     _text(draw, (out_x + 12, sy + 8), "PASS → choose bundle", small_font, GREEN)
     _box(draw, (out_x, sy + 44, out_x + 210, sy + 84), AMBER, AMBER_EDGE, radius=10, width=2)
-    _text(draw, (out_x + 12, sy + 56), "not ok → keep working", small_font, YELLOW_EDGE)
+    retry_text = "RETRY → keep working" if has_judge else "invalid → BLOCK"
+    _text(draw, (out_x + 12, sy + 56), retry_text, small_font, YELLOW_EDGE)
     _box(draw, (out_x, sy + 92, out_x + 210, sy + 124), RED_BG, RED, radius=10, width=2)
     _text(draw, (out_x + 12, sy + 100), "no chosen output → BLOCK", small_font, RED)
 
     _center(
         draw,
-        "FlowSteps refine candidates. Judge PASS commits chosen-output.json; only that bundle is visible downstream.",
+        "FlowSteps refine candidates. Admission always runs; optional judge PASS commits chosen-output.json.",
         small_font,
         width / 2,
         inner_bot + 22,

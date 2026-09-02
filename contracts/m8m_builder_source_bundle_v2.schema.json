@@ -1,0 +1,198 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "m8m_builder_source_bundle_v2.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["outputs"],
+  "properties": {
+    "outputs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["workflow_source_bundle", "staged_harness"],
+      "properties": {
+        "workflow_source_bundle": {
+          "$ref": "m8m_workflow_source_bundle_v1.schema.json"
+        },
+        "staged_harness": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "schema",
+            "status",
+            "runnable",
+            "non_runnable",
+            "build_required_tools",
+            "toolbox",
+            "product_skill",
+            "harness_dir",
+            "stage_codebase",
+            "codebase",
+            "flow_id",
+            "skill_name",
+            "milestones",
+            "tools",
+            "instruction_path",
+            "instruction_sha256",
+            "flowchart_path",
+            "flowchart_sha256",
+            "flowchart_jpg",
+            "tool_vs_intelligence",
+            "tool_vs_intelligence_path",
+            "tool_vs_intelligence_sha256",
+            "written",
+            "notes",
+            "source_bundle_path",
+            "source_bundle_sha256",
+            "source_bundle_digest",
+            "runtime_release",
+            "staged_members",
+            "staged_members_digest"
+          ],
+          "properties": {
+            "schema": { "const": "flowstep_harness_generate_v4" },
+            "status": { "enum": ["PASS", "BUILD_REQUIRED"] },
+            "runnable": { "type": "boolean" },
+            "non_runnable": { "type": "boolean" },
+            "build_required_tools": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" }
+            },
+            "toolbox": {
+              "type": "array",
+              "items": { "type": "object" }
+            },
+            "product_skill": { "type": "string", "minLength": 1 },
+            "harness_dir": { "type": "string", "minLength": 1 },
+            "stage_codebase": { "type": "string", "minLength": 1 },
+            "codebase": { "type": "string", "minLength": 1 },
+            "flow_id": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+            "skill_name": { "type": "string", "minLength": 1 },
+            "milestones": {
+              "type": "array",
+              "minItems": 1,
+              "items": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" }
+            },
+            "tools": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" }
+            },
+            "instruction_path": { "type": "string", "minLength": 1 },
+            "instruction_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+            "flowchart_path": { "type": "string", "minLength": 1 },
+            "flowchart_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+            "flowchart_jpg": { "type": "string", "minLength": 1 },
+            "tool_vs_intelligence": { "type": "object", "minProperties": 1 },
+            "tool_vs_intelligence_path": { "type": "string", "minLength": 1 },
+            "tool_vs_intelligence_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+            "tool_generation": { "type": "array", "items": { "type": "object" } },
+            "teaching_contracts": {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1 }
+            },
+            "written": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+            "notes": { "type": "array", "items": { "type": "string" } },
+            "source_bundle_path": { "type": "string", "minLength": 1 },
+            "source_bundle_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+            "source_bundle_digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+            "runtime_release": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "schema",
+                "runtime_name",
+                "runtime_version",
+                "runtime_id",
+                "cli_abi",
+                "entrypoint",
+                "python_abi",
+                "python_executable_digest",
+                "dependencies",
+                "payload_digest",
+                "manifest_digest",
+                "manifest_path",
+                "manifest_sha256",
+                "codebase_launcher_path",
+                "codebase_launcher_sha256",
+                "archive_path",
+                "archive_sha256",
+                "harness_lock_path",
+                "harness_lock_sha256",
+                "member_count"
+              ],
+              "properties": {
+                "schema": { "const": "m8m.runtime_release.v1" },
+                "runtime_name": { "const": "m8m-runtime" },
+                "runtime_version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
+                "runtime_id": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+                "cli_abi": { "const": "m8m_runtime_cli_v1" },
+                "entrypoint": { "const": "scripts/run_flow.py" },
+                "python_abi": { "type": "string", "pattern": "^[A-Za-z0-9_.-]+$" },
+                "python_executable_digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+                "dependencies": {
+                  "type": "array",
+                  "minItems": 1,
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["name", "version", "vendor_path", "file_count", "files_digest"],
+                    "properties": {
+                      "name": { "type": "string", "minLength": 1 },
+                      "version": { "type": "string", "minLength": 1 },
+                      "vendor_path": {
+                        "type": "string",
+                        "pattern": "^vendor/[a-z0-9][a-z0-9-]*$"
+                      },
+                      "file_count": { "type": "integer", "minimum": 1 },
+                      "files_digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+                    }
+                  }
+                },
+                "payload_digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+                "manifest_digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+                "manifest_path": { "type": "string", "minLength": 1 },
+                "manifest_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+                "codebase_launcher_path": { "type": "string", "minLength": 1 },
+                "codebase_launcher_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+                "archive_path": { "type": "string", "minLength": 1 },
+                "archive_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+                "harness_lock_path": { "type": "string", "minLength": 1 },
+                "harness_lock_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+                "member_count": { "type": "integer", "minimum": 1 }
+              }
+            },
+            "staged_members": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["source", "destinations", "byte_count", "digest"],
+                "properties": {
+                  "source": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\)[^:]+$"
+                  },
+                  "destinations": {
+                    "type": "array",
+                    "minItems": 1,
+                    "uniqueItems": true,
+                    "items": {
+                      "type": "string",
+                      "pattern": "^(?:codebase|target)/(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\)[^:]+$"
+                    }
+                  },
+                  "byte_count": { "type": "integer", "minimum": 0 },
+                  "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+                }
+              }
+            },
+            "staged_members_digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+          }
+        }
+      }
+    }
+  }
+}

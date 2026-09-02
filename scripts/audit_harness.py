@@ -7,6 +7,7 @@ import ast
 import json
 import re
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +24,8 @@ from flowstep_runtime import (
     infer_asset_kind,
     is_builder_fixture,
     is_stub_output_schema,
+    lexical_abs,
+    local_tool_package_name,
     normalize_flowsteps,
     is_under_home_skills,
     load_yaml,
@@ -37,6 +40,7 @@ from teaching_contracts import build_teaching_plan, render_teaching_plan_markdow
 from toolbox_plan import build_toolbox_plan, render_toolbox_plan_markdown
 from tool_vs_intelligence import from_audit as classification_from_audit
 from tool_vs_intelligence import render_markdown as render_classification_markdown
+from migrate_skill_source import classify_skill
 
 
 AUDIT_SCHEMA = "flowstep_skill_audit_v1"
@@ -49,6 +53,23 @@ LINKED_FLOW_RE = re.compile(
 )
 TOOLBOX_RE = re.compile(r"flowsteps[/\\]tools[/\\]([a-z][a-z0-9_]*)")
 MILESTONE_LINE_RE = re.compile(r"^\d+\.\s+`([a-z][a-z0-9_]*)`")
+
+
+def _bound_tool_packages(step: dict[str, Any]) -> list[str]:
+    bindings = (step.get("execution") or {}).get("tool_bindings") or []
+    if bindings:
+        return [
+            local_tool_package_name(
+                str(item.get("ref") or ""),
+                label=(
+                    f"{step.get('id')}.execution.tool_bindings"
+                    f"[{item.get('tool')}].ref"
+                ),
+            )
+            for item in bindings
+            if isinstance(item, dict) and item.get("ref")
+        ]
+    return [str(item) for item in step.get("tools") or [] if item]
 DRIVER_STEMS = {
     "audit_harness",
     "candidate_cache",
@@ -86,6 +107,31 @@ ACTION_HINTS = TOOL_ID_HINTS + (
     "release",
 )
 INTEL_HINTS = INTEL_ID_HINTS + ("label", "caption", "plan", "select")
+EXTERNAL_ACTION_TOKENS = {
+    "apply",
+    "commit",
+    "delete",
+    "deploy",
+    "patch",
+    "persist",
+    "publish",
+    "register",
+    "remove",
+    "reset",
+    "send",
+    "update",
+    "upload",
+}
+EXTERNAL_TRANSPORT_MARKERS = (
+    "studioapi(",
+    "requests.post(",
+    "requests.put(",
+    "client.post(",
+    "/commit",
+    "firestore",
+    "storage.client(",
+    "tenantmcpcontentgateway",
+)
 ENVELOPE_CONTRACTS = {
     "flowstep_flow_v4",
     "flowstep_output_v3",
@@ -93,6 +139,9 @@ ENVELOPE_CONTRACTS = {
     "m8m_candidate_cache_entry_v1",
     "m8m_cache_receipt_v1",
     "m8m_run_context_v1",
+    "m8m_run_context_v2",
+    "m8m_run_storage_contract_v1",
+    "m8m_source_asset_manifest_v1",
     "m8m_context_capsule_v1",
     "m8m_goal_ledger_v1",
     "flow_sequence_action_v2",
@@ -139,7 +188,7 @@ def _step_rows(raw: dict[str, Any]) -> list[dict[str, Any]]:
 
 def _rel(root: Path, path: Path) -> str:
     try:
-        return path.resolve().relative_to(root.resolve()).as_posix()
+        return lexical_abs(path).relative_to(lexical_abs(root)).as_posix()
     except ValueError:
         return str(path)
 
@@ -245,6 +294,33 @@ def load_schema_file(path: Path) -> dict[str, Any] | None:
     return raw if isinstance(raw, dict) else None
 
 
+def _output_schema_closure_issues(root: Path, schema_ref: Any) -> list[str]:
+    """Return fail-closed envelope findings for a resolvable output schema."""
+
+    ref = str(schema_ref or "")
+    if not ref.strip() or ref != ref.strip():
+        return []
+    schema = load_schema_file(root / ref)
+    if schema is None:
+        return []
+    issues: list[str] = []
+    if schema.get("type") != "object" or schema.get("additionalProperties") is not False:
+        issues.append(
+            "output_schema root must be an object with additionalProperties: false"
+        )
+    properties = schema.get("properties")
+    outputs = properties.get("outputs") if isinstance(properties, dict) else None
+    if (
+        not isinstance(outputs, dict)
+        or outputs.get("type") != "object"
+        or outputs.get("additionalProperties") is not False
+    ):
+        issues.append(
+            "output_schema outputs object must set additionalProperties: false"
+        )
+    return issues
+
+
 def proposed_schema_object(
     *,
     step_id: str,
@@ -331,6 +407,34 @@ def _public_functions(path: Path) -> list[str]:
     return names
 
 
+def _module_string_constant(path: Path, name: str) -> str:
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8-sig"))
+    except (OSError, SyntaxError, UnicodeError):
+        return ""
+    for node in tree.body:
+        if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+            continue
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        if not any(isinstance(target, ast.Name) and target.id == name for target in targets):
+            continue
+        value = node.value
+        if isinstance(value, ast.Constant) and isinstance(value.value, str):
+            return value.value.strip()
+    return ""
+
+
+def _external_side_effect_risk(path: Path) -> str:
+    tokens = {item for item in re.split(r"[^a-z0-9]+", path.stem.lower()) if item}
+    if not tokens.intersection(EXTERNAL_ACTION_TOKENS):
+        return ""
+    try:
+        body = path.read_text(encoding="utf-8-sig").lower()
+    except (OSError, UnicodeError):
+        return ""
+    return path.stem if any(marker in body for marker in EXTERNAL_TRANSPORT_MARKERS) else ""
+
+
 def _classify_script(stem: str) -> str:
     if stem in DRIVER_STEMS:
         return "driver"
@@ -359,7 +463,7 @@ def _markdown_milestones(body: str) -> list[str]:
 
 
 def inventory_target(root: Path) -> dict[str, Any]:
-    root = root.resolve()
+    root = lexical_abs(root)
     meta = _frontmatter(root / "SKILL.md")
     scripts: list[dict[str, Any]] = []
     scripts_dir = root / "scripts"
@@ -367,6 +471,7 @@ def inventory_target(root: Path) -> dict[str, Any]:
         for path in sorted(scripts_dir.glob("*.py")):
             stem = path.stem
             kind = _classify_script(stem)
+            external_risk = _external_side_effect_risk(path)
             scripts.append(
                 {
                     "id": stem,
@@ -374,6 +479,11 @@ def inventory_target(root: Path) -> dict[str, Any]:
                     "class": kind,
                     "functions": _public_functions(path),
                     "standardize": kind in {"tool", "intelligence", "unknown"},
+                    "external_side_effect_risk": external_risk or None,
+                    "external_side_effect_owner": _module_string_constant(
+                        path, "M8M_EXTERNAL_SIDE_EFFECT_OWNER"
+                    )
+                    or None,
                 }
             )
     agents: list[dict[str, Any]] = []
@@ -431,7 +541,7 @@ def inventory_target(root: Path) -> dict[str, Any]:
 
 
 def audit_harness(root: Path) -> dict[str, Any]:
-    root = root.resolve()
+    root = lexical_abs(root)
     flow_path = _find_any_flow(root)
     findings: list[dict[str, str]] = []
     if flow_path is None:
@@ -465,7 +575,7 @@ def audit_harness(root: Path) -> dict[str, Any]:
                 "id": "schema",
                 "note": (
                     f"{flow_schema} has no chosen milestone outputs; regenerate with "
-                    "m8m-harness-builder 2.0"
+                    "m8m-harness-builder 3.1"
                 ),
             }
         )
@@ -503,9 +613,21 @@ def audit_harness(root: Path) -> dict[str, Any]:
         )
 
     codebase = infer_codebase(root)
-    known_tools = set()
-    if codebase is not None and tools_root(codebase).is_dir():
-        known_tools = {path.name for path in tools_root(codebase).iterdir() if path.is_dir()}
+    declared_tools = {
+        str(tool_id)
+        for item in steps
+        for tool_id in _bound_tool_packages(item)
+        if str(tool_id)
+    }
+    tool_validation_cache: dict[str, list[str]] = {}
+    if codebase is not None and declared_tools:
+        ordered_tools = sorted(declared_tools)
+        with ThreadPoolExecutor(max_workers=min(8, len(ordered_tools))) as pool:
+            validation_rows = pool.map(
+                lambda tool_id: validate_library_tool(codebase, tool_id),
+                ordered_tools,
+            )
+            tool_validation_cache = dict(zip(ordered_tools, validation_rows))
 
     step_reports: list[dict[str, Any]] = []
     for item in steps:
@@ -528,6 +650,7 @@ def audit_harness(root: Path) -> dict[str, Any]:
             "success": item.get("success"),
             "flowsteps": item.get("flowsteps") if isinstance(item.get("flowsteps"), list) else [],
             "tools": tools,
+            "execution": item.get("execution") if isinstance(item.get("execution"), dict) else None,
             "intelligence": intel if intel is not None else item.get("model", "none"),
             "model": item.get("model"),
             "inputs": inputs,
@@ -560,25 +683,116 @@ def audit_harness(root: Path) -> dict[str, Any]:
         if flow_schema == FLOW_SCHEMA:
             if not tools:
                 row["issues"].append("no toolbox listed; writer will add hash_bind or generate-new")
-            for tool_id in tools:
-                if tool_id not in known_tools:
+            for tool_id in _bound_tool_packages(item):
+                tool_key = str(tool_id)
+                tool_errors = tool_validation_cache.get(tool_key) or []
+                if any("missing tool.py" in err for err in tool_errors):
                     row["issues"].append(f"generate-new: {tool_id}")
                 elif codebase is not None:
-                    for err in validate_library_tool(codebase, str(tool_id)):
+                    for err in tool_errors:
                         row["issues"].append(err)
                         findings.append({"severity": "P1", "id": step_id, "note": err})
+            if str(intel or "none") == "none" and str(
+                item.get("on_tool_fail") or "BLOCKED"
+            ) == "need_model":
+                note = (
+                    "tool-only milestone routes deterministic or infrastructure "
+                    "failure to a model; use retryable or BLOCKED"
+                )
+                row["issues"].append(note)
+                findings.append({"severity": "P0", "id": step_id, "note": note})
+            side_effects = str(item.get("side_effects") or "none")
+            phase_journal = item.get("phase_journal") if isinstance(item.get("phase_journal"), dict) else None
+            external_risk = cache_side_effect_risk(item)
+            if external_risk and side_effects != "external":
+                note = (
+                    f"{external_risk} may mutate external state; declare "
+                    "side_effects: external and a phase_journal"
+                )
+                row["issues"].append(note)
+                findings.append({"severity": "P0", "id": step_id, "note": note})
+            if side_effects == "external":
+                if (
+                    not isinstance(phase_journal, dict)
+                    or any(not str(phase_journal.get(key) or "").strip() for key in ("path", "operator_result_path"))
+                    or phase_journal.get("resume") != "query_exact_operation"
+                ):
+                    note = (
+                        "external side effects require a run-local phase_journal with "
+                        "path, operator_result_path, and resume=query_exact_operation"
+                    )
+                    row["issues"].append(note)
+                    findings.append({"severity": "P0", "id": step_id, "note": note})
             if intel not in {None, "none"} and not item.get("model_justification"):
                 row["issues"].append("intelligence has no model_justification; writer fills a default")
             if any(step_id.lower().startswith(prefix) for prefix in ("if_", "loop_", "switch_", "when_", "else_")):
                 row["issues"].append("name looks like control (if/loop); still drawn as a checkpoint")
-            if str(item.get("loop") or "none") in {"for", "judge"} and not item.get("worker"):
-                row["issues"].append("for/judge milestone needs a repo worker for the ok/not-ok receipt")
+            loop = str(item.get("loop") or "none")
+            execution = item.get("execution") if isinstance(item.get("execution"), dict) else {}
+            judge_binding = execution.get("judge")
+            if loop in {"for", "judge"} and not str(item.get("worker") or "").strip():
+                row["issues"].append("control or semantic milestone needs its explicitly authored repo worker and typed result contract")
+            if loop == "judge":
+                judge_problems: list[str] = []
+                if not isinstance(judge_binding, dict) or not str(judge_binding.get("ref") or "").strip():
+                    judge_problems.append("execution.judge")
+                if not str(item.get("worker") or "").strip():
+                    judge_problems.append("worker")
+                if item.get("judge_abi") != "m8m_milestone_judge_v1":
+                    judge_problems.append("judge_abi")
+                if judge_problems:
+                    note = "loop=judge requires closed " + ", ".join(judge_problems)
+                    row["issues"].append(note)
+                    findings.append({"severity": "P0", "id": step_id, "note": note})
+            elif loop == "none" and (
+                isinstance(judge_binding, dict)
+                or "judge_abi" in item
+                or (
+                    "worker" in item
+                    and not isinstance(item.get("branch"), dict)
+                    and not isinstance(item.get("cycle"), dict)
+                )
+            ):
+                note = "loop=none forbids execution.judge, worker, and judge_abi"
+                row["issues"].append(note)
+                findings.append({"severity": "P0", "id": step_id, "note": note})
             if not str(item.get("success") or "").strip():
                 row["issues"].append("missing milestone success goal")
                 findings.append({"severity": "P0", "id": step_id, "note": row["issues"][-1]})
+            if not str(item.get("output_contract") or "").strip():
+                note = "missing non-blank output_contract"
+                row["issues"].append(note)
+                findings.append({"severity": "P0", "id": step_id, "note": note})
+            if not str(item.get("output_schema") or "").strip():
+                note = "missing non-blank output_schema"
+                row["issues"].append(note)
+                findings.append({"severity": "P0", "id": step_id, "note": note})
             if not isinstance(item.get("outputs"), list) or not item.get("outputs"):
                 row["issues"].append("missing named chosen-output declarations")
                 findings.append({"severity": "P0", "id": step_id, "note": row["issues"][-1]})
+            else:
+                for output_index, output in enumerate(item["outputs"]):
+                    output_id = (
+                        str(output.get("id") or "").strip()
+                        if isinstance(output, dict)
+                        else ""
+                    )
+                    output_name = (
+                        str(output.get("name") or "").strip()
+                        if isinstance(output, dict)
+                        else ""
+                    )
+                    if not output_id:
+                        note = f"outputs[{output_index}].id must be non-blank"
+                        row["issues"].append(note)
+                        findings.append({"severity": "P0", "id": step_id, "note": note})
+                    if not output_name:
+                        note = f"outputs[{output_index}].name must be non-blank"
+                        row["issues"].append(note)
+                        findings.append({"severity": "P0", "id": step_id, "note": note})
+            for note in _output_schema_closure_issues(root, item.get("output_schema")):
+                row["issues"].append(note)
+                findings.append({"severity": "P0", "id": step_id, "note": note})
             if item.get("cache") is not None:
                 cache = item.get("cache") if isinstance(item.get("cache"), dict) else {}
                 cache_problem = ""
@@ -597,7 +811,7 @@ def audit_harness(root: Path) -> dict[str, Any]:
                 if cache_problem:
                     row["issues"].append(cache_problem)
                     findings.append({"severity": "P0", "id": step_id, "note": cache_problem})
-        if not item.get("output_contract"):
+        if not str(item.get("output_contract") or "").strip():
             row["issues"].append(f"no output_contract; writer will invent {step_id or 'step'}_v1")
         step_reports.append(row)
 
@@ -777,7 +991,7 @@ def _schema_properties(schema: dict[str, Any] | None) -> dict[str, Any]:
 
 
 def infer_schema_control(milestones: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Mark for (ledger) and judge (until ok) milestones. Never exclusive next.when."""
+    """Mark proposal-only ledger and optional judge-until-PASS hints."""
     from humanize_chart import success_line
 
     for index, item in enumerate(milestones):
@@ -827,7 +1041,12 @@ def infer_schema_control(milestones: list[dict[str, Any]]) -> list[dict[str, Any
                 item["worker"] = item.get("worker") or "cycle_receipt"
                 item["receipt_schema"] = item["cycle"]["receipt_schema"]
                 continue
-        if needs_judge(item) and not item.get("cycle"):
+        if (
+            needs_judge(item)
+            and not item.get("cycle")
+            and str(item.get("loop") or "none") != "judge"
+        ):
+            item["_judge_inferred"] = True
             item["loop"] = "judge"
             item["receipt_schema"] = item.get("receipt_schema") or f"schemas/{item['id']}_receipt_v1.json"
         if not item.get("success"):
@@ -837,7 +1056,12 @@ def infer_schema_control(milestones: list[dict[str, Any]]) -> list[dict[str, Any
         item.pop("join", None)
     _infer_branch(milestones)
     for item in milestones:
+        had_authored_judge = str(item.get("loop") or "none") == "judge" and not item.get(
+            "_judge_inferred"
+        )
         pair_milestone(item)
+        if str(item.get("loop") or "none") == "judge" and not had_authored_judge:
+            item["_judge_inferred"] = True
         if not item.get("success"):
             item["success"] = success_line(item)
     return milestones
@@ -941,8 +1165,8 @@ def control_table(milestones: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 {
                     "milestone": item["id"],
                     "kind": "judge",
-                    "criterion": "ok_receipt",
-                    "worker": item.get("worker") or "ok_receipt",
+                    "criterion": "m8m_milestone_judge_v1",
+                    "worker": item.get("worker") or "BLOCKED: missing semantic judge",
                     "receipt_schema": item.get("receipt_schema"),
                 }
             )
@@ -1051,8 +1275,8 @@ def propose_from_flow(root: Path, grade: dict[str, Any]) -> tuple[list[dict[str,
             emit_source_from_pending()
         intel = _intel_value(step)
         milestone_id = _rename_milestone(str(step["id"]), intel)
-        declared_tools = [str(item) for item in (step.get("tools") or [])]
-        for tool_id in declared_tools:
+        declared_packages = _bound_tool_packages(step)
+        for tool_id in declared_packages:
             python_tools.append(
                 _python_tool_row(
                     current=tool_id,
@@ -1066,7 +1290,7 @@ def propose_from_flow(root: Path, grade: dict[str, Any]) -> tuple[list[dict[str,
             "id": milestone_id,
             "from_step": step["id"],
             "intelligence": intel,
-            "tools": declared_tools,
+            "tools": [str(item) for item in step.get("tools") or [] if item],
             "output_contract": step.get("output_contract") or f"{milestone_id}_v1",
             "inputs": step.get("inputs")
             or ({"request": "user.request"} if previous_id is None else {previous_id: f"{previous_id}_v1"}),
@@ -1077,6 +1301,7 @@ def propose_from_flow(root: Path, grade: dict[str, Any]) -> tuple[list[dict[str,
             "success": step.get("success"),
             "cache": step.get("cache") if isinstance(step.get("cache"), dict) else None,
             "flowsteps": step.get("flowsteps"),
+            "execution": step.get("execution") if isinstance(step.get("execution"), dict) else None,
         }
         if step.get("next"):
             row["next"] = step["next"]
@@ -1282,7 +1507,7 @@ def goal_text(inventory: dict[str, Any], grade: dict[str, Any], milestones: list
     if grade.get("verdict") == "NO_FLOW":
         shape = "This skill has no FlowStep YAML; work lives in markdown, workers, and scripts."
     elif grade.get("flow_schema") == "flowstep_flow_v1":
-        shape = "Current shape is a v1 in-process worker graph (n8n-style actions / persistent workers)."
+        shape = "Current shape is a v1 in-process action graph with persistent workers."
     elif grade.get("flow_schema") in {"flowstep_flow_v2", FLOW_SCHEMA_V3}:
         shape = "Current shape predates chosen outputs. Regenerate it as v4 milestones."
     elif grade.get("flow_schema") == FLOW_SCHEMA:
@@ -1301,10 +1526,43 @@ def goal_text(inventory: dict[str, Any], grade: dict[str, Any], milestones: list
 
 
 def audit_skill(root: Path) -> dict[str, Any]:
-    root = root.resolve()
+    root = lexical_abs(root)
     inventory = inventory_target(root)
-    grade_root = Path(inventory["linked_flow"]).resolve() if inventory.get("linked_flow") else root
+    grade_root = lexical_abs(inventory["linked_flow"]) if inventory.get("linked_flow") else root
     grade = audit_harness(grade_root)
+    declared_tools = {
+        str(tool_id)
+        for step in grade.get("steps") or []
+        for tool_id in _bound_tool_packages(step)
+        if str(tool_id)
+    }
+    external_findings = 0
+    if grade.get("verdict") != "NO_FLOW":
+        for script in inventory.get("scripts") or []:
+            risk = str(script.get("external_side_effect_risk") or "")
+            delegated = str(script.get("external_side_effect_owner") or "")
+            if not risk or delegated or str(script.get("id") or "") in declared_tools:
+                continue
+            grade.setdefault("findings", []).append(
+                {
+                    "severity": "P0",
+                    "id": str(script.get("id") or "external_side_effect"),
+                    "note": (
+                        f"external writer script {script.get('path')} is outside the linked M8M flow; "
+                        "declare it on a side_effects: external milestone or set an explicit "
+                        "M8M_EXTERNAL_SIDE_EFFECT_OWNER"
+                    ),
+                }
+            )
+            external_findings += 1
+    p0_count = sum(1 for item in grade.get("findings") or [] if item.get("severity") == "P0")
+    if external_findings:
+        grade["p0_count"] = p0_count
+        grade["p1_count"] = sum(
+            1 for item in grade.get("findings") or [] if item.get("severity") != "P0"
+        )
+        grade["status"] = "FINDINGS"
+        grade["verdict"] = "NEEDS_UPGRADE"
     if grade.get("steps"):
         milestones, python_tools = propose_from_flow(root, grade)
         if grade.get("flow_schema") != FLOW_SCHEMA:
@@ -1337,7 +1595,7 @@ def audit_skill(root: Path) -> dict[str, Any]:
                 "severity": "P1",
                 "id": "judge_overuse",
                 "note": (
-                    "every milestone is judge; schema PASS is success unless exists is not enough. "
+                    "every milestone has structural admission; add a semantic judge only when existence is not enough. "
                     "Do not drop a shared judge module onto cycle, branch, or every milestone."
                 ),
             }
@@ -1386,7 +1644,7 @@ def audit_skill(root: Path) -> dict[str, Any]:
             }
         )
     for step in grade.get("steps") or []:
-        for tool_id in step.get("tools") or []:
+        for tool_id in _bound_tool_packages(step):
             current_tools.append(
                 {
                     "id": tool_id,
@@ -1407,6 +1665,7 @@ def audit_skill(root: Path) -> dict[str, Any]:
                 }
             )
 
+    form = classify_skill(root, flow_id=str(grade.get("flow_id") or "") or None)
     return {
         "schema": AUDIT_SCHEMA,
         "status": grade["status"] if grade.get("verdict") != "NO_FLOW" else "FINDINGS",
@@ -1422,6 +1681,11 @@ def audit_skill(root: Path) -> dict[str, Any]:
         },
         "grade": grade,
         "goal": goal_text(inventory, grade, milestones),
+        "source_context": form["source_context"],
+        "runtime_ownership": form["runtime_ownership"],
+        "ownership_gaps": form["ownership_gaps"],
+        "builder_runtime_hits": form["builder_runtime_hits"],
+        "equivalence_claimed": False,
         "current_tools": current_tools,
         "proposed_milestones": milestones,
         "control": control_table(milestones),
@@ -1432,7 +1696,7 @@ def audit_skill(root: Path) -> dict[str, Any]:
         ),
         "teaching_plan": build_teaching_plan(
             root,
-            Path(inventory["linked_flow"]).resolve()
+            lexical_abs(inventory["linked_flow"])
             if inventory.get("linked_flow")
             else (grade_root if grade.get("verdict") != "NO_FLOW" else None),
         ),
@@ -1495,6 +1759,8 @@ def render_audit_markdown(report: dict[str, Any]) -> str:
         f"- location: `{grade.get('location')}`",
         f"- verdict: `{report['verdict']}`",
         f"- status: `{report['status']}`",
+        f"- runtime_ownership: `{report.get('runtime_ownership') or 'unknown'}`",
+        f"- reuse: canvas={bool(((report.get('source_context') or {}).get('reuse') or {}).get('canvas'))} tools={len(((report.get('source_context') or {}).get('reuse') or {}).get('tools') or [])}",
         f"- P0: {grade.get('p0_count', 0)}  P1: {grade.get('p1_count', 0)}",
         "",
         "## Audited skill",
@@ -1572,7 +1838,7 @@ def render_audit_markdown(report: dict[str, Any]) -> str:
             "",
             "## Schema control",
             "",
-            "Rule of success lives on each milestone gem. Candidate schema PASS validates declared ports.",
+            "Milestone success is authored in workflow source; Gems contain only FlowStep guidance. Candidate schema PASS validates declared ports.",
             "judge = stay on this box until the worker accepts the current candidate; only then commit chosen-output.json.",
             "cycle and branch keep their own receipts. Do not wrap them in a shared judge module.",
             "",
@@ -1580,7 +1846,7 @@ def render_audit_markdown(report: dict[str, Any]) -> str:
     )
     control = report.get("control") or []
     if not control:
-        lines.append("None. Linear chain; no for-ledger or judge-until-ok milestone.")
+        lines.append("None. Linear chain; no for-ledger or semantic judge loop.")
     else:
         lines.extend(
             [
@@ -1677,7 +1943,7 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         if args.target:
-            root = args.target.resolve()
+            root = lexical_abs(args.target)
         else:
             root = harness_dir_from_args(args)
         report = audit_skill(root)
@@ -1686,7 +1952,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     report_path = None
     if not args.no_write:
-        report_path = (args.write_report or default_report_path(root)).resolve()
+        report_path = lexical_abs(args.write_report or default_report_path(root))
         write_audit_markdown(report, report_path)
         json_path = report_path.with_suffix(".json")
         json_path.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")

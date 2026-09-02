@@ -1,0 +1,160 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "m8m_builder_source_audit_v2.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["outputs"],
+  "properties": {
+    "outputs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_audit"],
+      "properties": {
+        "source_audit": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "schema",
+            "status",
+            "verdict",
+            "target",
+            "audited_at",
+            "audited_skill",
+            "grade",
+            "goal",
+            "current_tools",
+            "proposed_milestones",
+            "control",
+            "toolbox_plan",
+            "teaching_plan",
+            "python_standardization",
+            "tool_vs_intelligence",
+            "contracts",
+            "agents",
+            "scripts",
+            "authoring_mode",
+            "source_context",
+            "runtime_ownership",
+            "equivalence_claimed",
+            "builder_request"
+          ],
+          "properties": {
+            "schema": { "const": "flowstep_skill_audit_v1" },
+            "status": { "enum": ["PASS", "FINDINGS", "BLOCKED"] },
+            "verdict": { "enum": ["MILESTONE_TOOLBOX", "NEEDS_UPGRADE", "NO_FLOW"] },
+            "target": { "type": "string", "minLength": 1 },
+            "audited_at": { "type": "string", "minLength": 1 },
+            "audited_skill": { "type": "object", "minProperties": 2 },
+            "grade": { "type": "object", "minProperties": 1 },
+            "goal": { "type": "string", "minLength": 1 },
+            "current_tools": { "type": "array" },
+            "proposed_milestones": { "type": "array", "minItems": 1 },
+            "control": { "type": "array" },
+            "toolbox_plan": { "type": "array" },
+            "teaching_plan": { "type": "array" },
+            "python_standardization": { "type": "array" },
+            "tool_vs_intelligence": { "type": "object", "minProperties": 1 },
+            "contracts": { "type": "array" },
+            "agents": { "type": "array" },
+            "scripts": { "type": "array" },
+            "authoring_mode": { "enum": ["skill_native", "from_context"] },
+            "source_context": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["task", "reuse", "gaps"],
+              "properties": {
+                "task": { "type": "string" },
+                "reuse": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["canvas", "milestones", "tools", "gems"],
+                  "properties": {
+                    "canvas": { "type": "boolean" },
+                    "flow_schema": { "type": ["string", "null"] },
+                    "milestones": { "type": "array", "items": { "type": "string" } },
+                    "tools": { "type": "array", "items": { "type": "string" } },
+                    "gems": { "type": "array", "items": { "type": "string" } }
+                  }
+                },
+                "gaps": { "type": "array", "items": { "type": "string" } }
+              }
+            },
+            "runtime_ownership": { "enum": ["codebase", "builder", "mixed", "none"] },
+            "ownership_gaps": { "type": "array", "items": { "type": "string" } },
+            "builder_runtime_hits": { "type": "array", "items": { "type": "string" } },
+            "equivalence_claimed": { "type": "boolean" },
+            "skill_source": { "type": "object", "minProperties": 1 },
+            "compiled_flow": { "type": "object", "minProperties": 1 },
+            "source_snapshot": { "type": "string", "minLength": 1 },
+            "source_snapshot_members": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["path", "sha256", "byte_count", "digest"],
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\)[^:]+$"
+                  },
+                  "sha256": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+                  "byte_count": { "type": "integer", "minimum": 0 },
+                  "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+                }
+              }
+            },
+            "source_snapshot_digest": {
+              "type": "string",
+              "pattern": "^sha256:[0-9a-f]{64}$"
+            },
+            "builder_request": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["target", "codebase", "flow_id", "skill_name"],
+              "properties": {
+                "target": { "type": "string", "minLength": 1 },
+                "codebase": { "type": "string", "minLength": 1 },
+                "flow_id": { "type": ["string", "null"] },
+                "skill_name": { "type": ["string", "null"] }
+              }
+            }
+          },
+          "allOf": [
+            {
+              "if": {
+                "properties": { "authoring_mode": { "const": "skill_native" } },
+                "required": ["authoring_mode"]
+              },
+              "then": {
+                "required": [
+                  "skill_source",
+                  "compiled_flow",
+                  "source_snapshot",
+                  "source_snapshot_members",
+                  "source_snapshot_digest"
+                ]
+              }
+            },
+            {
+              "if": {
+                "properties": { "authoring_mode": { "const": "from_context" } },
+                "required": ["authoring_mode"]
+              },
+              "then": {
+                "required": [
+                  "source_context",
+                  "runtime_ownership",
+                  "source_snapshot",
+                  "source_snapshot_members",
+                  "source_snapshot_digest"
+                ]
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

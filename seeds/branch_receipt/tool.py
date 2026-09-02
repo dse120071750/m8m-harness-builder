@@ -1,55 +1,49 @@
-"""Branch receipt worker. AI drafts the path; this tool writes the receipt."""
+"""Choose a branch from one runtime-owned, post-admission control request."""
 
 from __future__ import annotations
 
 from typing import Any
 
 
-def _paths(input_data: dict[str, Any]) -> list[str]:
-    raw = input_data.get("paths")
-    if isinstance(raw, list) and raw:
-        return [str(item) for item in raw if item]
-    branch = input_data.get("branch")
-    if isinstance(branch, dict) and isinstance(branch.get("paths"), list):
-        out: list[str] = []
-        for item in branch["paths"]:
-            if isinstance(item, dict) and item.get("id"):
-                out.append(str(item["id"]))
-            elif item:
-                out.append(str(item))
-        return out
-    return []
+def _control(input_data: dict[str, Any]) -> dict[str, Any]:
+    value = input_data.get("control")
+    return dict(value) if isinstance(value, dict) else {}
 
 
 def _default(input_data: dict[str, Any], paths: list[str]) -> str:
-    branch = input_data.get("branch") if isinstance(input_data.get("branch"), dict) else {}
-    raw = input_data.get("default") or branch.get("default") or ""
+    raw = _control(input_data).get("default") or ""
     if raw:
         return str(raw)
     return paths[0] if paths else ""
 
 
 def _recommended(input_data: dict[str, Any]) -> str:
-    draft = input_data.get("draft") if isinstance(input_data.get("draft"), dict) else {}
-    for source in (input_data, draft):
-        for key in ("recommended_branch", "branch_id"):
-            value = source.get(key)
-            if isinstance(value, str) and value.strip():
-                return value.strip()
-        value = source.get("branch")
+    inputs = input_data.get("inputs") if isinstance(input_data.get("inputs"), dict) else {}
+    candidate = input_data.get("candidate") if isinstance(input_data.get("candidate"), dict) else {}
+    outputs = candidate.get("outputs") if isinstance(candidate.get("outputs"), dict) else {}
+    sources = [outputs, *[value for value in outputs.values() if isinstance(value, dict)], inputs]
+    for source in sources:
+        value = source.get("recommended_branch") or source.get("branch_id")
         if isinstance(value, str) and value.strip():
             return value.strip()
     return ""
 
 
 def _from_case_type(input_data: dict[str, Any], paths: list[str]) -> str:
-    case_type = input_data.get("case_type")
-    if case_type is None:
-        request = input_data.get("request") if isinstance(input_data.get("request"), dict) else {}
-        case_type = request.get("case_type")
-    if not isinstance(case_type, str):
-        nested = input_data.get("intake_ready") if isinstance(input_data.get("intake_ready"), dict) else {}
-        case_type = nested.get("case_type")
+    inputs = input_data.get("inputs") if isinstance(input_data.get("inputs"), dict) else {}
+    candidate = input_data.get("candidate") if isinstance(input_data.get("candidate"), dict) else {}
+    outputs = candidate.get("outputs") if isinstance(candidate.get("outputs"), dict) else {}
+    values = [*outputs.values(), inputs, *inputs.values()]
+    case_type: Any = None
+    for value in values:
+        if isinstance(value, dict) and isinstance(value.get("case_type"), str):
+            case_type = value["case_type"]
+            break
+        if isinstance(value, dict):
+            request = value.get("request")
+            if isinstance(request, dict) and isinstance(request.get("case_type"), str):
+                case_type = request["case_type"]
+                break
     if not isinstance(case_type, str):
         return ""
     token = case_type.strip()
@@ -63,7 +57,8 @@ def _from_case_type(input_data: dict[str, Any], paths: list[str]) -> str:
 def run(input_data: dict[str, Any], params: dict[str, Any] | None = None, **_: Any) -> dict[str, Any]:
     del params
     payload = dict(input_data or {})
-    paths = _paths(payload)
+    control = _control(payload)
+    paths = [str(item) for item in control.get("paths") or [] if item]
     default = _default(payload, paths)
     recommended = _recommended(payload) or _from_case_type(payload, paths) or default
     if not recommended:
@@ -81,7 +76,7 @@ def run(input_data: dict[str, Any], params: dict[str, Any] | None = None, **_: A
             "reason": f"unknown branch {recommended}",
         }
     skipped = [item for item in paths if item != recommended]
-    reason = payload.get("reason") or ""
+    reason = ""
     if not reason:
         if recommended == default and not _recommended(payload) and not _from_case_type(payload, paths):
             reason = f"default {recommended}"

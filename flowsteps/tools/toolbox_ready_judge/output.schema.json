@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "m8m_builder_toolbox_ready_judge_receipt_v1.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["ok", "code", "reasons"],
+  "properties": {
+    "ok": { "type": "boolean" },
+    "code": { "enum": ["toolbox_manifest_consistent", "toolbox_manifest_inconsistent"] },
+    "reasons": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 }
+    }
+  }
+}

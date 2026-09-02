@@ -1,18 +1,22 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import io
 import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import yaml
 
 import support  # noqa: F401
+import run_flow
+import run_goal
 
 from flowstep_runtime import FlowError, action_schema_path, read_json, validate_against_schema
-from run_flow import advance, main as run_main
+from run_flow import _is_admissible_browser_evidence_bootstrap, advance, main as run_main
 from run_goal import advance_goal
 from session_layout import resolve_chosen_output
 
@@ -90,11 +94,35 @@ def _scaffold(
             "input_schema": "schemas/input.json",
             "inputs": {"request": "user.request"},
             "intelligence": "completion" if model else "none",
-            "on_tool_fail": "need_model",
+            "model_justification": (
+                "The isolated worker drafts the requested source result."
+                if model
+                else ""
+            ),
+            "execution": {
+                "candidate_executor": {
+                    "ref": "handler.isolation_v1.source_ready@3.1.0"
+                },
+                "tool_bindings": [],
+            },
+            "on_tool_fail": "need_model" if model else "BLOCKED",
         }
     ]
+    if not model:
+        milestones[0].pop("model_justification")
     if model:
         milestones[0]["draft_schema"] = "schemas/draft.json"
+        milestones[0]["execution"]["candidate_executor"]["profile"] = {
+            "ref": "agent_profile.isolation_v1.source_ready.candidate.v1",
+            "model_configuration": {"model": "codex", "reasoning": "medium"},
+            "token_budget": {
+                "max_input_tokens": 4096,
+                "max_output_tokens": 1024,
+            },
+            "timeout_seconds": 120,
+            "tools": [],
+            "capabilities": [],
+        }
     if two_steps:
         milestones.append(
             {
@@ -119,10 +147,31 @@ def _scaffold(
                 "intelligence": "completion" if model_second else "none",
                 "model_justification": "The isolated worker drafts the final result." if model_second else "",
                 "draft_schema": "schemas/draft.json" if model_second else None,
+                "execution": {
+                    "candidate_executor": {
+                        "ref": "handler.isolation_v1.result_ready@3.1.0"
+                    },
+                    "tool_bindings": [],
+                },
                 "on_tool_fail": "need_model" if model_second else "BLOCKED",
             }
         )
         milestones[-1] = {key: value for key, value in milestones[-1].items() if value is not None}
+        if model_second:
+            milestones[-1]["execution"]["candidate_executor"]["profile"] = {
+                "ref": "agent_profile.isolation_v1.result_ready.candidate.v1",
+                "model_configuration": {
+                    "model": "codex",
+                    "reasoning": "medium",
+                },
+                "token_budget": {
+                    "max_input_tokens": 4096,
+                    "max_output_tokens": 1024,
+                },
+                "timeout_seconds": 120,
+                "tools": [],
+                "capabilities": [],
+            }
     flow = {
         "schema": "flowstep_flow_v4",
         "flow_id": "isolation_v1",
@@ -161,16 +210,33 @@ def _scaffold(
 
 
 class FreshIsolationTests(unittest.TestCase):
+    def setUp(self) -> None:
+        runtime_binding = patch.object(
+            run_flow, "bind_runtime_to_run", return_value=None
+        )
+        runtime_binding.start()
+        self.addCleanup(runtime_binding.stop)
+
     def test_cli_defaults_to_two_fresh_cache_off_sessions(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             codebase, _ = _scaffold(root)
             request = _request(root / "request.json")
-            args = ["--codebase", str(codebase), "--flow-id", "isolation_v1", "--request", str(request)]
+            runtime = root / "runtime"
+            args = [
+                "--codebase",
+                str(codebase),
+                "--flow-id",
+                "isolation_v1",
+                "--request",
+                str(request),
+                "--harness-root",
+                str(runtime),
+            ]
             with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
                 self.assertEqual(run_main(args), 0)
                 self.assertEqual(run_main(args), 0)
-            runs = sorted((codebase / "flowsteps" / "runs" / "isolation_v1").iterdir())
+            runs = sorted((runtime / "runs").iterdir())
             self.assertEqual(len(runs), 2)
             for run in runs:
                 context = read_json(run / "run-context.json")
@@ -178,6 +244,118 @@ class FreshIsolationTests(unittest.TestCase):
                 self.assertFalse(context["chat_history_allowed"])
                 self.assertEqual(context["origin"], "fresh")
                 self.assertEqual(record["cache"]["mode"], "off")
+                self.assertEqual(context["schema"], "m8m_run_context_v2")
+                self.assertEqual(Path(context["storage_contract"]["source_code_root"]), codebase.resolve())
+                self.assertEqual(Path(context["storage_contract"]["execution_root"]), runtime.resolve())
+                self.assertEqual(Path(context["storage_contract"]["active_run_dir"]), run.resolve())
+                self.assertEqual(Path(context["storage_contract"]["cache_root"]), (runtime / "cache").resolve())
+            self.assertFalse((codebase / "flowsteps" / "runs").exists())
+            self.assertFalse((codebase / "flowsteps" / "cache").exists())
+
+    def test_request_file_refs_are_materialized_before_the_first_milestone(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            codebase, _ = _scaffold(root)
+            source = root / "source-of-truth" / "photo.jpg"
+            source.parent.mkdir()
+            source.write_bytes(b"immutable-source")
+            digest = hashlib.sha256(source.read_bytes()).hexdigest()
+            request = root / "request.json"
+            _write_json(
+                request,
+                {
+                    "message": "hello",
+                    "primary": {"path": str(source), "sha256": digest},
+                    "duplicate": {"path": str(source), "sha256": digest},
+                },
+            )
+            runtime = root / "runtime"
+            args = [
+                "--codebase",
+                str(codebase),
+                "--flow-id",
+                "isolation_v1",
+                "--request",
+                str(request),
+                "--harness-root",
+                str(runtime),
+            ]
+
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(run_main(args), 0)
+
+            run = next((runtime / "runs").iterdir())
+            frozen_request = read_json(run / "request.json")
+            manifest = read_json(run / "source-assets-manifest.json")
+            self.assertEqual(len(manifest["assets"]), 1)
+            self.assertEqual(frozen_request["primary"]["path"], frozen_request["duplicate"]["path"])
+            self.assertIn(str((run / "inputs" / "source-assets").resolve()), frozen_request["primary"]["path"])
+            self.assertEqual(source.read_bytes(), b"immutable-source")
+            self.assertFalse((codebase / "flowsteps" / "runs").exists())
+
+    def test_fresh_explicit_run_outside_harness_root_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            codebase, _ = _scaffold(root)
+            runtime = root / "runtime"
+            outside = root / "outside-run"
+            args = [
+                "--codebase",
+                str(codebase),
+                "--flow-id",
+                "isolation_v1",
+                "--harness-root",
+                str(runtime),
+                "--run-dir",
+                str(outside),
+                "--request",
+                str(_request(root / "request.json")),
+            ]
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(run_main(args), 3)
+            self.assertFalse(outside.exists())
+
+    def test_exact_legacy_run_resumes_but_default_discovery_ignores_source_tree(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            codebase, harness = _scaffold(root)
+            legacy = codebase / "flowsteps" / "runs" / "isolation_v1" / "legacy-run"
+            advance(harness, legacy, request_path=_request(root / "request.json"))
+            context = read_json(legacy / "run-context.json")
+            context["schema"] = "m8m_run_context_v1"
+            context.pop("storage_contract", None)
+            context.pop("source_asset_manifest_path", None)
+            _write_json(legacy / "run-context.json", context)
+            runtime = root / "runtime"
+
+            exact_args = [
+                "--codebase",
+                str(codebase),
+                "--flow-id",
+                "isolation_v1",
+                "--harness-root",
+                str(runtime),
+                "--run-mode",
+                "resume",
+                "--run-dir",
+                str(legacy),
+            ]
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(run_main(exact_args), 0)
+                self.assertEqual(
+                    run_main(
+                        [
+                            "--codebase",
+                            str(codebase),
+                            "--flow-id",
+                            "isolation_v1",
+                            "--harness-root",
+                            str(runtime),
+                            "--resume",
+                        ]
+                    ),
+                    3,
+                )
 
     def test_fresh_cli_refuses_an_existing_run_without_poisoning_it(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -218,6 +396,36 @@ class FreshIsolationTests(unittest.TestCase):
                 self.assertEqual(run_main(args), 3)
             self.assertFalse((run / "run-context.json").exists())
 
+    def test_fresh_guard_admits_only_complete_hash_bound_browser_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            run = Path(temp) / "run"
+            run.mkdir()
+            payloads = {
+                "source-article.html": b"<article>source</article>",
+                "source-article.txt": b"source",
+                "source-full-page.png": b"png-bytes",
+                "source-visible-semantic-blocks.json": b'{"blocks":[]}',
+            }
+            for name, payload in payloads.items():
+                (run / name).write_bytes(payload)
+            receipt = {
+                "schema": "article_infographic_source_browser_capture_receipt_v1",
+                "status": "PASS",
+                "requested_url": "https://example.com/source",
+                "final_url": "https://example.com/source",
+                "hashes": {name: hashlib.sha256(payload).hexdigest() for name, payload in payloads.items()},
+            }
+            _write_json(run / "source-browser-capture-receipt.json", receipt)
+            (run / "request.json").write_text("{}\n", encoding="utf-8")
+            bootstrap = {".run.lock", "request.json"}
+            self.assertTrue(_is_admissible_browser_evidence_bootstrap(run, bootstrap))
+
+            (run / "source-article.txt").write_text("tampered", encoding="utf-8")
+            self.assertFalse(_is_admissible_browser_evidence_bootstrap(run, bootstrap))
+            (run / "source-article.txt").write_bytes(payloads["source-article.txt"])
+            (run / "unexpected.json").write_text("{}\n", encoding="utf-8")
+            self.assertFalse(_is_admissible_browser_evidence_bootstrap(run, bootstrap))
+
     def test_action_required_exposes_no_history_context_capsule(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -227,10 +435,83 @@ class FreshIsolationTests(unittest.TestCase):
             self.assertEqual(action["state"], "ACTION_REQUIRED")
             self.assertEqual(action["context_policy"], "isolated")
             capsule = read_json(run / action["context_capsule_path"])
+            task = read_json(run / "runtime-tasks" / "source_ready.json")
             self.assertFalse(capsule["chat_history_allowed"])
+            self.assertEqual(capsule["expectation"], task["expectation"])
+            self.assertEqual(
+                capsule["expectation"]["schema"],
+                "m8m.milestone_expectation.v1",
+            )
+            self.assertEqual(capsule["expectation"]["success"], "The source is accepted.")
             self.assertIn("fresh no-history model worker", capsule["instruction"])
             self.assertTrue(all("flowsteps/cache" not in item.replace("\\", "/") for item in capsule["allowed_files"]))
             validate_against_schema(action, action_schema_path())
+
+    def test_invalid_model_draft_is_recoverable_in_same_run(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            _, harness = _scaffold(root, model=True)
+            _write_json(
+                harness / "schemas" / "draft.json",
+                {
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["label"],
+                    "properties": {"label": {"type": "string"}},
+                },
+            )
+            run = root / "run"
+            action = advance(harness, run, request_path=_request(root / "request.json"))
+            self.assertEqual(action["state"], "ACTION_REQUIRED")
+            candidate_request = run / action["task_path"]
+            context_capsule = run / action["context_capsule_path"]
+            candidate_request_bytes = candidate_request.read_bytes()
+            context_capsule_bytes = context_capsule.read_bytes()
+
+            invalid = root / "invalid.json"
+            _write_json(invalid, {"wrong": "shape"})
+            retry = advance(
+                harness,
+                run,
+                draft_path=invalid,
+                draft_for="source_ready",
+            )
+            self.assertEqual(retry["state"], "ACTION_REQUIRED", retry)
+            self.assertEqual(retry["step_id"], "source_ready")
+            self.assertEqual(retry["attempt"], 1)
+            self.assertTrue(retry["blockers"])
+            self.assertEqual(candidate_request.read_bytes(), candidate_request_bytes)
+            self.assertEqual(context_capsule.read_bytes(), context_capsule_bytes)
+            self.assertTrue(
+                (
+                    run
+                    / "work"
+                    / "source_ready"
+                    / "attempts"
+                    / "attempt-001"
+                    / "draft-validation.json"
+                ).is_file()
+            )
+            self.assertFalse(
+                (run / "runtime-tasks" / "source_ready" / "attempt-002").exists()
+            )
+            self.assertEqual(
+                read_json(run / "flow-execution-record.json")["status"],
+                "IN_PROGRESS",
+            )
+
+            valid = root / "valid.json"
+            _write_json(valid, {"label": "recovered"})
+            done = advance(
+                harness,
+                run,
+                draft_path=valid,
+                draft_for="source_ready",
+            )
+            self.assertEqual(done["state"], "COMPLETE", done)
+            self.assertEqual(candidate_request.read_bytes(), candidate_request_bytes)
+            self.assertEqual(context_capsule.read_bytes(), context_capsule_bytes)
 
     def test_context_capsule_includes_bound_chosen_member_assets(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -246,8 +527,104 @@ class FreshIsolationTests(unittest.TestCase):
             self.assertIn(str(chosen.resolve()), capsule["allowed_files"])
             self.assertIn(str(member.resolve()), capsule["allowed_files"])
 
+    def test_context_capsule_includes_explicit_model_request_contracts(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            _, harness = _scaffold(root, model=True)
+            planning = root / "contracts" / "planning.md"
+            references = root / "contracts" / "references"
+            planning.parent.mkdir(parents=True)
+            references.mkdir(parents=True)
+            planning.write_text("# Planning\n", encoding="utf-8")
+            reference = references / "contract.md"
+            reference.write_text("# Contract\n", encoding="utf-8")
+            seed = root / "contracts" / "seed.json"
+            seed.write_text("{}\n", encoding="utf-8")
+            (references / "ignored.json").write_text("{}\n", encoding="utf-8")
+            (harness / "source.py").write_text(
+                "def run(input_data, draft=None, **_):\n"
+                "    if not draft:\n"
+                "        return {'_flowstep': 'NEED_MODEL', 'model': 'completion', "
+                f"'model_request': {{'read': r'{planning}', 'seed_path': r'{seed}', 'references': [r'{reference}']}}}}\n"
+                "    return {'outputs': {'result': draft}}\n",
+                encoding="utf-8",
+            )
+            run = root / "run"
+            action = advance(harness, run, request_path=_request(root / "request.json"))
+            capsule = read_json(run / action["context_capsule_path"])
+            self.assertIn(str(planning.resolve()), capsule["allowed_files"])
+            self.assertIn(str(seed.resolve()), capsule["allowed_files"])
+            self.assertIn(str(reference.resolve()), capsule["allowed_files"])
+            self.assertNotIn(str((references / "ignored.json").resolve()), capsule["allowed_files"])
+
 
 class EditedWorkflowContinuationTests(unittest.TestCase):
+    def test_adoption_commit_crash_cannot_preserve_old_chosen_under_new_lock(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            _, harness = _scaffold(root, two_steps=True)
+            run = root / "run"
+            first = advance(harness, run, request_path=_request(root / "request.json"))
+            self.assertEqual(first["state"], "COMPLETE", first)
+            _handler(harness / "result.py", "result", version="v2")
+
+            with patch.object(
+                run_flow,
+                "_complete_adoption_journal",
+                side_effect=KeyboardInterrupt("simulated crash after new implementation lock"),
+            ):
+                with self.assertRaisesRegex(KeyboardInterrupt, "simulated crash"):
+                    advance(harness, run, continue_after_edit="result_ready")
+
+            journal = read_json(run / "workflow-adoption.json")
+            lock = read_json(run / "implementation-lock.json")
+            self.assertEqual(journal["state"], "invalidated")
+            self.assertEqual(
+                lock["fingerprint_sha256"],
+                journal["implementation_fingerprint_sha256"],
+            )
+            self.assertFalse(
+                (run / "milestones" / "result_ready" / "out" / "chosen-output.json").exists()
+            )
+            self.assertTrue(
+                (run / "milestones" / "source_ready" / "out" / "chosen-output.json").is_file()
+            )
+
+            done = advance(harness, run)
+
+            self.assertEqual(done["state"], "COMPLETE", done)
+            self.assertEqual(read_json(run / "workflow-adoption.json")["state"], "complete")
+            self.assertEqual((harness / "_source_calls.txt").read_text(), "1")
+            self.assertEqual((harness / "_result_calls.txt").read_text(), "2")
+            self.assertEqual(
+                resolve_chosen_output(run, "result_ready", output_id="result")["version"],
+                "v2",
+            )
+
+    def test_continue_after_edit_preserves_draft_inside_invalidated_work_dir(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            _, harness = _scaffold(root, two_steps=True, model_second=True)
+            run = root / "run"
+            action = advance(harness, run, request_path=_request(root / "request.json"))
+            self.assertEqual(action["step_id"], "result_ready")
+            draft = run / "work" / "result_ready" / "draft.json"
+            _write_json(draft, {"label": "preserved"})
+            handler = harness / "result.py"
+            handler.write_text(handler.read_text(encoding="utf-8") + "\n# compatible edit\n", encoding="utf-8")
+
+            done = advance(
+                harness,
+                run,
+                continue_after_edit="result_ready",
+                draft_path=draft,
+                draft_for="result_ready",
+            )
+
+            self.assertEqual(done["state"], "COMPLETE", done)
+            result = resolve_chosen_output(run, "result_ready", output_id="result")
+            self.assertEqual(result["label"], "preserved")
+
     def test_continue_after_edit_preserves_upstream_and_replaces_downstream(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -290,6 +667,13 @@ class EditedWorkflowContinuationTests(unittest.TestCase):
 
 
 class GoalIsolationTests(unittest.TestCase):
+    def setUp(self) -> None:
+        runtime_binding = patch.object(
+            run_goal, "bind_runtime_to_run", return_value=None
+        )
+        runtime_binding.start()
+        self.addCleanup(runtime_binding.stop)
+
     def test_goal_uses_one_fresh_cache_off_child_session_per_row(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -305,10 +689,20 @@ class GoalIsolationTests(unittest.TestCase):
                     ],
                 },
             )
-            goal_dir = codebase / "flowsteps" / "goals" / "isolation_v1" / "goal"
-            done = advance_goal(harness, goal_dir, goal_path=goal)
+            runtime = root / "runtime"
+            goal_dir = runtime / "runs" / "goal_isolation_v1"
+            done = advance_goal(
+                harness,
+                goal_dir,
+                goal_path=goal,
+                harness_root=runtime,
+                source_code_root=codebase,
+            )
             self.assertEqual(done["state"], "COMPLETE", done)
             ledger = read_json(goal_dir / "goal-ledger.json")
+            storage = read_json(goal_dir / "run-storage-contract.json")
+            self.assertEqual(Path(storage["execution_root"]), runtime.resolve())
+            self.assertEqual(Path(storage["source_code_root"]), codebase.resolve())
             self.assertEqual([item["status"] for item in ledger["rows"]], ["done", "done"])
             child_dirs = [Path(item["child_run_dir"]) for item in ledger["rows"]]
             self.assertEqual(len(set(child_dirs)), 2)
@@ -331,12 +725,25 @@ class GoalIsolationTests(unittest.TestCase):
                 goal,
                 {"goal_id": "repair_goal", "rows": [{"id": "case_001", "request": {"message": "one"}}]},
             )
-            goal_dir = codebase / "flowsteps" / "goals" / "isolation_v1" / "repair"
-            blocked = advance_goal(harness, goal_dir, goal_path=goal)
+            runtime = root / "runtime"
+            goal_dir = runtime / "runs" / "goal_repair"
+            blocked = advance_goal(
+                harness,
+                goal_dir,
+                goal_path=goal,
+                harness_root=runtime,
+                source_code_root=codebase,
+            )
             self.assertEqual(blocked["state"], "BLOCKED", blocked)
             child_before = read_json(goal_dir / "goal-ledger.json")["rows"][0]["child_run_dir"]
             _handler(harness / "source.py", "source", version="fixed")
-            done = advance_goal(harness, goal_dir, continue_after_edit="source_ready")
+            done = advance_goal(
+                harness,
+                goal_dir,
+                continue_after_edit="source_ready",
+                harness_root=runtime,
+                source_code_root=codebase,
+            )
             self.assertEqual(done["state"], "COMPLETE", done)
             row = read_json(goal_dir / "goal-ledger.json")["rows"][0]
             self.assertEqual(row["child_run_dir"], child_before)

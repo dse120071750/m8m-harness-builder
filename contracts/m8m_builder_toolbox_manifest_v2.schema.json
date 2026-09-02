@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "m8m_builder_toolbox_manifest_v2.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["outputs"],
+  "properties": {
+    "outputs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["toolbox_manifest"],
+      "properties": {
+        "toolbox_manifest": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "stage_codebase",
+            "tools",
+            "status",
+            "runnable",
+            "non_runnable",
+            "build_required_tools",
+            "created_at"
+          ],
+          "properties": {
+            "stage_codebase": { "type": "string", "minLength": 1 },
+            "tools": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "schema",
+                  "status",
+                  "tool_id",
+                  "tool_dir",
+                  "seeded",
+                  "origin",
+                  "runnable",
+                  "non_runnable",
+                  "written"
+                ],
+                "properties": {
+                  "schema": { "const": "flowstep_tool_generate_v3" },
+                  "status": { "enum": ["PASS", "BUILD_REQUIRED"] },
+                  "tool_id": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+                  "tool_dir": { "type": "string", "minLength": 1 },
+                  "seeded": { "type": "boolean" },
+                  "origin": { "enum": ["existing", "seed", "generate-new", "local-implementation"] },
+                  "runnable": { "type": "boolean" },
+                  "non_runnable": { "type": "boolean" },
+                  "blockers": {
+                    "type": "array",
+                    "items": { "type": "string", "minLength": 1 }
+                  },
+                  "note": { "type": "string", "minLength": 1 },
+                  "written": { "type": "array", "items": { "type": "string", "minLength": 1 } }
+                }
+              }
+            },
+            "status": { "enum": ["PASS", "BUILD_REQUIRED"] },
+            "runnable": { "type": "boolean" },
+            "non_runnable": { "type": "boolean" },
+            "build_required_tools": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" }
+            },
+            "created_at": { "type": "string", "minLength": 1 }
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,6 +1,113 @@
 interface:
-  display_name: "M8M"
-  short_description: "Write milestones, FlowSteps, tools, one table, one flowchart."
-  default_prompt: "Use $m8m-harness-builder as a writer. Identify milestones (compulsory harness + required asset), then FlowSteps inside each (atomic, prefer ONE tool, table order is a guide). Tools are optional; if a tool fails, recover like a normal agent. Missing the milestone asset is BLOCKED. Return planning/m8m-flowchart.md plus the FlowStep table. Generate-new stubs are a successful sketch."
+  display_name: "M8M Harness Builder"
+  short_description: "Compile and validate an M8M 3.1 workflow source bundle."
+  default_prompt: "Use $m8m-harness-builder to make a current M8M workflow. Understand the task, split milestones, build or move FlowSteps, and place Gems, tools, and runtime in the owning codebase. Audit existing files only as context. Keep unfinished product tools BUILD_REQUIRED. Do not push, publish, or deploy."
 policy:
   allow_implicit_invocation: true
+canvas:
+  schema: m8m_skill_canvas_v1
+  flow_id: m8m_build_v2
+  version: 2
+  context_policy: isolated
+  max_run_seconds: 3600
+  artifact_root: artifacts
+  implementation_dependencies:
+    - scripts/m8m_build_steps.py
+    - scripts/audit_harness.py
+    - scripts/migrate_skill_source.py
+    - scripts/candidate_cache.py
+    - scripts/execution_identity.py
+    - scripts/flowstep_instruction.py
+    - scripts/flowstep_runtime.py
+    - scripts/run_flow.py
+    - scripts/runtime_release.py
+    - scripts/flowchart_jpg.py
+    - scripts/generate_harness.py
+    - scripts/flowstep_tools.py
+    - scripts/gem_text.py
+    - scripts/humanize_chart.py
+    - scripts/m8m_flowchart.py
+    - scripts/milestone_expectation.py
+    - scripts/milestone_pair.py
+    - scripts/package_archive.py
+    - scripts/schema_gate.py
+    - scripts/session_layout.py
+    - scripts/skill_source.py
+    - scripts/source_bundle.py
+    - scripts/teaching_contracts.py
+    - scripts/toolbox_plan.py
+    - scripts/tool_vs_intelligence.py
+    - scripts/validate_harness.py
+    - templates/run.py
+    - templates/codebase-launcher.py
+    - contracts/file_ref_v2.schema.json
+    - contracts/flow_sequence_action_v2.schema.json
+    - contracts/flowstep_flow_v4.schema.json
+    - contracts/flowstep_output_v3.schema.json
+    - contracts/flowstep_skill_audit_v1.schema.json
+    - contracts/m8m_cache_receipt_v1.schema.json
+    - contracts/m8m_candidate_cache_entry_v1.schema.json
+    - contracts/m8m_chosen_output_v1.schema.json
+    - contracts/m8m_context_capsule_v1.schema.json
+    - contracts/m8m_contract_bundle_lock_v1.schema.json
+    - contracts/m8m_goal_ledger_v1.schema.json
+    - contracts/m8m_milestone_judge_receipt_v1.schema.json
+    - contracts/m8m_milestone_expectation_v1.schema.json
+    - contracts/m8m_milestone_judge_request_v1.schema.json
+    - contracts/m8m_run_context_v2.schema.json
+    - contracts/m8m_run_storage_contract_v1.schema.json
+    - contracts/m8m_runtime_lock_v1.schema.json
+    - contracts/m8m_runtime_release_v1.schema.json
+    - contracts/m8m_skill_canvas_v1.schema.json
+    - contracts/m8m_milestone_agent_v1.schema.json
+    - contracts/m8m_source_asset_manifest_v1.schema.json
+    - contracts/m8m_workflow_source_bundle_proof_v1.schema.json
+    - contracts/m8m_workflow_source_bundle_v1.schema.json
+    - contracts/m8m_workflow_package_archive_v1.schema.json
+    - contracts/m8m_builder_input_v1.schema.json
+    - contracts/m8m_builder_request_v3.schema.json
+    - contracts/m8m_builder_configuration_v1.schema.json
+    - contracts/m8m_builder_result_v3.schema.json
+    - contracts/m8m_builder_source_audit_v2.schema.json
+    - contracts/m8m_builder_toolbox_manifest_v2.schema.json
+    - contracts/m8m_builder_source_bundle_v2.schema.json
+    - contracts/m8m_builder_validation_report_v2.schema.json
+    - contracts/m8m_builder_installation_receipt_v2.schema.json
+    - contracts/tool_vs_intelligence_table_v1.schema.json
+  workflow_contracts:
+    request_schema: contracts/m8m_builder_request_v3.schema.json
+    configuration_schema: contracts/m8m_builder_configuration_v1.schema.json
+    result_schema: contracts/m8m_builder_result_v3.schema.json
+    terminal_bindings:
+      - name: installation_receipt
+        from: skill_shipped.m8m_builder_installation_receipt_v2
+        output: installation_receipt
+  entry: audit_complete
+  milestones:
+    - audit_complete
+    - toolbox_ready
+    - flow_generated
+    - harness_validated
+    - skill_shipped
+  graph:
+    - from: audit_complete
+      to:
+        - toolbox_ready
+    - from: toolbox_ready
+      to:
+        - flow_generated
+    - from: flow_generated
+      to:
+        - harness_validated
+    - from: harness_validated
+      to:
+        - skill_shipped
+    - from: skill_shipped
+      to: []
+  terminal_states:
+    success:
+      - skill_shipped
+    blocked: BLOCKED
+  observer:
+    title: M8M Builder 3 workflow
+    summary: Audit a source skill, prepare its toolbox, stage the generated workflow, validate it, and install the verified result locally.

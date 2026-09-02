@@ -20,6 +20,10 @@ milestones:
     inputs:
       request: user.request
     input_schema: steps/ingest/input.schema.json
+    execution:
+      candidate_executor:
+        ref: handler.text_pipeline_v1.ingest@3.1.0
+      tool_bindings: []
     intelligence: none
     on_tool_fail: BLOCKED
   - id: segment
@@ -39,6 +43,10 @@ milestones:
         from: ingest.ingest_v1
         output: result
     input_schema: steps/segment/input.schema.json
+    execution:
+      candidate_executor:
+        ref: handler.text_pipeline_v1.segment@3.1.0
+      tool_bindings: []
     intelligence: none
     on_tool_fail: BLOCKED
   - id: label
@@ -58,6 +66,10 @@ milestones:
         from: segment.segment_v1
         output: result
     input_schema: steps/label/input.schema.json
+    execution:
+      candidate_executor:
+        ref: handler.text_pipeline_v1.label@3.1.0
+      tool_bindings: []
     intelligence: completion
     model_justification: semantic class is not derivable from punctuation alone
     draft_schema: steps/label/draft.schema.json

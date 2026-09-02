@@ -66,21 +66,76 @@ class GemWriteTests(unittest.TestCase):
                 milestone_specs=[
                     {
                         "id": "card_aligned",
-                        "asset": {"kind": "image"},
-                        "intelligence": "image",
-                        "flowsteps": [
-                            {"id": "align_compare", "tool": "align_compare"},
-                            {"id": "draw_red_circles", "tool": "draw_red_circles"},
-                            {"id": "align_edit", "tool": "align_edit"},
-                            {"id": "hash_bind", "tool": "hash_bind"},
+                        "success": "The declared alignment guidance and image output are available.",
+                        "output_contract": "card_aligned_v1",
+                        "outputs": [
+                            {
+                                "id": "result",
+                                "name": "Aligned image",
+                                "kind": "image",
+                                "cardinality": "one",
+                                "required": True,
+                            }
                         ],
+                        "output_schema_object": {
+                            "type": "object",
+                            "required": ["path"],
+                            "properties": {"path": {"type": "string"}},
+                        },
+                        "asset": {"kind": "image"},
+                        "intelligence": "none",
+                        "tools": [
+                            "align_compare",
+                            "draw_red_circles",
+                            "align_edit",
+                            "hash_bind",
+                        ],
+                        "flowsteps": [
+                            {
+                                "id": "align_compare",
+                                "tool": "align_compare@1.0.0",
+                            },
+                            {
+                                "id": "draw_red_circles",
+                                "tool": "draw_red_circles@1.0.0",
+                            },
+                            {
+                                "id": "align_edit",
+                                "tool": "align_edit@1.0.0",
+                            },
+                            {
+                                "id": "hash_bind",
+                                "tool": "hash_bind@1.0.0",
+                            },
+                        ],
+                        "execution": {
+                            "candidate_executor": {
+                                "ref": "handler.align_v1.card_aligned@3.1.0"
+                            },
+                            "tool_bindings": [
+                                {
+                                    "tool": tool,
+                                    "ref": f"{tool}@1.0.0",
+                                }
+                                for tool in (
+                                    "align_compare",
+                                    "draw_red_circles",
+                                    "align_edit",
+                                    "hash_bind",
+                                )
+                            ],
+                        },
                     }
                 ],
             )
             harness = Path(result["harness_dir"])
             gem = (harness / "references" / "card_aligned.md").read_text(encoding="utf-8")
-            self.assertIn("## Rule of success", gem)
-            self.assertIn("Rule of success:", gem)
+            self.assertNotIn("Rule of success", gem)
+            self.assertIn("sole expectation", gem)
+            self.assertIn("## Tool versus intelligence", gem)
+            self.assertIn("deterministic tool work", gem)
+            self.assertIn("not shell-heavy", gem)
+            self.assertNotIn("__CLASSIFICATION__", gem)
             self.assertIn("## `align_compare`", gem)
             self.assertIn("## `draw_red_circles`", gem)
             self.assertIn("## `align_edit`", gem)
@@ -101,10 +156,53 @@ class GemWriteTests(unittest.TestCase):
                 milestone_specs=[
                     {
                         "id": "card_aligned",
+                        "success": "The model supplies one bounded comparison proof candidate.",
+                        "output_contract": "card_aligned_v1",
+                        "outputs": [
+                            {
+                                "id": "result",
+                                "name": "Comparison proof",
+                                "kind": "json",
+                                "cardinality": "one",
+                                "required": True,
+                            }
+                        ],
                         "asset": {"kind": "json"},
                         "intelligence": "image",
-                        "loop": "judge",
-                        "flowsteps": [{"id": "align_compare", "tool": "align_compare"}],
+                        "model_justification": "Visual comparison requires image reasoning.",
+                        "loop": "none",
+                        "tools": ["align_compare"],
+                        "flowsteps": [
+                            {
+                                "id": "align_compare",
+                                "tool": "align_compare@1.0.0",
+                            }
+                        ],
+                        "execution": {
+                            "candidate_executor": {
+                                "ref": "handler.prompt_v1.card_aligned@3.1.0",
+                                "profile": {
+                                    "ref": "agent_profile.prompt_v1.card_aligned.candidate.v1",
+                                    "model_configuration": {
+                                        "model": "codex",
+                                        "reasoning": "medium",
+                                    },
+                                    "token_budget": {
+                                        "max_input_tokens": 4096,
+                                        "max_output_tokens": 1024,
+                                    },
+                                    "timeout_seconds": 120,
+                                    "tools": ["align_compare"],
+                                    "capabilities": [],
+                                },
+                            },
+                            "tool_bindings": [
+                                {
+                                    "tool": "align_compare",
+                                    "ref": "align_compare@1.0.0",
+                                }
+                            ],
+                        },
                         "output_schema_object": {
                             "type": "object",
                             "additionalProperties": False,
@@ -118,8 +216,6 @@ class GemWriteTests(unittest.TestCase):
             gem_path = harness / "references" / "card_aligned.md"
             gem_path.write_text(
                 "# Card is aligned\n\n"
-                "## Rule of success\n\n"
-                "Rule of success: aligned image in the slot.\n\n"
                 "## `align_compare`\n\n"
                 "CIRCLE_EVERY_VISIBLE_MISS label headwall ceiling-tray door.\n",
                 encoding="utf-8",

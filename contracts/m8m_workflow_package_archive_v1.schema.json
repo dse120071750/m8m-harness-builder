@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "m8m_workflow_package_archive_v1.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "source_bundle_path", "source_bundle_digest", "resources"],
+  "properties": {
+    "schema": { "const": "m8m.workflow_package_archive.v1" },
+    "source_bundle_path": { "const": "source-bundle.json" },
+    "source_bundle_digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "resources": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["source_path", "archive_path", "media_type", "byte_count", "digest"],
+        "properties": {
+          "source_path": { "type": "string", "minLength": 1, "maxLength": 1024 },
+          "archive_path": { "type": "string", "pattern": "^resources/.+" },
+          "media_type": { "type": "string", "minLength": 3, "maxLength": 255 },
+          "byte_count": { "type": "integer", "minimum": 0 },
+          "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+        }
+      }
+    }
+  }
+}

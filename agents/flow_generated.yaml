@@ -1,0 +1,59 @@
+schema: m8m_milestone_agent_v1
+agent_id: flow_generated
+role: milestone
+success: The exact portable Builder 3 workflow source bundle and its run-local staged harness report are both produced, with canonical workflow, resources, schemas, binding requirements, observer data, and derived review files staged only inside this run.
+output_contract: m8m_builder_source_bundle_v2
+output_schema: contracts/m8m_builder_source_bundle_v2.schema.json
+outputs:
+  - id: workflow_source_bundle
+    name: Portable workflow source bundle
+    kind: json
+    cardinality: one
+    required: true
+  - id: staged_harness
+    name: Run-local staged harness report
+    kind: json
+    cardinality: one
+    required: true
+handler: scripts/m8m_build_steps.py
+test: flowsteps/tools/generate_from_audit/tests/test_tool.py
+input_schema: contracts/m8m_builder_input_v1.schema.json
+inputs:
+  request: user.request
+  audit:
+    from: audit_complete.m8m_builder_source_audit_v2
+    output: source_audit
+  toolbox:
+    from: toolbox_ready.m8m_builder_toolbox_manifest_v2
+    output: toolbox_manifest
+flowsteps:
+  - id: compile_source_bundle
+    tool: generate_from_audit
+tools:
+  - compile_source_bundle
+execution:
+  candidate_executor:
+    ref: handler.m8m_build_v2.flow_generated@3.1.0
+  tool_bindings:
+    - tool: compile_source_bundle
+      ref: generate_from_audit@3.1.0
+intelligence: none
+on_tool_fail: BLOCKED
+loop: none
+gem: references/flow_generated.md
+read_paths:
+  - references/flow_generated.md
+observer:
+  title: Workflow generation
+  summary: Compile the chosen audit and toolbox into an exact portable source bundle plus a separate run-local staged harness report.
+  actions:
+    - flowstep_id: compile_source_bundle
+      title: Compile the staged source bundle
+      summary: Generate the portable workflow source bundle and the separate staged harness report in this run.
+  outputs:
+    - output_id: workflow_source_bundle
+      title: Portable workflow source bundle
+      summary: The exact base-independent m8m.workflow_source_bundle.v1 result.
+    - output_id: staged_harness
+      title: Run-local staged harness report
+      summary: Required run-local paths, status, notes, and digest linkage for validation and installation.

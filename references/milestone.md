@@ -8,7 +8,7 @@ FlowSteps and tools live inside them.
 | **Milestone** | One canvas node with a success rule and declared output ports. | Commits exactly one chosen output bundle or BLOCKS. |
 | **FlowStep** | An atomic goal inside a milestone. | Generates or refines the current candidate. |
 | **Tool** | The preferred implementation for one FlowStep. | May be retried or replaced during candidate work. |
-| **Judge** | The milestone-specific success evaluator. | PASS commits the current candidate; rejection loops. |
+| **Judge** | Optional milestone-specific semantic evaluator after admission. | In `loop: judge`, PASS commits the admitted candidate; rejection loops. |
 
 ```text
 n8n: node = one action
@@ -39,47 +39,90 @@ A valid `flowstep_flow_v4` milestone declares all of:
       cardinality: one
       required: true
   loop: judge
-  worker: cards_rendered_judge
+  worker: cards_rendered_judge@3.1.0
   flowsteps:
     - { id: render_cards, tool: render_cards }
     - { id: compare_layout, tool: compare_layout }
     - { id: refine_cards, tool: image_edit }
+  tools: [render_cards, compare_layout, refine_cards]
+  execution:
+    candidate_executor:
+      ref: handler.article_cards.cards_rendered@3.1.0
+    judge:
+      ref: cards_rendered_judge@3.1.0
+    tool_bindings:
+      - { tool: render_cards, ref: render_cards@3.1.0 }
+      - { tool: compare_layout, ref: compare_layout@3.1.0 }
+      - { tool: refine_cards, ref: image_edit@3.1.0 }
 ```
+
+This is authored-agent syntax: each FlowStep names its local package. The
+`tools` list and binding keys are FlowStep IDs. Compilation replaces each
+executable `flowsteps[].tool` with the exact versioned binding ref; IDs remain
+milestone-local slots.
 
 Kinds are provider-neutral: `json`, `data`, `file`, `image`, `video`, or
 `audio`. Cardinality is `one` or `many`. Every candidate collection item
 has a unique filesystem-safe `id` and a non-empty display `name`.
 
-A milestone is not complete merely because its handler returned. It is
-complete only when:
+A milestone is not complete merely because its handler returned. The four
+authored fields `success`, `output_contract`, `output_schema`, and `outputs`
+form one expectation. It is complete only when:
 
 1. the current candidate satisfies its output schema;
 2. every required output and member exists;
-3. the judge accepts the declared `success` rule; and
-4. the runtime writes `out/chosen-output.json` last.
+3. structural admission freezes file/media bytes into the run;
+4. for `loop: judge`, the separate semantic judge accepts that same expectation;
+5. for `loop: none`, no semantic judge is called; and
+6. the runtime writes `out/chosen-output.json` last.
 
 Only that chosen manifest is queryable downstream. Rejected attempts may
 remain under `work/attempts`, but they are diagnostics—not candidates a
 later milestone may select.
 
-## Rule of success and candidate loop
+## Success authority and candidate loop
 
-Every milestone has a gem and a dedicated worker that reads its Rule of
-success. The gem and judge sit on the milestone; neither is a second
-canvas node.
+Authored `success` and the output declarations are the sole expectation
+authority. Every milestone has a FlowStep-guidance Gem; a legacy
+`## Rule of success` section is accepted only when it exactly matches authored
+`success`. Only `loop: judge` has a dedicated semantic judge, and that judge is
+attached metadata rather than a second canvas node.
 
 ```text
-FlowStep candidate work
-  → validate named outputs
-  → judge Rule of success
-       not ok: keep working, then return a new current candidate
-       ok:     commit this current candidate as the chosen bundle
+derive expectation → FlowStep candidate work
+  → admit and freeze named outputs
+  → loop:none: commit
+  → loop:judge: typed judge request
+       RETRY: keep working, then return a new current candidate
+       PASS:  commit this current candidate as the chosen bundle
 ```
 
-The judge receipt has no candidate hash or lock ID. PASS is immediately
-followed by materialization, so there is no separate “candidate lock”
-entity. Missing outputs, duplicate IDs, invalid paths, missing bytes,
+The judge receipt has no candidate hash or lock ID. The durable control shape
+is `m8m.milestone_judge_receipt.v1`: milestone ID, actual attempt,
+`PASS|RETRY|BLOCKED`, success rule, judge reference, reasons, blockers, and
+maximum attempts. A strict worker returns exactly bounded
+`{decision, reasons, blockers}`; compact `{ok}` is invalid. PASS is
+immediately followed by materialization, so there is no separate “candidate
+lock” entity. Missing outputs, duplicate IDs, invalid paths, missing bytes,
 schema errors, exhausted attempts, or a missing chosen manifest BLOCK.
+
+For a strict judge milestone, author:
+
+```yaml
+loop: judge
+worker: render_judge@3.1.0
+judge_abi: m8m_milestone_judge_v1
+receipt_schema: flowsteps/tools/render_judge/output.schema.json
+```
+
+The runtime invokes that worker separately on the admitted current candidate
+with only `schema`, milestone/attempt fields, the derived `expectation`,
+resolved `inputs`, and `candidate`. It does not accept a handler-supplied
+top-level control receipt as the decision. An AI
+candidate or AI judge must also declare its exact versioned executor/profile,
+Gem and schema bindings, tools, capabilities, token budget, and timeout in the
+milestone agent source. Deterministic milestones declare executor/judge refs
+without model profiles.
 
 ## Output bindings
 
@@ -115,13 +158,22 @@ previews.
 
 ## FlowStep rules
 
+- Classify every FlowStep as deterministic tool work or bounded intelligence
+  before generation; record why a fixture can or cannot decide it.
 - Keep atomic operations inside the milestone instead of multiplying
   canvas nodes.
 - Prefer one tool per FlowStep. The sequence is a guide for producing the
   candidate, not a substitute for the milestone success rule.
+- Product tools are declared in-process functions. A subprocess, shell, CLI,
+  secondary workflow, or recursive execution-root discovery is not a
+  FlowStep implementation.
+- The runtime alone writes chosen manifests and control receipts. After an
+  approval boundary, only one declared in-process `finalize` FlowStep may run.
 - If a preferred tool fails, recover within the milestone when possible.
-- Generated-new tools can be implementation sketches; declared milestone
-  outputs cannot be sketches.
+- Generated-new tools can be retained only as explicit
+  `BUILD_REQUIRED/non_runnable` implementation sketches. They cannot satisfy
+  builder validation, local installation, or a declared product milestone
+  output.
 - Intelligence may draft content but cannot set `ok`, `branch`, or
   `cycle`.
 

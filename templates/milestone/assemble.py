@@ -2,54 +2,45 @@
 
 from __future__ import annotations
 
-import importlib.util
 import json
-import os
+import re
 import shutil
 from pathlib import Path
 from typing import Any
 
+from flowstep_tools import run_library_tool
+
 STEP_ID = "__STEP_ID__"
+M8M_BUILD_STATUS = "BUILD_REQUIRED"
+M8M_RUNNABLE = False
 TOOLS: list[str] = json.loads("""__TOOLS_JSON__""")
 FLOWSTEPS: list[dict[str, Any]] = json.loads("""__FLOWSTEPS_JSON__""")
+TOOL_BINDINGS: list[dict[str, str]] = json.loads("""__TOOL_BINDINGS_JSON__""")
 INTELLIGENCE = "__INTELLIGENCE__"
 IS_LAST = __IS_LAST__
 ASSET_KIND = "__ASSET_KIND__"
 OUTPUTS: list[dict[str, Any]] = json.loads(r'''__OUTPUTS_JSON__''')
-WORKER = "__WORKER__"
+CONTROL_WORKER = "__WORKER__"
+CONTROL_KIND = "__CONTROL_KIND__"
 LOOP = "__LOOP__"
 HARNESS_DIR = Path(__file__).resolve().parents[2]
 GEM_PATH = str(HARNESS_DIR / "references" / f"{STEP_ID}.md")
-SCHEMA_PATH = str(HARNESS_DIR / "schemas" / f"{STEP_ID}_v1.json")
+_VERSIONED_REF = re.compile(
+    r"^[a-z][a-z0-9_.-]*@[0-9]+\.[0-9]+\.[0-9]+$"
+)
+
+
+def _local_tool_package(flowstep_id: str, exact_ref: str) -> str:
+    if _VERSIONED_REF.fullmatch(exact_ref) is None:
+        raise ValueError(f"{flowstep_id}: tool ref must be exact and versioned")
+    package = exact_ref.rsplit("@", 1)[0]
+    if re.fullmatch(r"[a-z][a-z0-9_]*", package) is None:
+        raise ValueError(f"{flowstep_id}: tool ref has no safe local package")
+    return package
 
 
 def _codebase() -> Path:
     return Path(__file__).resolve().parents[5]
-
-
-def _builder_tools() -> Any:
-    env = os.environ.get("M8M_BUILDER") or os.environ.get("FLOWSTEP_BUILDER")
-    candidates = []
-    if env:
-        candidates.append(Path(env) / "scripts" / "flowstep_tools.py")
-    for home_skills in (Path.home() / ".codex" / "skills", Path.home() / ".claude" / "skills"):
-        for skill_name in ("m8m-harness-builder", "flowstep-harness-builder"):
-            candidates.append(home_skills / skill_name / "scripts" / "flowstep_tools.py")
-    here = Path(__file__).resolve()
-    for parent in here.parents:
-        for skill_name in ("m8m-harness-builder", "flowstep-harness-builder"):
-            candidate = parent / skill_name / "scripts" / "flowstep_tools.py"
-            if candidate.is_file():
-                candidates.append(candidate)
-    for path in candidates:
-        if path.is_file():
-            spec = importlib.util.spec_from_file_location("m8m_flowstep_tools", path)
-            if spec is None or spec.loader is None:
-                continue
-            module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(module)
-            return module
-    raise RuntimeError("M8M builder not found; set M8M_BUILDER to the skill root")
 
 
 def _first_path(value: Any) -> str | None:
@@ -101,7 +92,7 @@ def _need_model(flowstep: str, tool_id: str, error: str) -> dict[str, Any]:
     instruction = (
         f"Preferred tool `{tool_id}` failed FlowStep `{flowstep}`. "
         "Do this FlowStep as its gem section says. Still produce the milestone's declared named outputs. "
-        "Prefer fixing or using the tool. The judge must be able to choose the current bundle."
+        "Prefer fixing or using the tool. Return the milestone's explicit named outputs for admission."
     )
     if section:
         instruction = instruction + "\n\n" + section
@@ -119,24 +110,13 @@ def _need_model(flowstep: str, tool_id: str, error: str) -> dict[str, Any]:
     }
 
 
-def _candidate(value: dict[str, Any], receipt: dict[str, Any] | None = None) -> dict[str, Any]:
-    if isinstance(value.get("outputs"), dict):
-        candidate = dict(value)
-    else:
-        clean = {key: item for key, item in value.items() if key not in {"receipt", "address", "draft"}}
-        if len(OUTPUTS) == 1:
-            output_values = {str(OUTPUTS[0]["id"]): clean}
-        else:
-            output_values = {
-                str(output["id"]): clean[str(output["id"])]
-                for output in OUTPUTS
-                if str(output["id"]) in clean
-            }
-        candidate = {"outputs": output_values}
-    accepted = receipt or (value.get("receipt") if isinstance(value.get("receipt"), dict) else None)
-    if isinstance(accepted, dict):
-        candidate["receipt"] = accepted
-    return candidate
+def _candidate(value: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(value.get("outputs"), dict):
+        raise ValueError(
+            f"{STEP_ID}: candidate executor must return explicit {{'outputs': {{...}}}}; "
+            "the generated handler will not infer or wrap a default result"
+        )
+    return {"outputs": dict(value["outputs"])}
 
 
 def _tool_input(payload: dict[str, Any], tool_id: str) -> dict[str, Any]:
@@ -159,80 +139,76 @@ def _tool_input(payload: dict[str, Any], tool_id: str) -> dict[str, Any]:
 
 
 def run(input_data: dict[str, Any], draft: dict[str, Any] | None = None, **kwargs: Any) -> dict[str, Any]:
+    if M8M_BUILD_STATUS == "BUILD_REQUIRED" or not M8M_RUNNABLE:
+        raise RuntimeError(
+            f"{STEP_ID}: generated candidate handler is BUILD_REQUIRED/non-runnable; "
+            "implement its milestone-specific FlowSteps so it returns explicit "
+            "{'outputs': {...}}, then remove the build markers"
+        )
     del kwargs
     payload: dict[str, Any] = dict(input_data)
     if isinstance(draft, dict):
-        payload.update({key: value for key, value in draft.items() if key != "_flowstep"})
+        forbidden_control = {
+            "_flowstep",
+            "receipt",
+            "control_receipt",
+            "decision",
+            "ok",
+            "chosen",
+            "branch",
+            "cycle",
+        }
+        payload.update(
+            {key: value for key, value in draft.items() if key not in forbidden_control}
+        )
         payload["draft"] = draft
     try:
-        tools = _builder_tools()
         codebase = _codebase()
     except Exception as exc:
         if draft is None:
             return _need_model(STEP_ID, "", f"{type(exc).__name__}: {exc}")
         raise
-    sequence = FLOWSTEPS or [{"id": tool_id, "tool": tool_id} for tool_id in TOOLS]
+    binding_refs = {
+        str(item.get("tool") or ""): str(item.get("ref") or "")
+        for item in TOOL_BINDINGS
+    }
+    # Branch/cycle workers are control-plane tools. The runtime invokes their
+    # exact bound refs only after this candidate has passed structural
+    # admission; a generated candidate handler must never run them as a
+    # FlowStep or capture their receipts in candidate data.
+    sequence = [
+        item
+        for item in FLOWSTEPS
+        if not (
+            CONTROL_KIND in {"branch", "cycle"}
+            and str((item or {}).get("id") or "") == CONTROL_WORKER
+        )
+    ]
     for item in sequence:
-        tool_id = str((item or {}).get("tool") or "")
-        flowstep_id = str((item or {}).get("id") or tool_id or "step")
-        if not tool_id:
+        exact_ref = str((item or {}).get("tool") or "")
+        flowstep_id = str((item or {}).get("id") or "step")
+        if not exact_ref:
             continue
         try:
-            result = tools.run_library_tool(codebase, tool_id, _tool_input(payload, tool_id))
+            if binding_refs.get(flowstep_id) != exact_ref:
+                raise ValueError(
+                    f"{flowstep_id}: execution binding does not equal FlowStep tool ref"
+                )
+            tool_id = _local_tool_package(flowstep_id, exact_ref)
+            result = run_library_tool(
+                codebase,
+                tool_id,
+                _tool_input(payload, flowstep_id),
+            )
         except Exception as exc:
             if draft is None:
-                return _need_model(flowstep_id, tool_id, f"{type(exc).__name__}: {exc}")
-            payload[f"{tool_id}_error"] = f"{type(exc).__name__}: {exc}"
+                return _need_model(flowstep_id, exact_ref, f"{type(exc).__name__}: {exc}")
+            payload[f"{flowstep_id}_error"] = f"{type(exc).__name__}: {exc}"
             continue
         if isinstance(result, dict):
-            payload[tool_id] = result
+            payload[flowstep_id] = result
             if "path" in result and "sha256" in result:
                 payload["asset"] = result
-            if "ok" in result:
-                payload["receipt"] = result
-    if WORKER and WORKER not in {str((item or {}).get("tool") or "") for item in sequence}:
-        try:
-            receipt_input = dict(payload)
-            receipt_input["gem_path"] = GEM_PATH
-            if isinstance(payload.get("asset"), dict):
-                receipt_input["asset"] = payload["asset"]
-            if isinstance(draft, dict):
-                receipt_input["draft"] = draft
-            if WORKER == "ok_receipt":
-                if isinstance(draft, dict) and "ok" in draft:
-                    receipt_input = {"ok": bool(draft["ok"]), "code": "pass" if draft["ok"] else "fail"}
-                elif "ok" in payload:
-                    receipt_input = {"ok": bool(payload["ok"])}
-                else:
-                    raise ValueError(f"{STEP_ID}: ok_receipt looks at the gem; draft {{ok}} for the rule of success")
-            elif WORKER == "schema_validate":
-                receipt_input = {"schema_path": SCHEMA_PATH, "instance": _candidate(payload)}
-            elif WORKER == "hash_bind":
-                asset = payload.get("asset") if isinstance(payload.get("asset"), dict) else {}
-                path = asset.get("path") or _first_path(payload)
-                if not path:
-                    raise ValueError(f"{STEP_ID}: hash_bind worker needs an asset path")
-                receipt_input = {"path": path}
-            elif WORKER == "ledger_receipt":
-                ledger = payload.get("ledger") or payload.get("items") or []
-                done = payload.get("done")
-                if not isinstance(done, list):
-                    done = list(ledger) if isinstance(ledger, list) else []
-                receipt_input = {"ledger": ledger if isinstance(ledger, list) else [], "done": done}
-            elif WORKER in {"branch_receipt", "cycle_receipt"}:
-                receipt_input = dict(payload)
-                receipt_input["gem_path"] = GEM_PATH
-                if isinstance(draft, dict):
-                    receipt_input["draft"] = draft
-            receipt = tools.run_library_tool(codebase, WORKER, receipt_input)
-            if isinstance(receipt, dict):
-                payload["receipt"] = receipt
-                if "ok" in receipt:
-                    payload["ok"] = receipt["ok"]
-        except Exception as exc:
-            if draft is None:
-                return _need_model(STEP_ID, WORKER, f"{type(exc).__name__}: {exc}")
-            payload[f"{WORKER}_error"] = f"{type(exc).__name__}: {exc}"
     if ASSET_KIND in {"file", "image", "video", "audio"}:
         address = payload.get("address") if isinstance(payload.get("address"), dict) else {}
         dest = address.get("write_to")
@@ -255,9 +231,7 @@ def run(input_data: dict[str, Any], draft: dict[str, Any] | None = None, **kwarg
         out = {"asset": out_asset}
         if address.get("slot"):
             out["asset"]["slot"] = str(address["slot"])
-        if isinstance(payload.get("receipt"), dict):
-            out["receipt"] = payload["receipt"]
-        return _candidate(out, payload.get("receipt") if isinstance(payload.get("receipt"), dict) else None)
+        return _candidate(out)
     if not payload:
         if draft is None:
             return _need_model(STEP_ID, "", f"{STEP_ID}: no candidate named outputs were produced")

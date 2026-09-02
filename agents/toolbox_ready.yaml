@@ -1,0 +1,48 @@
+schema: m8m_milestone_agent_v1
+agent_id: toolbox_ready
+role: milestone
+success: The staged toolbox manifest identifies every implementation as runnable or explicitly BUILD_REQUIRED and lists every ordered staged member.
+output_contract: m8m_builder_toolbox_manifest_v2
+output_schema: contracts/m8m_builder_toolbox_manifest_v2.schema.json
+outputs:
+  - id: toolbox_manifest
+    name: Toolbox requirement manifest
+    kind: json
+    cardinality: one
+    required: true
+handler: scripts/m8m_build_steps.py
+test: flowsteps/tools/install_toolbox/tests/test_tool.py
+input_schema: contracts/m8m_builder_input_v1.schema.json
+inputs:
+  request: user.request
+  audit:
+    from: audit_complete.m8m_builder_source_audit_v2
+    output: source_audit
+flowsteps:
+  - id: construct_toolbox
+    tool: install_toolbox
+tools:
+  - construct_toolbox
+execution:
+  candidate_executor:
+    ref: handler.m8m_build_v2.toolbox_ready@3.1.0
+  tool_bindings:
+    - tool: construct_toolbox
+      ref: install_toolbox@3.1.0
+intelligence: none
+on_tool_fail: BLOCKED
+loop: none
+gem: references/toolbox_ready.md
+read_paths:
+  - references/toolbox_ready.md
+observer:
+  title: Toolbox preparation
+  summary: Turn the chosen audit into a closed manifest of runnable and explicitly unfinished tools.
+  actions:
+    - flowstep_id: construct_toolbox
+      title: Prepare the staged toolbox
+      summary: Resolve each audited implementation and mark unfinished work as BUILD_REQUIRED.
+  outputs:
+    - output_id: toolbox_manifest
+      title: Toolbox requirement manifest
+      summary: A required JSON manifest consumed by staged workflow generation.

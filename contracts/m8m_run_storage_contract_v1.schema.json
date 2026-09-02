@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "m8m_run_storage_contract_v1.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "policy_id",
+    "source_code_root",
+    "execution_root",
+    "active_run_dir",
+    "cache_root",
+    "source_asset_policy",
+    "legacy_migration_policy"
+  ],
+  "properties": {
+    "schema": { "const": "m8m_run_storage_contract_v1" },
+    "policy_id": { "const": "host_local_execution_source_separate_v1" },
+    "source_code_root": { "type": "string", "minLength": 1 },
+    "execution_root": { "type": "string", "minLength": 1 },
+    "active_run_dir": { "type": "string", "minLength": 1 },
+    "cache_root": { "type": "string", "minLength": 1 },
+    "source_asset_policy": { "const": "materialize_once_into_active_run" },
+    "legacy_migration_policy": { "const": "never_automatic" }
+  }
+}

@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
-
-from jsonschema import Draft202012Validator, RefResolver
 
 from flowstep_runtime import FlowError, read_json, sha256_file
 
@@ -20,10 +19,15 @@ def is_control_name(step_id: str) -> bool:
 
 
 def schema_accepts(instance: Any, schema: dict[str, Any] | Path) -> bool:
+    from jsonschema import Draft202012Validator, RefResolver
+
     if isinstance(schema, Path):
         path = schema
         schema = read_json(path)
-        resolver = RefResolver(base_uri=path.resolve().as_uri(), referrer=schema)
+        resolver = RefResolver(
+            base_uri=Path(os.path.abspath(str(path))).as_uri(),
+            referrer=schema,
+        )
     else:
         resolver = RefResolver.from_schema(schema)
     return Draft202012Validator(schema, resolver=resolver).is_valid(instance)

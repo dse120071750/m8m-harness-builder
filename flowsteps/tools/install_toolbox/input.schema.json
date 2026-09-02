@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["request", "audit"],
+  "properties": {
+    "request": { "$ref": "../../../contracts/m8m_builder_request_v3.schema.json" },
+    "audit": {
+      "$ref": "../../../contracts/m8m_builder_source_audit_v2.schema.json#/properties/outputs/properties/source_audit"
+    }
+  }
+}

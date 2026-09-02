@@ -10,6 +10,7 @@ import support  # noqa: F401
 from audit_harness import infer_schema_control, needs_judge
 from milestone_pair import is_wait_milestone, pair_milestone, pick_gate_tool
 from flowstep_runtime import FlowError, read_json
+from flowstep_tools import validate_library_tool
 from generate_harness import generate_tool, generate_v3_flow
 from m8m_flowchart import render_flowchart, render_mermaid
 from run_flow import advance
@@ -56,9 +57,96 @@ def _judge_assemble(path: Path, fail_first: bool = False) -> None:
         "    receipt = {'ok': ok, 'attempt': attempt, 'code': 'pass' if ok else 'fail'}\n"
         "    return {\n"
         "        'outputs': {'result': {'label': 'ok', 'sentence': 'x', 'receipt': receipt}},\n"
-        "        'receipt': receipt,\n"
         "    }\n",
     )
+
+
+def _strict_judge(tool_dir: Path, *, pass_on_attempt: int | None = 1, malformed: bool = False) -> None:
+    """Turn a generated judge scaffold into a bounded test implementation."""
+    marker = tool_dir / "BUILD_REQUIRED"
+    if marker.is_file():
+        marker.unlink()
+    if malformed:
+        body = "    return {}\n"
+    else:
+        threshold = int(pass_on_attempt or 1)
+        body = (
+            "    expected = {'schema', 'milestone_id', 'attempt', 'max_attempts', "
+            "'expectation', 'inputs', 'candidate'}\n"
+            "    assert set(input_data) == expected\n"
+            "    assert set(input_data['candidate']) == {'outputs'}\n"
+            f"    ok = input_data['attempt'] >= {threshold}\n"
+            "    return {\n"
+            "        'decision': 'PASS' if ok else 'RETRY',\n"
+            "        'reasons': ['test judge decision'],\n"
+            "        'blockers': [] if ok else ['candidate not ready'],\n"
+            "    }\n"
+        )
+    _write(tool_dir / "tool.py", "def run(input_data, params=None, **_):\n" + body)
+    _write(
+        tool_dir / "output.schema.json",
+        json.dumps(
+            {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["decision", "reasons", "blockers"],
+                "properties": {
+                    "decision": {"enum": ["PASS", "RETRY", "BLOCKED"]},
+                    "reasons": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": 8,
+                        "items": {"type": "string"},
+                    },
+                    "blockers": {
+                        "type": "array",
+                        "maxItems": 8,
+                        "items": {"type": "string"},
+                    },
+                },
+            }
+        ),
+    )
+    # Generation validates and compiles the scaffold. Refresh the public tool
+    # loader's source cache after replacing that scaffold in this test fixture.
+    validate_library_tool(tool_dir.parents[2], tool_dir.name)
+
+
+def _judge_spec(flow_id: str, *, max_attempts: int = 3) -> dict:
+    return {
+        "id": "card_aligned",
+        "success": "The separate semantic judge accepts the current card candidate.",
+        "output_contract": "card_aligned_v1",
+        "outputs": [
+            {
+                "id": "result",
+                "name": "Aligned card result",
+                "kind": "json",
+                "cardinality": "one",
+                "required": True,
+            }
+        ],
+        "asset": {"kind": "json"},
+        "output_schema_object": {
+            "type": "object",
+            "additionalProperties": True,
+        },
+        "tools": [],
+        "flowsteps": [],
+        "execution": {
+            "candidate_executor": {
+                "ref": f"handler.{flow_id}.card_aligned@3.1.0"
+            },
+            "judge": {"ref": "card_aligned_judge@3.1.0"},
+            "tool_bindings": [],
+        },
+        "intelligence": "none",
+        "loop": "judge",
+        "worker": "card_aligned_judge@3.1.0",
+        "judge_abi": "m8m_milestone_judge_v1",
+        "receipt_schema": "schemas/card_aligned_receipt_v1.json",
+        "max_attempts": max_attempts,
+    }
 
 
 @unittest.skip("for replaced by cycle over a frozen ledger")
@@ -149,14 +237,13 @@ class JudgeLoopTests(unittest.TestCase):
     def test_retries_until_ok(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             codebase = Path(temp) / "repo"
-            generate_tool(codebase, "hash_bind")
-            generate_tool(codebase, "ok_receipt")
+            generate_tool(codebase, "card_aligned_judge")
             generate_v3_flow(
                 codebase,
                 "judge_v1",
                 ["card_aligned"],
-                tools=["ok_receipt"],
-                milestone_specs=[{"id": "card_aligned", "asset": {"kind": "json"}, "tools": ["ok_receipt"]}],
+                tools=[],
+                milestone_specs=[_judge_spec("judge_v1")],
             )
             harness = codebase / "flowsteps" / "flows" / "judge_v1"
             _write(
@@ -186,90 +273,75 @@ class JudgeLoopTests(unittest.TestCase):
                     }
                 ),
             )
-            _write(
-                harness / "schemas" / "card_aligned_receipt_v1.json",
-                json.dumps({"type": "object", "required": ["ok"], "properties": {"ok": {"type": "boolean"}}}),
-            )
-            text = (harness / "flow.yaml").read_text(encoding="utf-8")
-            text = text.replace(
-                "    handler: milestones/card_aligned/assemble.py\n",
-                "    handler: milestones/card_aligned/assemble.py\n"
-                "    loop: judge\n"
-                "    worker: ok_receipt\n"
-                "    receipt_schema: schemas/card_aligned_receipt_v1.json\n"
-                "    max_attempts: 4\n",
-            )
-            (harness / "flow.yaml").write_text(text, encoding="utf-8")
-            _judge_assemble(harness / "milestones" / "card_aligned" / "assemble.py", fail_first=True)
+            _strict_judge(codebase / "flowsteps" / "tools" / "card_aligned_judge", pass_on_attempt=2)
+            _judge_assemble(harness / "milestones" / "card_aligned" / "assemble.py")
             _ok_test(harness / "milestones" / "card_aligned" / "tests" / "test_assemble.py")
             request = Path(temp) / "request.json"
             request.write_text(json.dumps({"kind": "image"}), encoding="utf-8")
             done = advance(harness, Path(temp) / "run-j", request_path=request)
             self.assertEqual(done["state"], "COMPLETE", done)
             out = read_json(Path(temp) / "run-j" / "milestones" / "card_aligned" / "out" / "judge-receipt.json")
-            self.assertTrue(out["ok"])
+            self.assertEqual(out["schema"], "m8m.milestone_judge_receipt.v1")
+            self.assertEqual(out["decision"], "PASS")
             self.assertGreaterEqual(out["attempt"], 2)
 
     def test_budget_exhausted_blocks(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             codebase = Path(temp) / "repo"
-            generate_tool(codebase, "hash_bind")
-            generate_tool(codebase, "ok_receipt")
-            generate_v3_flow(codebase, "judge_fail_v1", ["card_aligned"], tools=["ok_receipt"])
+            generate_tool(codebase, "card_aligned_judge")
+            generate_v3_flow(
+                codebase,
+                "judge_fail_v1",
+                ["card_aligned"],
+                tools=[],
+                milestone_specs=[
+                    _judge_spec("judge_fail_v1", max_attempts=2)
+                ],
+            )
             harness = codebase / "flowsteps" / "flows" / "judge_fail_v1"
             _write(
                 harness / "schemas" / "card_aligned_v1.json",
                 json.dumps({"type": "object", "additionalProperties": True}),
             )
-            _write(
-                harness / "schemas" / "card_aligned_receipt_v1.json",
-                json.dumps({"type": "object", "required": ["ok"], "properties": {"ok": {"type": "boolean"}}}),
-            )
-            text = (harness / "flow.yaml").read_text(encoding="utf-8")
-            text = text.replace(
-                "    handler: milestones/card_aligned/assemble.py\n",
-                "    handler: milestones/card_aligned/assemble.py\n"
-                "    loop: judge\n"
-                "    worker: ok_receipt\n"
-                "    receipt_schema: schemas/card_aligned_receipt_v1.json\n"
-                "    max_attempts: 2\n",
-            )
-            (harness / "flow.yaml").write_text(text, encoding="utf-8")
+            _strict_judge(codebase / "flowsteps" / "tools" / "card_aligned_judge", pass_on_attempt=99)
             _write(
                 harness / "milestones" / "card_aligned" / "assemble.py",
                 "def run(input_data, draft=None, **_):\n"
                 "    receipt = {'ok': False, 'code': 'fail'}\n"
-                "    return {'outputs': {'result': {'receipt': receipt}}, 'receipt': receipt}\n",
+                "    return {'outputs': {'result': {'receipt': receipt}}}\n",
             )
             _ok_test(harness / "milestones" / "card_aligned" / "tests" / "test_assemble.py")
             request = Path(temp) / "request.json"
             request.write_text("{}", encoding="utf-8")
             blocked = advance(harness, Path(temp) / "run-fail", request_path=request)
             self.assertEqual(blocked["state"], "BLOCKED")
+            run_dir = Path(temp) / "run-fail"
+            receipt = read_json(run_dir / "milestones" / "card_aligned" / "out" / "judge-receipt.json")
+            self.assertEqual(receipt["schema"], "m8m.milestone_judge_receipt.v1")
+            self.assertEqual(receipt["decision"], "BLOCKED")
+            self.assertEqual(receipt["attempt"], 2, receipt)
+            self.assertTrue(receipt["blockers"])
+            artifact = read_json(next((run_dir / "artifacts").glob("card_aligned.*.json")))
+            self.assertEqual(artifact["status"], "BLOCKED")
+            self.assertEqual(artifact["evidence"]["attempt"], 2)
+            self.assertFalse((run_dir / "milestones" / "card_aligned" / "out" / "chosen-output.json").exists())
 
 
 class ReceiptGuardTests(unittest.TestCase):
-    def test_missing_receipt_blocks(self) -> None:
+    def test_malformed_separate_judge_response_blocks(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             codebase = Path(temp) / "repo"
-            generate_tool(codebase, "hash_bind")
-            generate_tool(codebase, "ok_receipt")
-            generate_v3_flow(codebase, "noreceipt_v1", ["card_aligned"], tools=["hash_bind"])
+            generate_tool(codebase, "card_aligned_judge")
+            generate_v3_flow(
+                codebase,
+                "noreceipt_v1",
+                ["card_aligned"],
+                tools=[],
+                milestone_specs=[_judge_spec("noreceipt_v1")],
+            )
             harness = codebase / "flowsteps" / "flows" / "noreceipt_v1"
             _write(harness / "schemas" / "card_aligned_v1.json", json.dumps({"type": "object", "additionalProperties": True}))
-            _write(
-                harness / "schemas" / "card_aligned_receipt_v1.json",
-                json.dumps({"type": "object", "required": ["ok"], "properties": {"ok": {"type": "boolean"}}}),
-            )
-            text = (harness / "flow.yaml").read_text(encoding="utf-8")
-            text = text.replace(
-                "    handler: milestones/card_aligned/assemble.py\n",
-                "    handler: milestones/card_aligned/assemble.py\n"
-                "    loop: judge\n"
-                "    worker: ok_receipt\n"
-                "    receipt_schema: schemas/card_aligned_receipt_v1.json\n",
-            )
-            (harness / "flow.yaml").write_text(text, encoding="utf-8")
+            _strict_judge(codebase / "flowsteps" / "tools" / "card_aligned_judge", malformed=True)
             _write(
                 harness / "milestones" / "card_aligned" / "assemble.py",
                 "def run(input_data, draft=None, **_):\n    return {'outputs': {'result': {'label': 'x'}}}\n",
@@ -279,7 +351,10 @@ class ReceiptGuardTests(unittest.TestCase):
             request.write_text("{}", encoding="utf-8")
             blocked = advance(harness, Path(temp) / "run-miss", request_path=request)
             self.assertEqual(blocked["state"], "BLOCKED")
-            self.assertTrue(any("receipt" in str(item).lower() for item in blocked.get("blockers") or []))
+            self.assertTrue(any("judge" in str(item).lower() for item in blocked.get("blockers") or []))
+            self.assertFalse(
+                (Path(temp) / "run-miss" / "milestones" / "card_aligned" / "out" / "chosen-output.json").exists()
+            )
 
 
 class InferLoopTests(unittest.TestCase):
@@ -317,7 +392,7 @@ class InferLoopTests(unittest.TestCase):
         self.assertNotEqual(milestones[0].get("loop"), "judge")
         self.assertTrue(milestones[0].get("success"))
         self.assertTrue(milestones[0].get("gem", "").endswith("source_ready.md"))
-        self.assertIn("Retry until the worker receipt is ok", milestones[1]["success"])
+        self.assertIn("Retry until the semantic judge returns PASS", milestones[1]["success"])
 
     def test_does_not_judge_every_asset_milestone(self) -> None:
         milestones = [
@@ -339,7 +414,7 @@ class InferLoopTests(unittest.TestCase):
         self.assertTrue(needs_judge({"id": "slot_generated"}))
         self.assertTrue(needs_judge({"id": "design_frozen", "intelligence": "image"}))
 
-    def test_gate_tool_wins_over_named_judge(self) -> None:
+    def test_candidate_gate_is_not_reused_as_semantic_judge(self) -> None:
         item = {
             "id": "alignment_pass",
             "intelligence": "judge",
@@ -348,7 +423,8 @@ class InferLoopTests(unittest.TestCase):
         }
         pair_milestone(item)
         self.assertEqual(item["loop"], "judge")
-        self.assertEqual(item["worker"], "restyle_alignment_gate")
+        self.assertEqual(item["worker"], "alignment_pass_judge")
+        self.assertEqual(item["judge_abi"], "m8m_milestone_judge_v1")
         self.assertEqual(pick_gate_tool(["hash_bind", "ok_receipt"]), None)
 
     def test_response_ready_is_wait_judge(self) -> None:
@@ -388,11 +464,11 @@ class ChartLoopTests(unittest.TestCase):
             },
         ]
         mermaid = render_mermaid(items)
-        self.assertIn("judge until ok", mermaid)
+        self.assertIn("judge until PASS", mermaid)
         self.assertNotIn("else BLOCKED", mermaid)
         text = render_flowchart(items, title="toy", flow_id="toy")
         self.assertIn("## Cycle", text)
-        self.assertIn("## Judge (until ok)", text)
+        self.assertIn("## Optional semantic judge", text)
         self.assertNotIn("## Gates (if / else)", text)
 
 

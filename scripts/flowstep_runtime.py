@@ -3,18 +3,22 @@
 from __future__ import annotations
 
 import ast
+from copy import deepcopy
 import hashlib
 import importlib.util
 import json
+import os
 import re
+import secrets
+import sys
 import time
+import tokenize
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-import yaml
-from jsonschema import Draft202012Validator, RefResolver
-from jsonschema.exceptions import SchemaError
+from execution_identity import canonical_candidate_executor_ref
+
 
 
 FLOW_SCHEMA = "flowstep_flow_v4"
@@ -48,8 +52,13 @@ MILESTONE_SUFFIXES = (
     "_admitted",
     "_verified",
     "_checked",
+    "_written",
+    "_complete",
 )
 STEP_ID_RE = re.compile(r"^[a-z][a-z0-9_]*$")
+VERSIONED_RUNTIME_REF_RE = re.compile(
+    r"^[a-z][a-z0-9_.-]*@[0-9]+\.[0-9]+\.[0-9]+$"
+)
 OUTPUT_KINDS = ("json", "data", "file", "image", "video", "audio")
 OUTPUT_CARDINALITIES = ("one", "many")
 CACHE_SIDE_EFFECT_TOKENS = {
@@ -67,6 +76,42 @@ CACHE_SIDE_EFFECT_TOKENS = {
     "update",
     "upload",
 }
+READ_ONLY_PATCH_TOKENS = {
+    "build",
+    "compose",
+    "derive",
+    "prepare",
+}
+
+
+def runtime_package_name(runtime_ref: str, *, label: str = "runtime ref") -> str:
+    """Map an exact versioned runtime ref to its local package directory name."""
+
+    value = str(runtime_ref or "").strip()
+    if not VERSIONED_RUNTIME_REF_RE.fullmatch(value):
+        raise FlowError(f"{label} must be an exact versioned ref")
+    package = value.rsplit("@", 1)[0]
+    if not STEP_ID_RE.fullmatch(package):
+        raise FlowError(f"{label} does not resolve to a safe local runtime package")
+    return package
+
+
+def local_tool_package_name(runtime_ref: str, *, label: str = "tool ref") -> str:
+    """Resolve one exact tool implementation ref to its local package name.
+
+    ``flowstep.tool`` and ``execution.tool_bindings[*].ref`` keep the exact
+    versioned identity used by native admission. Local filesystem lookup
+    accepts both native refs and the immediately preceding ``tool.`` namespace
+    so an in-flight frozen run remains resumable across the 3.1 cutover.
+    """
+
+    value = str(runtime_ref or "").strip()
+    if not VERSIONED_RUNTIME_REF_RE.fullmatch(value):
+        raise FlowError(f"{label} must be an exact versioned ref")
+    package = value.rsplit("@", 1)[0].removeprefix("tool.")
+    if not STEP_ID_RE.fullmatch(package):
+        raise FlowError(f"{label} does not resolve to a safe local runtime package")
+    return package
 
 
 def cache_side_effect_risk(step: dict[str, Any]) -> str | None:
@@ -80,7 +125,17 @@ def cache_side_effect_risk(step: dict[str, Any]) -> str | None:
             identifiers.extend(str(flowstep.get(key) or "") for key in ("id", "tool"))
     for identifier in identifiers:
         tokens = {item for item in re.split(r"[^a-z0-9]+", identifier.lower()) if item}
-        if tokens & CACHE_SIDE_EFFECT_TOKENS:
+        risky_tokens = tokens & CACHE_SIDE_EFFECT_TOKENS
+        # A patch *manifest* builder is deterministic preparation, not the
+        # external patch operation. Keep the conservative gate for identifiers
+        # that also name a real mutator (commit/apply/register/etc.).
+        if risky_tokens == {"patch"} and tokens & READ_ONLY_PATCH_TOKENS:
+            continue
+        # The builder's install_toolbox step materializes local generated
+        # source under the selected codebase; it is not a remote operation.
+        if risky_tokens == {"install"} and tokens & {"skill", "toolbox"}:
+            continue
+        if risky_tokens:
             return identifier
     return None
 
@@ -114,9 +169,9 @@ def normalize_flowsteps(
                 steps.append({"id": tool.strip(), "tool": tool.strip()})
     tool_ids: list[str] = []
     for item in steps:
-        tool = item.get("tool") or ""
-        if tool and tool not in tool_ids:
-            tool_ids.append(tool)
+        flowstep_id = item.get("id") or ""
+        if flowstep_id and flowstep_id not in tool_ids:
+            tool_ids.append(flowstep_id)
     return steps, tool_ids
 
 
@@ -128,7 +183,9 @@ def recovery_model(step: dict[str, Any]) -> str:
 FLOW_ID_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 FLOWSTEPS_DIRNAME = "flowsteps"
 NEED_MODEL = "NEED_MODEL"
-BUILDER_ROOT = Path(__file__).resolve().parents[1]
+# Keep startup lexical. ``Path.resolve()`` performs filesystem probes for every
+# path component on Windows and this module is imported by every flow command.
+BUILDER_ROOT = Path(os.path.abspath(__file__)).parents[1]
 CONTRACTS_DIR = BUILDER_ROOT / "contracts"
 
 
@@ -162,26 +219,73 @@ def read_json(path: Path) -> Any:
 
 
 def write_json(path: Path, value: Any, *, overwrite: bool = True) -> None:
-    if path.exists() and not overwrite:
-        raise FlowError(f"immutable output already exists: {path}")
+    """Durably publish one JSON document without sharing a static temp path.
+
+    A static ``<name>.tmp`` lets concurrent/resumed writers clobber each
+    other's staging bytes. Immutable outputs additionally need an atomic
+    create-if-absent operation; a pre-flight ``exists()`` check is racy.
+    """
+
     path.parent.mkdir(parents=True, exist_ok=True)
-    temp = path.with_suffix(path.suffix + ".tmp")
-    temp.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    for attempt in range(20):
+    payload = (json.dumps(value, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+    temp = path.parent / f".{path.name}.{os.getpid()}.{secrets.token_hex(8)}.tmp"
+    try:
+        with temp.open("xb") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        if not overwrite:
+            try:
+                # Atomic create-if-absent on NTFS and POSIX filesystems.
+                os.link(temp, path)
+            except FileExistsError as exc:
+                raise FlowError(f"immutable output already exists: {path}") from exc
+            except OSError as exc:
+                if os.name != "nt" or getattr(exc, "winerror", None) not in {1, 50}:
+                    raise
+                # Some Windows volumes reject hard links (ERROR_INVALID_FUNCTION
+                # / ERROR_NOT_SUPPORTED). os.rename is still atomic there and,
+                # on Windows, refuses to replace an existing destination.
+                for attempt in range(20):
+                    try:
+                        os.rename(temp, path)
+                        return
+                    except FileExistsError as exists:
+                        raise FlowError(
+                            f"immutable output already exists: {path}"
+                        ) from exists
+                    except OSError as rename_error:
+                        if (
+                            getattr(rename_error, "winerror", None)
+                            not in {5, 32, 1450}
+                            or attempt == 19
+                        ):
+                            raise
+                        time.sleep(0.05 * (attempt + 1))
+            return
+        for attempt in range(20):
+            try:
+                os.replace(temp, path)
+                return
+            except OSError as exc:
+                # Windows can report ERROR_ACCESS_DENIED (5) for the same
+                # brief antivirus/indexer handle race that otherwise appears
+                # as sharing violation (32) or insufficient resources (1450).
+                if getattr(exc, "winerror", None) not in {5, 32, 1450} or attempt == 19:
+                    raise
+                time.sleep(0.05 * (attempt + 1))
+    finally:
         try:
-            temp.replace(path)
-            break
-        except OSError as exc:
-            # Windows can report ERROR_ACCESS_DENIED (5) for the same brief
-            # antivirus/indexer handle race that otherwise appears as a
-            # sharing violation (32). Treat all transient replace failures
-            # uniformly so long-running IO ledgers remain resumable.
-            if getattr(exc, "winerror", None) not in {5, 32, 1450} or attempt == 19:
-                raise
-            time.sleep(0.05 * (attempt + 1))
+            temp.unlink(missing_ok=True)
+        except OSError:
+            # The destination is already durable. A scanner retaining the
+            # unique temp handle must not invalidate the committed document.
+            pass
 
 
 def load_yaml(path: Path) -> Any:
+    import yaml
+
     return yaml.safe_load(path.read_text(encoding="utf-8"))
 
 
@@ -205,12 +309,18 @@ HOME_SKILL_MARKERS = ("/.codex/skills/", "/.claude/skills/")
 HOME_SKILL_SUFFIXES = ("/.codex/skills", "/.claude/skills")
 
 
+def lexical_abs(path: Path | str) -> Path:
+    """Absolute lexical path without filesystem realpath/stat traversal."""
+    return Path(os.path.abspath(str(path)))
+
+
 def is_under_home_skills(path: Path) -> bool:
     """True for Codex or Claude home/project skill folders. Product tools must not live there."""
-    text = f"/{path.resolve().as_posix().lower()}/"
+    normalized = lexical_abs(path).as_posix().lower()
+    text = f"/{normalized}/"
     if any(marker in text for marker in HOME_SKILL_MARKERS):
         return True
-    stripped = path.resolve().as_posix().lower().rstrip("/")
+    stripped = normalized.rstrip("/")
     return any(stripped.endswith(suffix) for suffix in HOME_SKILL_SUFFIXES)
 
 
@@ -219,7 +329,7 @@ def is_under_codex_skills(path: Path) -> bool:
 
 
 def is_builder_fixture(path: Path) -> bool:
-    text = path.resolve().as_posix().replace("\\", "/").lower()
+    text = lexical_abs(path).as_posix().replace("\\", "/").lower()
     return (
         "flowstep-harness-builder/examples/" in text
         or "m8m-harness-builder/examples/" in text
@@ -227,7 +337,7 @@ def is_builder_fixture(path: Path) -> bool:
 
 
 def assert_product_harness_location(path: Path) -> None:
-    resolved = path.resolve()
+    resolved = lexical_abs(path)
     if is_under_home_skills(resolved) and not is_builder_fixture(resolved):
         raise FlowError(
             "product tools must live in the codebase at flowsteps/<flow_id>, "
@@ -243,18 +353,18 @@ def resolve_harness_dir(
     harness_dir: Path | str | None = None,
 ) -> Path:
     if harness_dir:
-        return Path(harness_dir).resolve()
+        return lexical_abs(harness_dir)
     if codebase:
         if not flow_id:
             raise FlowError("--flow-id is required with --codebase")
         if not FLOW_ID_RE.match(str(flow_id)):
             raise FlowError(f"invalid flow_id: {flow_id}")
-        root = Path(codebase).resolve()
+        root = lexical_abs(codebase)
         if is_under_home_skills(root):
             raise FlowError("--codebase must be the repo root, not ~/.codex/skills or ~/.claude/skills")
-        return (root / FLOWSTEPS_DIRNAME / "flows" / flow_id).resolve()
+        return lexical_abs(root / FLOWSTEPS_DIRNAME / "flows" / flow_id)
     if skill_dir:
-        return Path(skill_dir).resolve()
+        return lexical_abs(skill_dir)
     raise FlowError("pass --codebase and --flow-id, or --skill-dir for the builder fixture")
 
 
@@ -404,11 +514,25 @@ def _normalize_outputs(raw: Any, *, step_id: str) -> list[dict[str, Any]]:
                 "required": required,
             }
         )
+    if not any(item["required"] for item in outputs):
+        raise FlowError(f"{step_id}.outputs must declare at least one required business output")
     return outputs
 
 
-def _load_flow_v4(skill_dir: Path, path: Path, raw: dict[str, Any]) -> dict[str, Any]:
+def _load_flow_v4(
+    skill_dir: Path,
+    path: Path,
+    raw: dict[str, Any],
+    *,
+    allow_unbound_import: bool = False,
+) -> dict[str, Any]:
     validate_against_schema(raw, flow_schema_path())
+    if raw.get("graph") is not None:
+        raise FlowError(
+            "flowstep_flow_v4 graph is contract-valid, but the Builder local runtime "
+            "does not execute explicit DAGs; use the canonical M8M platform runtime "
+            "or compile the graph to Builder branch/cycle controls"
+        )
     _require(raw, {"schema", "flow_id", "version", "milestones"}, "flow")
     if not isinstance(raw["flow_id"], str) or not FLOW_ID_RE.match(raw["flow_id"]):
         raise FlowError(f"invalid flow_id: {raw.get('flow_id')}")
@@ -447,9 +571,18 @@ def _load_flow_v4(skill_dir: Path, path: Path, raw: dict[str, Any]) -> dict[str,
         if intel not in ("none", *MODELS[1:]):
             raise FlowError(f"{step_id}.intelligence must be none|completion|image|judge")
         flowsteps, tools = normalize_flowsteps(flowsteps=item.get("flowsteps"), tools=item.get("tools"))
-        on_tool_fail = str(item.get("on_tool_fail") or "need_model")
-        if on_tool_fail not in {"BLOCKED", "need_model"}:
-            raise FlowError(f"{step_id}.on_tool_fail must be BLOCKED or need_model")
+        if item.get("tools") is not None and list(item.get("tools") or []) != tools:
+            raise FlowError(
+                f"{step_id}.tools must equal first-use FlowStep id order"
+            )
+        on_tool_fail = str(
+            item.get("on_tool_fail")
+            or ("need_model" if intel != "none" else "BLOCKED")
+        )
+        if on_tool_fail not in {"BLOCKED", "need_model", "retryable"}:
+            raise FlowError(
+                f"{step_id}.on_tool_fail must be BLOCKED, retryable, or need_model"
+            )
         max_model_attempts = item.get("max_model_attempts")
         if max_model_attempts is None:
             max_model_attempts = (item.get("params") or {}).get("max_model_attempts")
@@ -457,6 +590,13 @@ def _load_flow_v4(skill_dir: Path, path: Path, raw: dict[str, Any]) -> dict[str,
             max_model_attempts = 8
         if not isinstance(max_model_attempts, int) or max_model_attempts < 1:
             raise FlowError(f"{step_id}.max_model_attempts must be a positive integer")
+        max_tool_attempts = item.get("max_tool_attempts")
+        if max_tool_attempts is None:
+            max_tool_attempts = (item.get("params") or {}).get("max_tool_attempts")
+        if max_tool_attempts is None:
+            max_tool_attempts = 3
+        if not isinstance(max_tool_attempts, int) or max_tool_attempts < 1:
+            raise FlowError(f"{step_id}.max_tool_attempts must be a positive integer")
         if intel != "none" and not str(item.get("model_justification") or "").strip():
             item["model_justification"] = "optional; writer sketch"
         item.setdefault("draft_schema", f"milestones/{step_id}/draft.schema.json")
@@ -498,10 +638,197 @@ def _load_flow_v4(skill_dir: Path, path: Path, raw: dict[str, Any]) -> dict[str,
         else:
             ledger = None
         worker = str(item.get("worker") or "").strip()
+        judge_abi = str(item.get("judge_abi") or "").strip() or None
+        if judge_abi and loop != "judge":
+            raise FlowError(f"{step_id}: judge_abi is valid only for loop=judge")
+        if judge_abi and not worker:
+            raise FlowError(f"{step_id}: strict judge ABI requires an explicit worker")
+        if judge_abi and not str(item.get("receipt_schema") or "").strip():
+            raise FlowError(f"{step_id}: strict judge ABI requires an explicit receipt_schema")
+        if loop == "judge" and judge_abi != "m8m_milestone_judge_v1":
+            raise FlowError(
+                f"{step_id}: semantic judge loops require judge_abi "
+                "m8m_milestone_judge_v1 and a separate typed judge"
+            )
+        execution = item.get("execution")
+        unbound_import = not isinstance(execution, dict) and allow_unbound_import
+        cutover = "; regenerate with m8m-harness-builder 3.1"
+        if not isinstance(execution, dict):
+            if not unbound_import:
+                raise FlowError(
+                    f"{step_id}: missing closed execution binding{cutover}"
+                )
+            execution = {
+                "candidate_executor": {
+                    "ref": f"legacy_import.{step_id}@0.0.0"
+                },
+                "tool_bindings": [
+                    {
+                        "tool": flowstep["id"],
+                        "ref": (
+                            flowstep.get("tool")
+                            if VERSIONED_RUNTIME_REF_RE.fullmatch(
+                                str(flowstep.get("tool") or "")
+                            )
+                            else f"legacy_import.{flowstep['id']}@0.0.0"
+                        ),
+                    }
+                    for flowstep in flowsteps
+                ],
+            }
+            if loop == "judge":
+                execution["judge"] = {
+                    "ref": worker
+                    if VERSIONED_RUNTIME_REF_RE.fullmatch(worker)
+                    else f"{worker or step_id + '_judge'}@0.0.0"
+                }
+        candidate_executor = execution.get("candidate_executor")
+        if not isinstance(candidate_executor, dict) or not str(
+            candidate_executor.get("ref") or ""
+        ).strip():
+            raise FlowError(
+                f"{step_id}: execution.candidate_executor.ref is required{cutover}"
+            )
+        candidate_ref = str(candidate_executor.get("ref") or "")
+        expected_candidate_ref = canonical_candidate_executor_ref(
+            str(raw["flow_id"]), step_id
+        )
+        if not unbound_import and candidate_ref != expected_candidate_ref:
+            raise FlowError(
+                f"{step_id}: execution.candidate_executor.ref must be "
+                f"{expected_candidate_ref}; regenerate with m8m-harness-builder 3.1"
+            )
+        bindings = execution.get("tool_bindings")
+        if not isinstance(bindings, list):
+            raise FlowError(
+                f"{step_id}: execution.tool_bindings must be an exact list{cutover}"
+            )
+        binding_ids = [
+            str(binding.get("tool") or "")
+            for binding in bindings
+            if isinstance(binding, dict)
+        ]
+        if len(binding_ids) != len(bindings) or len(set(binding_ids)) != len(binding_ids):
+            raise FlowError(
+                f"{step_id}: execution.tool_bindings must bind each FlowStep tool once{cutover}"
+            )
+        if binding_ids != tools:
+            missing = sorted(set(tools) - set(binding_ids))
+            unknown = sorted(set(binding_ids) - set(tools))
+            raise FlowError(
+                f"{step_id}: execution.tool_bindings differ from FlowStep ids; "
+                f"missing={missing}, unknown={unknown}{cutover}"
+            )
+        flowstep_tools = {
+            str(flowstep["id"]): str(flowstep.get("tool") or "")
+            for flowstep in flowsteps
+        }
+        for binding in bindings:
+            flowstep_id = str(binding["tool"])
+            tool_ref = str(binding.get("ref") or "")
+            expected_ref = flowstep_tools[flowstep_id]
+            if not unbound_import and tool_ref != expected_ref:
+                raise FlowError(
+                    f"{step_id}: execution.tool_bindings[{flowstep_id}].ref must "
+                    f"exactly equal flowstep.tool {expected_ref!r}{cutover}"
+                )
+            if not unbound_import:
+                local_tool_package_name(
+                    tool_ref,
+                    label=f"{step_id}.execution.tool_bindings[{flowstep_id}].ref",
+                )
+        judge_binding = execution.get("judge")
+        if loop == "judge":
+            if not isinstance(judge_binding, dict) or not str(
+                judge_binding.get("ref") or ""
+            ).strip():
+                raise FlowError(
+                    f"{step_id}: loop=judge requires execution.judge.ref{cutover}"
+                )
+            judge_ref = str(judge_binding["ref"])
+            if not unbound_import and worker != judge_ref:
+                raise FlowError(
+                    f"{step_id}: worker must exactly equal execution.judge.ref{cutover}"
+                )
+            if not unbound_import:
+                runtime_package_name(
+                    judge_ref,
+                    label=f"{step_id}.execution.judge.ref",
+                )
+            tool_refs = {
+                str(binding.get("ref") or "")
+                for binding in bindings
+                if isinstance(binding, dict)
+            }
+            if judge_ref == candidate_ref or judge_ref in tool_refs:
+                raise FlowError(
+                    f"{step_id}: execution.judge.ref must be distinct from candidate and tool refs{cutover}"
+                )
+        elif judge_binding is not None:
+            raise FlowError(
+                f"{step_id}: execution.judge is valid only for loop=judge{cutover}"
+            )
         branch = _normalize_branch(item.get("branch"), step_id=step_id)
         on_path = str(item.get("on_path") or "").strip()
         on_cycle = str(item.get("on_cycle") or "").strip()
         cycle = _normalize_cycle(item.get("cycle"), step_id=step_id)
+        if branch and cycle:
+            raise FlowError(
+                f"{step_id}: one milestone cannot own both branch and cycle control"
+            )
+        control_spec = branch or cycle
+        control_kind = "branch" if branch else "cycle" if cycle else ""
+        control_worker_ref: str | None = None
+        if control_spec:
+            control_worker = str(control_spec.get("worker") or "").strip()
+            if not STEP_ID_RE.fullmatch(control_worker):
+                raise FlowError(
+                    f"{step_id}.{control_kind}.worker must name one milestone-local "
+                    "FlowStep id"
+                )
+            control_bindings = [
+                binding
+                for binding in bindings
+                if isinstance(binding, dict)
+                and str(binding.get("tool") or "") == control_worker
+            ]
+            if len(control_bindings) != 1:
+                raise FlowError(
+                    f"{step_id}.{control_kind}.worker {control_worker} must have "
+                    "one exact execution.tool_bindings entry"
+                )
+            control_worker_ref = str(control_bindings[0].get("ref") or "")
+            if not unbound_import:
+                local_tool_package_name(
+                    control_worker_ref,
+                    label=(
+                        f"{step_id}.execution.tool_bindings[{control_worker}].ref"
+                    ),
+                )
+            control_spec["worker"] = control_worker
+        side_effects = str(item.get("side_effects") or "none").strip().lower()
+        if side_effects not in {"none", "external"}:
+            raise FlowError(f"{step_id}.side_effects must be none or external")
+        phase_journal = dict(item["phase_journal"]) if isinstance(item.get("phase_journal"), dict) else None
+        declared_side_effect_risk = cache_side_effect_risk(item)
+        if declared_side_effect_risk and side_effects != "external":
+            raise FlowError(
+                f"{step_id}: {declared_side_effect_risk} may have external side effects; "
+                "declare side_effects: external and a phase_journal"
+            )
+        if side_effects == "external":
+            required_journal = {"path", "operator_result_path", "resume"}
+            if not isinstance(phase_journal, dict) or not required_journal.issubset(phase_journal):
+                raise FlowError(
+                    f"{step_id}: external side effects require phase_journal with "
+                    "path, operator_result_path, and resume"
+                )
+            if any(not str(phase_journal.get(key) or "").strip() for key in ("path", "operator_result_path")):
+                raise FlowError(f"{step_id}: phase_journal paths must not be empty")
+            if phase_journal.get("resume") != "query_exact_operation":
+                raise FlowError(f"{step_id}: phase_journal.resume must be query_exact_operation")
+        elif phase_journal is not None:
+            raise FlowError(f"{step_id}: phase_journal is valid only when side_effects is external")
         cache = dict(item["cache"]) if isinstance(item.get("cache"), dict) else None
         if cache and (branch or cycle or loop == "for"):
             raise FlowError(f"{step_id}: branch/cycle control milestones cannot use cross-run cache")
@@ -527,26 +854,33 @@ def _load_flow_v4(skill_dir: Path, path: Path, raw: dict[str, Any]) -> dict[str,
             on_cycle = on_cycle or step_id
             loop = "none"
             ledger = None
-        if loop in {"for", "judge"} and not worker:
-            worker = "ledger_receipt" if loop == "for" else "ok_receipt"
-        if branch and not worker:
-            worker = str(branch.get("worker") or "branch_receipt")
-        if cycle and not worker:
-            worker = str(cycle.get("worker") or "cycle_receipt")
-        if worker and worker not in tools:
-            tools.append(worker)
-            flowsteps.append({"id": worker, "tool": worker})
+        if loop == "for" and not worker:
+            worker = "ledger_receipt"
+        if control_spec and loop != "judge":
+            # Preserve the legacy display field while execution uses the exact
+            # bound control ref captured above. A semantic judge, when present,
+            # continues to own step.worker independently.
+            worker = str(control_spec.get("worker") or "")
+        if judge_abi and worker in tools:
+            raise FlowError(
+                f"{step_id}: strict judge worker {worker} must not be a candidate FlowStep tool"
+            )
+        if control_spec and str(control_spec.get("worker") or "") not in tools:
+            raise FlowError(
+                f"{step_id}.{control_kind}.worker must be separately declared and "
+                "exactly bound; the runtime will not synthesize a candidate FlowStep"
+            )
         receipt_schema = item.get("receipt_schema")
         if loop in {"for", "judge"}:
             receipt_schema = receipt_schema or f"schemas/{step_id}_receipt_v1.json"
         if branch:
             receipt_schema = receipt_schema or str(branch.get("receipt_schema") or f"schemas/{step_id}_branch_v1.json")
             branch["receipt_schema"] = receipt_schema
-            branch["worker"] = worker or "branch_receipt"
+            branch["worker"] = str(branch.get("worker") or "branch_receipt")
         if cycle:
             receipt_schema = receipt_schema or str(cycle.get("receipt_schema") or f"schemas/{step_id}_cycle_v1.json")
             cycle["receipt_schema"] = receipt_schema
-            cycle["worker"] = worker or "cycle_receipt"
+            cycle["worker"] = str(cycle.get("worker") or "cycle_receipt")
         max_attempts = item.get("max_attempts")
         if max_attempts is None and loop != "judge":
             max_attempts = max_model_attempts
@@ -563,6 +897,7 @@ def _load_flow_v4(skill_dir: Path, path: Path, raw: dict[str, Any]) -> dict[str,
             "kind": "milestone",
             "class": "tool" if intel == "none" else "intelligence",
             "handler": item["handler"],
+            "implementation_dependencies": list(item.get("implementation_dependencies") or []),
             "model": "none" if intel == "none" else intel,
             "intelligence": intel,
             "tools": list(tools),
@@ -575,10 +910,12 @@ def _load_flow_v4(skill_dir: Path, path: Path, raw: dict[str, Any]) -> dict[str,
             "params": item.get("params") or {},
             "on_tool_fail": on_tool_fail,
             "max_model_attempts": max_model_attempts,
+            "max_tool_attempts": max_tool_attempts,
             "max_attempts": max_attempts,
             "loop": loop,
             "ledger": ledger,
             "worker": worker or None,
+            "judge_abi": judge_abi,
             "receipt_schema": receipt_schema,
             "foreach": foreach,
             "branch": branch,
@@ -593,11 +930,19 @@ def _load_flow_v4(skill_dir: Path, path: Path, raw: dict[str, Any]) -> dict[str,
             "asset": {"kind": asset_kind} if asset_kind else dict(asset),
             "outputs": outputs,
             "cache": cache,
+            "side_effects": side_effects,
+            "phase_journal": phase_journal,
         }
         if intel != "none" or on_tool_fail == "need_model":
             step["draft_schema"] = item.get("draft_schema") or f"milestones/{step_id}/draft.schema.json"
         if intel != "none":
             step["model_justification"] = item.get("model_justification")
+        if not unbound_import:
+            step["execution"] = deepcopy(execution)
+        if control_worker_ref:
+            # Execution-only projection. It is derived from the canonical exact
+            # binding and is never an authored flow field.
+            step["_control_worker_ref"] = control_worker_ref
         steps.append(step)
         previous = step
     raw["steps"] = steps
@@ -607,8 +952,13 @@ def _load_flow_v4(skill_dir: Path, path: Path, raw: dict[str, Any]) -> dict[str,
     return raw
 
 
-def load_flow(skill_dir: Path, flow_path: Path | None = None) -> dict[str, Any]:
-    skill_dir = skill_dir.resolve()
+def load_flow(
+    skill_dir: Path,
+    flow_path: Path | None = None,
+    *,
+    allow_unbound_import: bool = False,
+) -> dict[str, Any]:
+    skill_dir = lexical_abs(skill_dir)
     path = flow_path or find_flow_path(skill_dir)
     raw = load_yaml(path)
     if not isinstance(raw, dict):
@@ -616,18 +966,23 @@ def load_flow(skill_dir: Path, flow_path: Path | None = None) -> dict[str, Any]:
     schema = raw.get("schema")
     if schema in {"flowstep_flow_v1", "flowstep_flow_v2", "flowstep_flow_v3"}:
         raise FlowError(
-            f"{schema} is rejected; regenerate with m8m-harness-builder 2.0 "
+            f"{schema} is rejected; regenerate with m8m-harness-builder 3.1 "
             f"to produce {FLOW_SCHEMA} chosen-output milestones"
         )
     if schema == FLOW_SCHEMA:
-        return _load_flow_v4(skill_dir, path, raw)
-    raise FlowError(f"flow schema must be {FLOW_SCHEMA}; regenerate with m8m-harness-builder 2.0")
+        return _load_flow_v4(
+            skill_dir,
+            path,
+            raw,
+            allow_unbound_import=allow_unbound_import,
+        )
+    raise FlowError(f"flow schema must be {FLOW_SCHEMA}; regenerate with m8m-harness-builder 3.1")
 
 
 def skill_rel(skill_dir: Path, value: str | Path) -> Path:
     path = Path(value)
-    resolved = (path if path.is_absolute() else skill_dir / path).resolve()
-    root = skill_dir.resolve()
+    root = Path(os.path.abspath(str(skill_dir)))
+    resolved = Path(os.path.abspath(str(path if path.is_absolute() else root / path)))
     if resolved != root and root not in resolved.parents:
         raise FlowError(f"path escapes skill directory: {value}")
     return resolved
@@ -635,50 +990,789 @@ def skill_rel(skill_dir: Path, value: str | Path) -> Path:
 
 def run_rel(run_dir: Path, value: str | Path) -> Path:
     path = Path(value)
-    resolved = (path if path.is_absolute() else run_dir / path).resolve()
-    root = run_dir.resolve()
+    root = Path(os.path.abspath(str(run_dir)))
+    resolved = Path(os.path.abspath(str(path if path.is_absolute() else root / path)))
     if resolved != root and root not in resolved.parents:
         raise FlowError(f"path escapes run directory: {value}")
     return resolved
 
 
+def assert_external_phase_journal(run_dir: Path, step: dict[str, Any]) -> None:
+    """Fail closed before choosing output from a mutating milestone.
+
+    The writer owns the journal contents. The runtime owns the release gate:
+    the exact operation must have been queried, its operator result persisted,
+    and live readback verified before the milestone can become chosen.
+    """
+
+    if str(step.get("side_effects") or "none") != "external":
+        return
+    spec = step.get("phase_journal") if isinstance(step.get("phase_journal"), dict) else {}
+    journal_path = run_rel(run_dir, str(spec.get("path") or ""))
+    operator_path = run_rel(run_dir, str(spec.get("operator_result_path") or ""))
+    if not journal_path.is_file():
+        raise FlowError(f"{step['id']}: external phase journal is missing: {journal_path}")
+    journal = read_json(journal_path)
+    if not isinstance(journal, dict) or journal.get("schema") != "m8m_external_phase_journal_v1":
+        raise FlowError(f"{step['id']}: external phase journal schema is invalid")
+    if str(journal.get("milestone_id") or "") != str(step["id"]):
+        raise FlowError(f"{step['id']}: external phase journal milestone binding drifted")
+    operation_id = str(journal.get("operation_id") or "")
+    plan_sha256 = str(journal.get("plan_sha256") or "")
+    if not operation_id or not re.fullmatch(r"[0-9a-f]{64}", plan_sha256):
+        raise FlowError(f"{step['id']}: phase journal lacks the durable operation ID or plan hash")
+    if journal.get("exact_operation_queried") is not True:
+        raise FlowError(f"{step['id']}: exact operation was not queried before commit/readback")
+    phases = [
+        str(item.get("phase") or "")
+        for item in (journal.get("phases") or [])
+        if isinstance(item, dict)
+    ]
+    required = ("plan_frozen", "operation_queried", "operator_persisted", "readback_verified")
+    positions: list[int] = []
+    for phase in required:
+        if phase not in phases:
+            raise FlowError(f"{step['id']}: phase journal is missing {phase}")
+        positions.append(phases.index(phase))
+    if positions != sorted(positions):
+        raise FlowError(f"{step['id']}: phase journal order is invalid")
+    if journal.get("status") != "readback_verified":
+        raise FlowError(f"{step['id']}: live readback has not been verified")
+    if not operator_path.is_file():
+        raise FlowError(f"{step['id']}: operator result is missing: {operator_path}")
+    operator = read_json(operator_path)
+    if (
+        not isinstance(operator, dict)
+        or operator.get("status") != "completed"
+        or str(operator.get("operation_id") or "") != operation_id
+        or str(operator.get("plan_sha256") or "") != plan_sha256
+    ):
+        raise FlowError(f"{step['id']}: persisted operator result does not match the frozen operation")
+    readback_path = run_rel(run_dir, str(journal.get("readback_path") or ""))
+    if not readback_path.is_file():
+        raise FlowError(f"{step['id']}: live readback artifact is missing")
+    readback = read_json(readback_path)
+    if (
+        not isinstance(readback, dict)
+        or readback.get("status") != "PASS"
+        or str(readback.get("operation_id") or "") != operation_id
+    ):
+        raise FlowError(f"{step['id']}: live readback does not match the frozen operation")
+
+
 def relative_to(root: Path, path: Path) -> str:
-    return path.resolve().relative_to(root.resolve()).as_posix()
+    normalized_root = Path(os.path.abspath(str(root)))
+    normalized_path = Path(os.path.abspath(str(path)))
+    return normalized_path.relative_to(normalized_root).as_posix()
+
+
+def _is_unsafe_implementation_link(path: Path) -> bool:
+    try:
+        is_junction = getattr(path, "is_junction", None)
+        return path.is_symlink() or bool(is_junction and is_junction())
+    except OSError:
+        return True
+
+
+def _assert_safe_implementation_chain(base: Path, target: Path, *, label: str) -> None:
+    try:
+        relative = target.relative_to(base)
+    except ValueError as exc:
+        raise FlowError(f"{label} escapes its implementation root: {target}") from exc
+    cursor = base
+    if _is_unsafe_implementation_link(cursor):
+        raise FlowError(f"{label} uses an unsafe link: {cursor}")
+    for part in relative.parts:
+        cursor = cursor / part
+        if _is_unsafe_implementation_link(cursor):
+            raise FlowError(f"{label} uses an unsafe link: {cursor}")
+
+
+_DYNAMIC_MODULE_IMPORTS = {
+    "__import__",
+    "importlib.import_module",
+    "runpy.run_module",
+}
+_DYNAMIC_FILE_IMPORT_ARGUMENT = {
+    "importlib.util.spec_from_file_location": 1,
+    "importlib.machinery.SourceFileLoader": 1,
+    "importlib.machinery.SourcelessFileLoader": 1,
+    "runpy.run_path": 0,
+}
+_TRUSTED_RUNTIME_DYNAMIC_LOADERS = {"flowstep_runtime.py", "flowstep_tools.py"}
+
+
+def _implementation_project(skill_dir: Path) -> tuple[Path, Path]:
+    root = Path(os.path.abspath(str(skill_dir)))
+    project = (
+        root.parent.parent.parent
+        if root.parent.name == "flows" and root.parent.parent.name == "flowsteps"
+        else root
+    )
+    return root, project
+
+
+def _is_within(path: Path, root: Path) -> bool:
+    try:
+        Path(os.path.abspath(str(path))).relative_to(root)
+    except ValueError:
+        return False
+    return True
+
+
+def _python_tree(path: Path) -> ast.AST:
+    try:
+        with tokenize.open(path) as source_file:
+            source = source_file.read()
+    except (OSError, SyntaxError, UnicodeError) as exc:
+        raise FlowError(f"cannot inspect Python implementation {path}: {exc}") from exc
+    try:
+        return ast.parse(source, filename=str(path))
+    except SyntaxError as exc:
+        raise FlowError(f"Python implementation is not parseable: {path}: {exc}") from exc
+
+
+def _call_name(node: ast.AST, aliases: dict[str, str]) -> str:
+    if isinstance(node, ast.Name):
+        return aliases.get(node.id, node.id)
+    if isinstance(node, ast.Attribute):
+        owner = _call_name(node.value, aliases)
+        return f"{owner}.{node.attr}" if owner else node.attr
+    return ""
+
+
+def _import_aliases(tree: ast.AST) -> dict[str, str]:
+    aliases: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for item in node.names:
+                local = item.asname or item.name.split(".", 1)[0]
+                aliases[local] = item.name if item.asname else local
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            for item in node.names:
+                if item.name == "*":
+                    continue
+                aliases[item.asname or item.name] = f"{node.module}.{item.name}"
+    return aliases
+
+
+def _static_strings(tree: ast.AST) -> dict[str, str]:
+    values: dict[str, str] = {}
+    assignments = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.Assign, ast.AnnAssign))
+    ]
+    for _ in range(len(assignments) + 1):
+        changed = False
+        for node in assignments:
+            value_node = node.value
+            value: str | None = None
+            if isinstance(value_node, ast.Constant) and isinstance(value_node.value, str):
+                value = value_node.value
+            elif isinstance(value_node, ast.Name):
+                value = values.get(value_node.id)
+            elif isinstance(value_node, ast.BinOp) and isinstance(value_node.op, ast.Add):
+                left = (
+                    value_node.left.value
+                    if isinstance(value_node.left, ast.Constant)
+                    and isinstance(value_node.left.value, str)
+                    else values.get(value_node.left.id)
+                    if isinstance(value_node.left, ast.Name)
+                    else None
+                )
+                right = (
+                    value_node.right.value
+                    if isinstance(value_node.right, ast.Constant)
+                    and isinstance(value_node.right.value, str)
+                    else values.get(value_node.right.id)
+                    if isinstance(value_node.right, ast.Name)
+                    else None
+                )
+                if left is not None and right is not None:
+                    value = left + right
+            if value is None:
+                continue
+            targets = (
+                node.targets
+                if isinstance(node, ast.Assign)
+                else [node.target]
+            )
+            for target in targets:
+                if isinstance(target, ast.Name) and values.get(target.id) != value:
+                    values[target.id] = value
+                    changed = True
+        if not changed:
+            break
+    return values
+
+
+def _static_string(node: ast.AST | None, values: dict[str, str]) -> str | None:
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.Name):
+        return values.get(node.id)
+    return None
+
+
+def _static_string_options(node: ast.AST | None, values: dict[str, str]) -> set[str]:
+    value = _static_string(node, values)
+    if value is not None:
+        return {value}
+    if isinstance(node, ast.IfExp):
+        return {
+            *_static_string_options(node.body, values),
+            *_static_string_options(node.orelse, values),
+        }
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        left = _static_string_options(node.left, values)
+        right = _static_string_options(node.right, values)
+        return {prefix + suffix for prefix in left for suffix in right}
+    return set()
+
+
+def _static_path_value(
+    node: ast.AST | None,
+    *,
+    source: Path,
+    aliases: dict[str, str],
+    values: dict[str, Path],
+    strings: dict[str, str],
+) -> Path | None:
+    if isinstance(node, ast.Name):
+        if node.id == "__file__":
+            return source
+        return values.get(node.id)
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return Path(node.value)
+    if isinstance(node, ast.Call):
+        name = _call_name(node.func, aliases)
+        if name in {"Path", "pathlib.Path"} and node.args:
+            return _static_path_value(
+                node.args[0],
+                source=source,
+                aliases=aliases,
+                values=values,
+                strings=strings,
+            )
+        if name in {"str", "os.fspath"} and node.args:
+            return _static_path_value(
+                node.args[0],
+                source=source,
+                aliases=aliases,
+                values=values,
+                strings=strings,
+            )
+        if isinstance(node.func, ast.Attribute) and node.func.attr in {
+            "absolute",
+            "resolve",
+        }:
+            return _static_path_value(
+                node.func.value,
+                source=source,
+                aliases=aliases,
+                values=values,
+                strings=strings,
+            )
+    if isinstance(node, ast.Attribute) and node.attr == "parent":
+        owner = _static_path_value(
+            node.value,
+            source=source,
+            aliases=aliases,
+            values=values,
+            strings=strings,
+        )
+        return owner.parent if owner is not None else None
+    if (
+        isinstance(node, ast.Subscript)
+        and isinstance(node.value, ast.Attribute)
+        and node.value.attr == "parents"
+    ):
+        owner = _static_path_value(
+            node.value.value,
+            source=source,
+            aliases=aliases,
+            values=values,
+            strings=strings,
+        )
+        index = node.slice.value if isinstance(node.slice, ast.Constant) else None
+        if owner is not None and isinstance(index, int) and index >= 0:
+            try:
+                return owner.parents[index]
+            except IndexError:
+                return None
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
+        owner = _static_path_value(
+            node.left,
+            source=source,
+            aliases=aliases,
+            values=values,
+            strings=strings,
+        )
+        child = _static_string(node.right, strings)
+        if owner is not None and child is not None:
+            return owner / child
+    return None
+
+
+def _static_paths(
+    tree: ast.AST,
+    *,
+    source: Path,
+    aliases: dict[str, str],
+    strings: dict[str, str],
+) -> dict[str, Path]:
+    values: dict[str, Path] = {}
+    assignments = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.Assign, ast.AnnAssign))
+    ]
+    for _ in range(len(assignments) + 1):
+        changed = False
+        for node in assignments:
+            value = _static_path_value(
+                node.value,
+                source=source,
+                aliases=aliases,
+                values=values,
+                strings=strings,
+            )
+            if value is None:
+                continue
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            for target in targets:
+                if isinstance(target, ast.Name) and values.get(target.id) != value:
+                    values[target.id] = value
+                    changed = True
+        if not changed:
+            break
+    return values
+
+
+def _package_files(base: Path, parts: list[str], *, project: Path) -> list[Path]:
+    if not parts or any(not part or part in {".", ".."} for part in parts):
+        return []
+    files: list[Path] = []
+    cursor = base
+    for part in parts:
+        cursor = cursor / part
+        init = cursor / "__init__.py"
+        if init.is_file() and _is_within(init, project):
+            files.append(Path(os.path.abspath(str(init))))
+    module = base.joinpath(*parts).with_suffix(".py")
+    if module.is_file() and _is_within(module, project):
+        files.append(Path(os.path.abspath(str(module))))
+    return files
+
+
+def _local_module_files(
+    project: Path,
+    source: Path,
+    module: str,
+    *,
+    level: int = 0,
+    imported_names: list[str] | None = None,
+    search_roots: list[Path] | None = None,
+) -> list[Path]:
+    parts = [part for part in module.split(".") if part]
+    bases: list[Path] = []
+    if level:
+        base = source.parent
+        for _ in range(max(0, level - 1)):
+            base = base.parent
+        bases.append(base)
+    else:
+        # Handlers and bound tools are loaded through importlib specs. Python
+        # does not implicitly add a spec-loaded module's containing directory
+        # to sys.path, so treating source.parent as an absolute-import root can
+        # select a staged harness copy that runtime execution would never see.
+        # Absolute imports use the repository root, explicitly declared
+        # implementation roots, bound package roots, and source-declared
+        # sys.path additions only. Relative imports remain source-relative.
+        bases.extend((*(search_roots or []), project))
+        if parts and parts[0] == project.name:
+            bases.append(project.parent)
+    unique_bases: list[Path] = []
+    for base in bases:
+        normalized = Path(os.path.abspath(str(base)))
+        if normalized not in unique_bases:
+            unique_bases.append(normalized)
+
+    discovered: list[Path] = []
+    for base in unique_bases:
+        discovered.extend(_package_files(base, parts, project=project))
+        package = base.joinpath(*parts) if parts else base
+        if package.is_dir():
+            for imported in imported_names or []:
+                if imported == "*":
+                    continue
+                discovered.extend(
+                    _package_files(package, imported.split("."), project=project)
+                )
+    return sorted(set(discovered), key=lambda item: item.as_posix().lower())
+
+
+def _static_import_roots(
+    tree: ast.AST,
+    *,
+    project: Path,
+    source: Path,
+    aliases: dict[str, str],
+    paths: dict[str, Path],
+    strings: dict[str, str],
+) -> tuple[list[Path], list[str]]:
+    """Resolve explicit ``sys.path`` additions that can change local imports."""
+
+    roots: list[Path] = []
+    problems: list[str] = []
+    argument_by_call = {
+        "sys.path.insert": 1,
+        "sys.path.append": 0,
+        "site.addsitedir": 0,
+    }
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        call = _call_name(node.func, aliases)
+        if call not in argument_by_call:
+            continue
+        argument = argument_by_call[call]
+        argument_node = node.args[argument] if len(node.args) > argument else None
+        raw = _static_path_value(
+            argument_node,
+            source=source,
+            aliases=aliases,
+            values=paths,
+            strings=strings,
+        )
+        if raw is None:
+            problems.append(
+                f"dynamic import search path for {call} is not statically provable"
+            )
+            continue
+        candidates = [raw] if raw.is_absolute() else [source.parent / raw, project / raw]
+        for candidate in candidates:
+            normalized = Path(os.path.abspath(str(candidate)))
+            if normalized.is_dir() and _is_within(normalized, project) and normalized not in roots:
+                roots.append(normalized)
+    return roots, problems
+
+
+def _trusted_runtime_dynamic_loader(source: Path) -> bool:
+    if source.name not in _TRUSTED_RUNTIME_DYNAMIC_LOADERS:
+        return False
+    expected = Path(__file__).with_name(source.name)
+    try:
+        return expected.is_file() and sha256_file(source) == sha256_file(expected)
+    except OSError:
+        return False
+
+
+def _assert_closed_repository_imports(
+    project: Path,
+    implementation_paths: list[Path],
+    *,
+    repository_import_roots: list[Path] | None = None,
+) -> None:
+    """Reject product Python whose repository-local imports are not frozen."""
+
+    project = Path(os.path.abspath(str(project)))
+    frozen = {Path(os.path.abspath(str(path))) for path in implementation_paths}
+    problems: list[str] = []
+
+    def source_label(path: Path) -> str:
+        try:
+            return path.relative_to(project).as_posix()
+        except ValueError:
+            return path.as_posix()
+
+    def require_targets(source: Path, reason: str, targets: list[Path]) -> None:
+        for target in targets:
+            normalized = Path(os.path.abspath(str(target)))
+            _assert_safe_implementation_chain(
+                project,
+                normalized,
+                label=f"repository-local import {reason}",
+            )
+            if normalized not in frozen:
+                problems.append(
+                    f"{source_label(source)}: {reason} resolves to repository-local "
+                    f"{source_label(normalized)} outside the frozen implementation closure; "
+                    f"declare {source_label(normalized)} in implementation_dependencies"
+                )
+
+    for source in sorted(
+        (path for path in frozen if path.suffix.lower() == ".py" and path.is_file()),
+        key=lambda item: item.as_posix().lower(),
+    ):
+        tree = _python_tree(source)
+        aliases = _import_aliases(tree)
+        string_values = _static_strings(tree)
+        path_values = _static_paths(
+            tree,
+            source=source,
+            aliases=aliases,
+            strings=string_values,
+        )
+        import_roots, import_root_problems = _static_import_roots(
+            tree,
+            project=project,
+            source=source,
+            aliases=aliases,
+            paths=path_values,
+            strings=string_values,
+        )
+        import_roots = [
+            *(
+                Path(os.path.abspath(str(root)))
+                for root in (repository_import_roots or [])
+            ),
+            *import_roots,
+        ]
+        problems.extend(
+            f"{source_label(source)}: {problem}; dynamic local imports are forbidden"
+            for problem in import_root_problems
+        )
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for item in node.names:
+                    require_targets(
+                        source,
+                        f"import {item.name}",
+                        _local_module_files(
+                            project,
+                            source,
+                            item.name,
+                            search_roots=import_roots,
+                        ),
+                    )
+            elif isinstance(node, ast.ImportFrom):
+                module = str(node.module or "")
+                names = [item.name for item in node.names]
+                display = "." * int(node.level or 0) + module
+                require_targets(
+                    source,
+                    f"from {display or '.'} import {', '.join(names)}",
+                    _local_module_files(
+                        project,
+                        source,
+                        module,
+                        level=int(node.level or 0),
+                        imported_names=names,
+                        search_roots=import_roots,
+                    ),
+                )
+            elif isinstance(node, ast.Call):
+                call = _call_name(node.func, aliases)
+                if call in _DYNAMIC_MODULE_IMPORTS:
+                    targets = (
+                        _static_string_options(node.args[0], string_values)
+                        if node.args
+                        else set()
+                    )
+                    if not targets:
+                        problems.append(
+                            f"{source_label(source)}: dynamic import target for {call} "
+                            "is not statically provable; dynamic local imports are forbidden"
+                        )
+                        continue
+                    for target in sorted(targets):
+                        if target.startswith("."):
+                            package_node = next(
+                                (
+                                    item.value
+                                    for item in node.keywords
+                                    if item.arg == "package"
+                                ),
+                                None,
+                            )
+                            package = _static_string(package_node, string_values)
+                            if not package:
+                                problems.append(
+                                    f"{source_label(source)}: relative dynamic import {target!r} "
+                                    "has no statically provable package"
+                                )
+                                continue
+                            try:
+                                target = importlib.util.resolve_name(target, package)
+                            except (ImportError, ValueError) as exc:
+                                problems.append(
+                                    f"{source_label(source)}: invalid dynamic import {target!r}: {exc}"
+                                )
+                                continue
+                        require_targets(
+                            source,
+                            f"dynamic import {target}",
+                            _local_module_files(
+                                project,
+                                source,
+                                target,
+                                search_roots=import_roots,
+                            ),
+                        )
+                elif call in _DYNAMIC_FILE_IMPORT_ARGUMENT:
+                    argument = _DYNAMIC_FILE_IMPORT_ARGUMENT[call]
+                    argument_node = (
+                        node.args[argument] if len(node.args) > argument else None
+                    )
+                    static_path = _static_path_value(
+                        argument_node,
+                        source=source,
+                        aliases=aliases,
+                        values=path_values,
+                        strings=string_values,
+                    )
+                    target = _static_string(argument_node, string_values)
+                    if static_path is None and target is None:
+                        if not _trusted_runtime_dynamic_loader(source):
+                            problems.append(
+                                f"{source_label(source)}: dynamic execution path for {call} "
+                                "is not statically provable; dynamic local imports are forbidden"
+                            )
+                        continue
+                    raw = static_path if static_path is not None else Path(str(target))
+                    candidates = [raw] if raw.is_absolute() else [source.parent / raw, project / raw]
+                    existing: list[Path] = []
+                    for candidate in candidates:
+                        candidate = Path(os.path.abspath(str(candidate)))
+                        if candidate.is_dir() and (candidate / "__main__.py").is_file():
+                            candidate = candidate / "__main__.py"
+                        if candidate.is_file() and _is_within(candidate, project):
+                            existing.append(candidate)
+                    if not existing and not _trusted_runtime_dynamic_loader(source):
+                        problems.append(
+                            f"{source_label(source)}: dynamic execution path {str(raw)!r} for {call} "
+                            "does not resolve to a frozen repository file"
+                        )
+                        continue
+                    require_targets(source, f"dynamic execution {raw}", existing)
+
+    if problems:
+        raise FlowError("implementation import closure is open:\n- " + "\n- ".join(sorted(set(problems))))
 
 
 def implementation_files(skill_dir: Path, flow: dict[str, Any]) -> list[Path]:
-    files = [flow["_flow_path"]]
+    # `Path.resolve()` calls Windows realpath/stat for every component. On a
+    # busy filtered filesystem that can serialize for tens of seconds per
+    # file, making an 80-file implementation check appear hung. These paths
+    # come from the already-validated frozen flow, so lexical normalization is
+    # sufficient here and preserves the same canonical absolute labels.
+    root, project = _implementation_project(skill_dir)
+
+    def implementation_path(value: str | Path) -> Path:
+        path = Path(value)
+        normalized = Path(os.path.abspath(str(path if path.is_absolute() else root / path)))
+        try:
+            normalized.relative_to(root)
+        except ValueError as exc:
+            raise FlowError(f"path escapes skill directory: {value}") from exc
+        _assert_safe_implementation_chain(
+            root, normalized, label="implementation path"
+        )
+        return normalized
+
+    def dependency_path(value: str | Path) -> Path:
+        """Resolve an explicitly declared runtime dependency from project root."""
+        path = Path(value)
+        normalized = Path(os.path.abspath(str(path if path.is_absolute() else project / path)))
+        try:
+            normalized.relative_to(project)
+        except ValueError as exc:
+            raise FlowError(f"implementation dependency escapes project directory: {value}") from exc
+        _assert_safe_implementation_chain(
+            project, normalized, label="implementation dependency"
+        )
+        return normalized
+
+    flow_path = Path(os.path.abspath(str(flow["_flow_path"])))
+    _assert_safe_implementation_chain(root, flow_path, label="flow definition")
+    files = [flow_path]
+    declared_dependencies = [
+        dependency_path(value)
+        for value in (flow.get("implementation_dependencies") or [])
+    ]
+    files.extend(declared_dependencies)
     for step in flow["steps"]:
-        for field in ("handler", "input_schema", "output_schema", "draft_schema", "receipt_schema", "gem"):
+        step_dependencies = [
+            dependency_path(value)
+            for value in (step.get("implementation_dependencies") or [])
+        ]
+        declared_dependencies.extend(step_dependencies)
+        files.extend(step_dependencies)
+        for field in ("handler", "input_schema", "output_schema"):
             if step.get(field):
-                files.append(skill_rel(skill_dir, step[field]))
-    root = skill_dir.resolve()
-    project = root.parent.parent.parent if root.parent.name == "flows" and root.parent.parent.name == "flowsteps" else root
+                files.append(implementation_path(step[field]))
+        # These paths may be inferred defaults for recovery/judge modes even
+        # when the optional file is not materialized by the flow.
+        for field in ("draft_schema", "receipt_schema", "gem"):
+            if step.get(field):
+                candidate = implementation_path(step[field])
+                if candidate.is_file():
+                    files.append(candidate)
     tool_ids = {
-        str(tool_id)
+        local_tool_package_name(
+            str(binding.get("ref") or ""),
+            label=(
+                f"{step['id']}.execution.tool_bindings"
+                f"[{binding.get('tool')}].ref"
+            ),
+        )
         for step in flow["steps"]
-        for tool_id in (step.get("tools") or [])
-        if tool_id
+        for binding in (step.get("execution") or {}).get("tool_bindings") or []
+        if isinstance(binding, dict) and binding.get("ref")
     }
+    tool_ids.update(
+        runtime_package_name(str(step["worker"]), label=f"{step['id']}.worker")
+        for step in flow["steps"]
+        if step.get("judge_abi") and step.get("worker")
+    )
+    repository_import_roots = {path.parent for path in declared_dependencies}
     for tool_id in sorted(tool_ids):
         tool_root = project / "flowsteps" / "tools" / tool_id
-        if not tool_root.is_dir():
-            continue
-        files.extend(
-            path
-            for path in tool_root.rglob("*")
-            if path.is_file()
-            and path.suffix.lower() in {".json", ".md", ".py", ".yaml", ".yml"}
-            and "__pycache__" not in path.parts
+        repository_import_roots.add(tool_root)
+        _assert_safe_implementation_chain(
+            project, tool_root, label=f"tool package {tool_id}"
         )
-    return sorted({path.resolve() for path in files if path.is_file()}, key=lambda item: item.as_posix().lower())
+        # A toolbox package may execute sibling helpers or read package-local
+        # resources.  Freezing only tool.py plus the two public schemas leaves
+        # those executable bytes outside the run identity.  Freeze the whole
+        # runtime package while excluding only cache/VCS trees. Test-named
+        # helpers remain frozen because executable package code can import them.
+        excluded_directories = {"__pycache__", ".git", ".pytest_cache"}
+        for candidate in sorted(tool_root.rglob("*"), key=lambda item: item.as_posix().lower()):
+            relative = candidate.relative_to(tool_root)
+            if any(part in excluded_directories for part in relative.parts[:-1]):
+                continue
+            if _is_unsafe_implementation_link(candidate):
+                raise FlowError(f"tool package contains an unsafe link: {candidate}")
+            if candidate.is_file():
+                files.append(candidate)
+    implementation_paths = sorted(
+        {Path(os.path.abspath(str(path))) for path in files},
+        key=lambda item: item.as_posix().lower(),
+    )
+    _assert_closed_repository_imports(
+        project,
+        implementation_paths,
+        repository_import_roots=sorted(
+            repository_import_roots,
+            key=lambda item: item.as_posix().lower(),
+        ),
+    )
+    return implementation_paths
 
 
 def implementation_lock(skill_dir: Path, flow: dict[str, Any]) -> dict[str, Any]:
-    root = skill_dir.resolve()
-    project = root.parent.parent.parent if root.parent.name == "flows" and root.parent.parent.name == "flowsteps" else root
+    root, project = _implementation_project(skill_dir)
     entries: dict[str, str] = {}
     for path in implementation_files(skill_dir, flow):
+        try:
+            digest = sha256_file(path)
+        except FileNotFoundError:
+            # Missing generated-tool contracts are an audit finding, not
+            # implementation bytes that can be frozen.
+            continue
         try:
             label = f"skill:{path.relative_to(root).as_posix()}"
         except ValueError:
@@ -686,6 +1780,36 @@ def implementation_lock(skill_dir: Path, flow: dict[str, Any]) -> dict[str, Any]
                 label = f"project:{path.relative_to(project).as_posix()}"
             except ValueError:
                 label = f"external:{path.as_posix()}"
+        entries[label] = digest
+    return {
+        "schema": "flowstep_implementation_lock_v2",
+        "skill": skill_dir.name,
+        "flow_id": flow["flow_id"],
+        "flow_version": flow["version"],
+        "files": entries,
+        "fingerprint_sha256": sha256_bytes(canonical_json(entries)),
+    }
+
+
+def implementation_lock_from_frozen_files(
+    skill_dir: Path,
+    flow: dict[str, Any],
+    frozen: dict[str, Any],
+) -> dict[str, Any]:
+    """Re-hash the exact frozen implementation set without rediscovery."""
+    root = Path(os.path.abspath(str(skill_dir)))
+    project = root.parent.parent.parent if root.parent.name == "flows" and root.parent.parent.name == "flowsteps" else root
+    frozen_files = frozen.get("files") if isinstance(frozen.get("files"), dict) else {}
+    entries: dict[str, str] = {}
+    for label in sorted(frozen_files):
+        if label.startswith("skill:"):
+            path = root / label.removeprefix("skill:")
+        elif label.startswith("project:"):
+            path = project / label.removeprefix("project:")
+        elif label.startswith("external:"):
+            path = Path(label.removeprefix("external:"))
+        else:
+            raise FlowError(f"invalid implementation lock label: {label}")
         entries[label] = sha256_file(path)
     return {
         "schema": "flowstep_implementation_lock_v2",
@@ -697,21 +1821,86 @@ def implementation_lock(skill_dir: Path, flow: dict[str, Any]) -> dict[str, Any]
     }
 
 
+def implementation_metadata_from_frozen_files(
+    skill_dir: Path,
+    frozen: dict[str, Any],
+) -> dict[str, dict[str, int]]:
+    """Cheaply detect whether a cached verification still describes current files."""
+    root = Path(os.path.abspath(str(skill_dir)))
+    project = root.parent.parent.parent if root.parent.name == "flows" and root.parent.parent.name == "flowsteps" else root
+    frozen_files = frozen.get("files") if isinstance(frozen.get("files"), dict) else {}
+    paths_by_parent: dict[Path, list[tuple[str, Path]]] = {}
+    for label in sorted(frozen_files):
+        if label.startswith("skill:"):
+            path = root / label.removeprefix("skill:")
+        elif label.startswith("project:"):
+            path = project / label.removeprefix("project:")
+        elif label.startswith("external:"):
+            path = Path(label.removeprefix("external:"))
+        else:
+            raise FlowError(f"invalid implementation lock label: {label}")
+        paths_by_parent.setdefault(path.parent, []).append((label, path))
+
+    # On Windows removable/exFAT volumes, one Path.stat call per file can turn
+    # every short resume into minutes of metadata latency.  scandir retrieves
+    # the same size/mtime identity from one directory enumeration and keeps the
+    # drift check exact while avoiding the per-file round trips.
+    metadata: dict[str, dict[str, int]] = {}
+    for parent, requested in paths_by_parent.items():
+        with os.scandir(parent) as directory:
+            entries = {entry.name.casefold(): entry for entry in directory}
+        for label, path in requested:
+            entry = entries.get(path.name.casefold())
+            if entry is None:
+                raise FileNotFoundError(path)
+            stat = entry.stat(follow_symlinks=True)
+            metadata[label] = {"size": int(stat.st_size), "mtime_ns": int(stat.st_mtime_ns)}
+    return metadata
+
+
 def assert_implementation_lock(run_dir: Path, skill_dir: Path, flow: dict[str, Any]) -> dict[str, Any]:
     lock_path = run_dir / "implementation-lock.json"
     if not lock_path.is_file():
         raise FlowError("missing implementation lock")
     frozen = read_json(lock_path)
+    # The product implementation is loaded from the live codebase, not copied
+    # into the run.  A run-local verification receipt therefore cannot safely
+    # suppress source verification for any amount of time.  Rediscover the
+    # complete current closure on every execution boundary so changed, removed,
+    # and newly added package members all fail before product work is loaded.
+    verification_path = run_dir / "implementation-verification.json"
     current = implementation_lock(skill_dir, flow)
-    if frozen.get("fingerprint_sha256") != current["fingerprint_sha256"]:
+    if (
+        frozen.get("flow_id") != current.get("flow_id")
+        or frozen.get("flow_version") != current.get("flow_version")
+        or frozen.get("files") != current.get("files")
+        or frozen.get("fingerprint_sha256") != current.get("fingerprint_sha256")
+    ):
         raise FlowError(
             "implementation drift detected; start a fresh run or use "
             "--continue-after-edit <milestone> to preserve compatible upstream chosen outputs"
         )
+    write_json(
+        verification_path,
+        {
+            "schema": "flowstep_implementation_verification_v1",
+            "fingerprint_sha256": current["fingerprint_sha256"],
+            "verified_at_epoch": time.time(),
+            "ttl_seconds": 0,
+            "files": implementation_metadata_from_frozen_files(skill_dir, current),
+        },
+        overwrite=True,
+    )
     return frozen
 
 
 def validate_against_schema(instance: Any, schema_path: Path) -> None:
+    # jsonschema's Draft 2020 dependency graph is large on Windows. Import it
+    # only for commands that actually cross a schema boundary; module import,
+    # --help, and lexical session discovery must not pay this cost.
+    from jsonschema import Draft202012Validator, RefResolver
+    from jsonschema.exceptions import SchemaError
+
     if not schema_path.is_file():
         raise FlowError(f"schema not found: {schema_path}")
     schema = read_json(schema_path)
@@ -719,7 +1908,36 @@ def validate_against_schema(instance: Any, schema_path: Path) -> None:
         Draft202012Validator.check_schema(schema)
     except SchemaError as exc:
         raise FlowError(f"invalid schema {schema_path}: {exc.message}") from exc
-    resolver = RefResolver(base_uri=schema_path.resolve().as_uri(), referrer=schema)
+    # Build the resolver URI lexically. Path.resolve() performs a physical
+    # realpath/stat walk on Windows, which can stall every validation when a
+    # schema lives on a degraded or removable volume. The schema existence
+    # check and read above already establish the file target.
+    resolver_store: dict[str, Any] = {}
+    # All workflow schemas are closed local inputs. Register sibling contracts
+    # under their authored $id, lexical filename, and file URI so a relative
+    # $ref can never fall through RefResolver.resolve_remote(). This applies to
+    # both m8m.local IDs and legacy filename IDs such as
+    # m8m_milestone_expectation_v1.schema.json.
+    serialized_schema = json.dumps(schema, ensure_ascii=True)
+    if '"$ref"' in serialized_schema:
+        schema_parent_uri = Path(os.path.abspath(str(schema_path.parent))).as_uri().rstrip("/") + "/"
+        for sibling in schema_path.parent.glob("*.schema.json"):
+            try:
+                linked = read_json(sibling)
+            except FlowError:
+                continue
+            sibling_name = sibling.name
+            sibling_uri = schema_parent_uri + sibling_name
+            resolver_store[sibling_name] = linked
+            resolver_store[sibling_uri] = linked
+            schema_id = linked.get("$id") if isinstance(linked, dict) else None
+            if isinstance(schema_id, str) and schema_id:
+                resolver_store[schema_id] = linked
+    resolver = RefResolver(
+        base_uri=Path(os.path.abspath(str(schema_path))).as_uri(),
+        referrer=schema,
+        store=resolver_store,
+    )
     errors = sorted(
         Draft202012Validator(schema, resolver=resolver).iter_errors(instance),
         key=lambda item: list(item.path),
@@ -754,8 +1972,20 @@ def cache_receipt_schema_path() -> Path:
     return CONTRACTS_DIR / "m8m_cache_receipt_v1.schema.json"
 
 
-def run_context_schema_path() -> Path:
-    return CONTRACTS_DIR / "m8m_run_context_v1.schema.json"
+def run_context_schema_path(schema: str = "m8m_run_context_v2") -> Path:
+    if schema == "m8m_run_context_v1":
+        return CONTRACTS_DIR / "m8m_run_context_v1.schema.json"
+    if schema == "m8m_run_context_v2":
+        return CONTRACTS_DIR / "m8m_run_context_v2.schema.json"
+    raise FlowError(f"unsupported run context schema: {schema}")
+
+
+def source_asset_manifest_schema_path() -> Path:
+    return CONTRACTS_DIR / "m8m_source_asset_manifest_v1.schema.json"
+
+
+def run_storage_contract_schema_path() -> Path:
+    return CONTRACTS_DIR / "m8m_run_storage_contract_v1.schema.json"
 
 
 def context_capsule_schema_path() -> Path:
@@ -787,7 +2017,14 @@ def load_tool(skill_dir: Path, step: dict[str, Any]) -> Any:
     # filesystem timestamp tick; normal import bytecode validation may otherwise
     # execute the implementation that the run has just superseded.
     source = path.read_bytes()
-    exec(compile(source, str(path), "exec"), module.__dict__)
+    original_sys_path = list(sys.path)
+    try:
+        exec(compile(source, str(path), "exec"), module.__dict__)
+    finally:
+        # Product handlers may add their repo root temporarily for imports.
+        # Imported modules stay bound in sys.modules/module globals; retaining
+        # that root globally makes every later import stat the workspace disk.
+        sys.path[:] = original_sys_path
     if not callable(getattr(module, "run", None)):
         raise FlowError(f"{path} must define run(input_data, draft=None, **kwargs)")
     return module
@@ -846,6 +2083,7 @@ def bind_inputs(run_dir: Path, flow: dict[str, Any], step: dict[str, Any]) -> tu
     from session_layout import chosen_output_path, load_chosen_output, resolve_chosen_output
 
     by_id = {item["id"]: item for item in flow["steps"]}
+    pinned_skill_dir = Path(flow["_skill_dir"])
     payload: dict[str, Any] = {}
     bindings: list[dict[str, Any]] = []
     join = step.get("join") or []
@@ -857,8 +2095,12 @@ def bind_inputs(run_dir: Path, flow: dict[str, Any], step: dict[str, Any]) -> tu
             path = chosen_output_path(run_dir, source_id)
             if not path.is_file():
                 continue
-            load_chosen_output(run_dir, source_id)
-            payload[source_id] = resolve_chosen_output(run_dir, source_id)
+            payload[source_id] = resolve_chosen_output(
+                run_dir,
+                source_id,
+                step=source,
+                skill_dir=pinned_skill_dir,
+            )
             bindings.append(
                 {
                     "input_name": source_id,
@@ -895,12 +2137,19 @@ def bind_inputs(run_dir: Path, flow: dict[str, Any], step: dict[str, Any]) -> tu
         if source["output_contract"] != contract:
             raise FlowError(f"{step['id']} input {name} contract mismatch: expected {source['output_contract']}")
         path = chosen_output_path(run_dir, source_id)
-        load_chosen_output(run_dir, source_id)
+        # Explicitly aliased inputs may reference every arm of a branch join.
+        # An unselected arm is intentionally skipped and therefore has no
+        # chosen-output.json.  Only tolerate that absence for on_path steps;
+        # non-branch dependencies remain mandatory and fail closed below.
+        if source.get("on_path") and not path.is_file():
+            continue
         payload[name] = resolve_chosen_output(
             run_dir,
             source_id,
             output_id=output_id,
             member_id=member_id,
+            step=source,
+            skill_dir=pinned_skill_dir,
         )
         binding = {
             "input_name": name,
@@ -914,6 +2163,77 @@ def bind_inputs(run_dir: Path, flow: dict[str, Any], step: dict[str, Any]) -> tu
         if member_id:
             binding["member"] = member_id
         bindings.append(binding)
+    branch_source = next(
+        (
+            item
+            for item in flow["steps"]
+            if isinstance(item.get("branch"), dict)
+            and str(item["branch"].get("join") or "") == step["id"]
+        ),
+        None,
+    )
+    input_schema_path = skill_rel(Path(flow["_skill_dir"]), step["input_schema"])
+    input_schema = read_json(input_schema_path) if input_schema_path.is_file() else {}
+    allowed_dynamic_inputs = set(
+        (input_schema.get("properties") or {}).keys()
+        if isinstance(input_schema, dict)
+        else []
+    )
+    if branch_source is not None and any(
+        item["id"] in allowed_dynamic_inputs
+        for item in flow["steps"]
+        if str(item.get("on_path") or "")
+    ):
+        record_path = run_dir / "flow-execution-record.json"
+        record = read_json(record_path) if record_path.is_file() else {}
+        active_branch = str(record.get("active_branch") or "")
+        step_index = next(
+            index for index, candidate in enumerate(flow["steps"])
+            if str(candidate.get("id") or "") == str(step["id"])
+        )
+        # One branch arm may contain several milestone checkpoints.  The join
+        # consumes the terminal chosen output from the active arm; earlier
+        # chosen outputs remain available to intermediate milestones and as
+        # durable audit evidence, but are not competing join candidates.
+        candidates = [
+            item
+            for item in flow["steps"][:step_index]
+            if str(item.get("on_path") or "") == active_branch
+            and chosen_output_path(run_dir, item["id"]).is_file()
+        ]
+        if not candidates:
+            raise FlowError(
+                f"{step['id']}: branch join found no terminal PASS output "
+                f"for active branch {active_branch or '(empty)'}"
+            )
+        selected = candidates[-1]
+        selected_id = str(selected["id"])
+        if selected_id not in allowed_dynamic_inputs:
+            raise FlowError(
+                f"{step['id']}: selected branch output {selected_id} is absent from the input schema"
+            )
+        selected_path = chosen_output_path(run_dir, selected_id)
+        load_chosen_output(
+            run_dir,
+            selected_id,
+            step=selected,
+            skill_dir=pinned_skill_dir,
+        )
+        payload[selected_id] = resolve_chosen_output(
+            run_dir,
+            selected_id,
+            step=selected,
+            skill_dir=pinned_skill_dir,
+        )
+        bindings.append(
+            {
+                "input_name": selected_id,
+                "source_step_id": selected_id,
+                "chosen_output_path": relative_to(run_dir, selected_path),
+                "contract": selected["output_contract"],
+                "status": "chosen",
+            }
+        )
     return payload, bindings
 
 
@@ -925,6 +2245,31 @@ def invoke_tool(
     task: dict[str, Any],
     run_dir: Path,
 ) -> dict[str, Any]:
+    root = Path(os.path.abspath(str(skill_dir)))
+    project = (
+        root.parent.parent.parent
+        if root.parent.name == "flows" and root.parent.parent.name == "flowsteps"
+        else root
+    )
+    for binding in (step.get("execution") or {}).get("tool_bindings") or []:
+        if not isinstance(binding, dict):
+            raise FlowError(f"{step['id']}: malformed bound FlowStep tool")
+        flowstep_id = str(binding.get("tool") or "")
+        package = local_tool_package_name(
+            str(binding.get("ref") or ""),
+            label=f"{step['id']}.execution.tool_bindings[{flowstep_id}].ref",
+        )
+        tool_root = project / "flowsteps" / "tools" / package
+        missing = [
+            name
+            for name in ("tool.py", "input.schema.json", "output.schema.json")
+            if not (tool_root / name).is_file()
+        ]
+        if missing:
+            raise FlowError(
+                f"{step['id']}: bound FlowStep tool {binding['ref']} is unavailable; "
+                f"missing {', '.join(missing)}"
+            )
     module = load_tool(skill_dir, step)
     return module.run(input_data, draft=draft, task=task, run_dir=run_dir)
 
@@ -1092,13 +2437,65 @@ def harness_output_schema(
     )
 
 
-def _returns_draft(node: ast.AST) -> bool:
-    if isinstance(node, ast.Name) and node.id == "draft":
+def _returns_reference(node: ast.AST, names: set[str]) -> bool:
+    """True for an unmodified direct reference or transparent container copy."""
+
+    if isinstance(node, ast.Name) and node.id in names:
         return True
     if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "dict":
-        return any(_returns_draft(arg) for arg in node.args) and not node.keywords
+        return any(_returns_reference(arg, names) for arg in node.args) and not node.keywords
     if isinstance(node, ast.Dict):
-        return any(key is None and _returns_draft(value) for key, value in zip(node.keys, node.values))
+        return (
+            len(node.keys) == 1
+            and node.keys[0] is None
+            and _returns_reference(node.values[0], names)
+        )
+    return False
+
+
+def _returns_draft(node: ast.AST) -> bool:
+    return _returns_reference(node, {"draft"})
+
+
+def _simple_input_alias_return(run_fn: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+    """Detect a straight-line ``alias = input_data; return alias`` passthrough.
+
+    The analysis intentionally stops at the first non-trivial statement. This
+    catches generated identity wrappers without guessing whether control flow
+    or an in-place mutation performed meaningful work.
+    """
+
+    positional = [*run_fn.args.posonlyargs, *run_fn.args.args]
+    input_name = positional[0].arg if positional else "input_data"
+    aliases = {input_name}
+    for statement in run_fn.body:
+        if (
+            isinstance(statement, ast.Expr)
+            and isinstance(statement.value, ast.Constant)
+            and isinstance(statement.value.value, str)
+        ):
+            continue
+        if isinstance(statement, ast.Assign) and len(statement.targets) == 1:
+            target = statement.targets[0]
+            if isinstance(target, ast.Name) and isinstance(statement.value, ast.Name):
+                if statement.value.id in aliases:
+                    aliases.add(target.id)
+                    continue
+            return False
+        if isinstance(statement, ast.AnnAssign):
+            if (
+                isinstance(statement.target, ast.Name)
+                and isinstance(statement.value, ast.Name)
+                and statement.value.id in aliases
+            ):
+                aliases.add(statement.target.id)
+                continue
+            return False
+        if isinstance(statement, ast.Return):
+            return statement.value is not None and _returns_reference(statement.value, aliases)
+        if isinstance(statement, ast.Pass):
+            continue
+        return False
     return False
 
 
@@ -1121,10 +2518,19 @@ def inspect_tool_source(source: str, *, step_id: str, model: str) -> list[str]:
     if run_fn is None:
         issues.append(f"{step_id}: tool.py must define run()")
         return issues
+    positional = [*run_fn.args.posonlyargs, *run_fn.args.args]
+    input_name = positional[0].arg if positional else "input_data"
     for child in ast.walk(run_fn):
         if isinstance(child, ast.Return) and child.value is not None and _returns_draft(child.value):
             issues.append(f"{step_id}: identity tool (return draft) is forbidden")
             break
+    if any(
+        isinstance(child, ast.Return)
+        and child.value is not None
+        and _returns_reference(child.value, {input_name})
+        for child in ast.walk(run_fn)
+    ) or _simple_input_alias_return(run_fn):
+        issues.append(f"{step_id}: identity tool / input passthrough is forbidden")
     if model == "none" and "NEED_MODEL" in source:
         issues.append(f"{step_id}: model is none but the tool returns NEED_MODEL")
     if model != "none" and "NEED_MODEL" not in source:
@@ -1155,7 +2561,16 @@ def lint_file_payload_schema(schema: dict[str, Any], *, label: str) -> list[str]
             for key in keys:
                 if key == "path" or key.endswith("_path"):
                     hash_key = "sha256" if key == "path" else f"{key[:-5]}_sha256"
-                    if "sha256" not in keys and hash_key not in keys:
+                    semantic_digest = (
+                        "files_digest"
+                        if key == "vendor_path"
+                        else None
+                    )
+                    if (
+                        "sha256" not in keys
+                        and hash_key not in keys
+                        and (semantic_digest is None or semantic_digest not in keys)
+                    ):
                         issues.append(f"{label}{path}.{key} needs a sibling sha256 or {hash_key}")
             for key, child in properties.items():
                 walk(child, f"{path}.{key}")

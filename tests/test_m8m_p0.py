@@ -10,16 +10,15 @@ import support  # noqa: F401  # puts scripts/ on sys.path
 
 from audit_harness import audit_harness, audit_skill, render_audit_markdown
 from m8m_factory import run_factory
-from flowstep_runtime import FlowError, is_passthrough_schema, read_json
+from flowstep_runtime import FlowError, read_json
 from flowstep_tools import run_library_tool, validate_library_tool
 from generate_harness import (
     generate_from_audit,
     generate_harness,
     generate_tool,
-    generate_v3_flow,
     main as generate_main,
 )
-from session_layout import load_chosen_output
+from teaching_contracts import copy_teaching_contracts
 
 
 
@@ -38,19 +37,63 @@ class SeedToolboxTests(unittest.TestCase):
             source = (codebase / "flowsteps" / "tools" / "hash_bind" / "tool.py").read_text(encoding="utf-8")
             self.assertNotIn("NotImplementedError", source)
 
-    def test_unknown_tool_is_generate_new_pass(self) -> None:
+    def test_unknown_tool_is_build_required_and_non_runnable(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             codebase = Path(temp) / "repo"
             result = generate_tool(codebase, "not_a_seed_tool")
-            self.assertEqual(result["status"], "PASS")
+            self.assertEqual(result["status"], "BUILD_REQUIRED")
             self.assertFalse(result["seeded"])
             self.assertEqual(result.get("origin"), "generate-new")
-            self.assertIn("generate-new", result.get("note") or "")
+            self.assertFalse(result["runnable"])
+            self.assertTrue(result["non_runnable"])
+            self.assertTrue(result["blockers"])
             self.assertTrue((codebase / "flowsteps" / "tools" / "not_a_seed_tool" / "tool.py").is_file())
+            self.assertTrue((codebase / "flowsteps" / "tools" / "not_a_seed_tool" / "BUILD_REQUIRED").is_file())
+            self.assertTrue(any("BUILD_REQUIRED" in item for item in validate_library_tool(codebase, "not_a_seed_tool")))
+            with self.assertRaisesRegex(FlowError, "BUILD_REQUIRED"):
+                run_library_tool(codebase, "not_a_seed_tool", {})
+
+    def test_valid_manual_repair_is_preserved_during_regeneration(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            codebase = Path(temp) / "repo"
+            generated = generate_tool(codebase, "repairable_tool")
+            tool_dir = Path(generated["tool_dir"])
+            source = (
+                "def run(input_data, **_):\n"
+                "    return {'value': str(input_data.get('value') or 'ready')}\n"
+            )
+            (tool_dir / "tool.py").write_text(source, encoding="utf-8")
+            (tool_dir / "input.schema.json").write_text(
+                json.dumps({"type": "object", "additionalProperties": True}),
+                encoding="utf-8",
+            )
+            (tool_dir / "output.schema.json").write_text(
+                json.dumps(
+                    {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "required": ["value"],
+                        "properties": {"value": {"type": "string", "minLength": 1}},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (tool_dir / "tests" / "test_tool.py").write_text(
+                "def test_returns_value():\n    assert True\n",
+                encoding="utf-8",
+            )
+            (tool_dir / "BUILD_REQUIRED").unlink()
+
+            refreshed = generate_tool(codebase, "repairable_tool", overwrite=True)
+
+            self.assertEqual(refreshed["status"], "PASS")
+            self.assertEqual(refreshed["origin"], "local-implementation")
+            self.assertEqual((tool_dir / "tool.py").read_text(encoding="utf-8"), source)
+            self.assertFalse((tool_dir / "BUILD_REQUIRED").exists())
 
 
 class AuditDrivesGenerateTests(unittest.TestCase):
-    def test_from_audit_uses_per_milestone_tools_and_asset_schema(self) -> None:
+    def test_from_audit_requires_authored_milestone_authority(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             skill = Path(temp) / "toy-skill"
             (skill / "scripts").mkdir(parents=True)
@@ -63,36 +106,28 @@ class AuditDrivesGenerateTests(unittest.TestCase):
             audit = audit_skill(skill)
             result = generate_from_audit(codebase, audit, flow_id="toy_v1", skill_name="toy-skill")
             harness = Path(result["harness_dir"])
-            flow = (harness / "flow.yaml").read_text(encoding="utf-8")
-            self.assertIn("hash_bind", flow)
-            self.assertIn("schema: flowstep_flow_v4", flow)
-            self.assertIn("context_policy: isolated", flow)
-            self.assertIn("outputs:", flow)
-            self.assertIn("cardinality:", flow)
-            last_id = result["milestones"][-1]
-            last_schema = harness / "schemas" / f"{last_id}_v1.json"
-            self.assertTrue(last_schema.is_file())
-            for mid in result["milestones"]:
-                schema = json.loads((harness / "schemas" / f"{mid}_v1.json").read_text(encoding="utf-8"))
-                self.assertFalse(is_passthrough_schema(schema), mid)
-                self.assertEqual(schema.get("additionalProperties"), False)
-                self.assertTrue(schema.get("required"), mid)
-            self.assertTrue((harness / "planning" / "m8m-flowchart.md").is_file())
-            self.assertEqual(result["status"], "PASS")
-            self.assertTrue((codebase / ".agents" / "skills" / "toy-skill" / "SKILL.md").is_file())
-            self.assertTrue((codebase / ".claude" / "skills" / "toy-skill" / "SKILL.md").is_file())
+            self.assertEqual(result["status"], "BUILD_REQUIRED")
+            self.assertFalse(result["runnable"])
+            self.assertTrue(result["non_runnable"])
+            self.assertTrue(result["build_required_milestones"])
+            self.assertFalse((harness / "flow.yaml").exists())
+            self.assertFalse((harness / "BUILD_REQUIRED_RUNTIME").exists())
+            self.assertFalse(
+                (codebase / ".agents" / "skills" / "toy-skill" / "SKILL.md").exists()
+            )
+            self.assertFalse(
+                (codebase / ".claude" / "skills" / "toy-skill" / "SKILL.md").exists()
+            )
             self.assertEqual(audit["tool_vs_intelligence"]["schema"], "tool_vs_intelligence_table_v1")
-            table_path = harness / "planning" / "tool-vs-intelligence.json"
-            self.assertTrue(table_path.is_file())
-            table = json.loads(table_path.read_text(encoding="utf-8"))
-            self.assertTrue(table["rows"])
-            self.assertTrue(all({"id", "class", "test", "why"} <= set(row) for row in table["rows"]))
-            skill_md = (codebase / ".agents" / "skills" / "toy-skill" / "SKILL.md").read_text(encoding="utf-8")
-            self.assertIn("m8m-flowchart.md", skill_md)
-            instruction = (harness / "planning" / "flowstep-instruction.md").read_text(encoding="utf-8")
-            self.assertIn("m8m-flowchart.md", instruction)
+            self.assertTrue(audit["tool_vs_intelligence"]["rows"])
+            self.assertTrue(
+                all(
+                    {"id", "class", "test", "why"} <= set(row)
+                    for row in audit["tool_vs_intelligence"]["rows"]
+                )
+            )
 
-    def test_from_audit_copies_teaching_contracts_onto_the_flow(self) -> None:
+    def test_incomplete_audit_does_not_promote_teaching_contracts_implicitly(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             skill = Path(temp) / "case-skill"
             (skill / "scripts").mkdir(parents=True)
@@ -120,13 +155,21 @@ class AuditDrivesGenerateTests(unittest.TestCase):
             codebase = Path(temp) / "repo"
             result = generate_from_audit(codebase, audit, flow_id="case_v1", skill_name="case-skill")
             harness = Path(result["harness_dir"])
+            self.assertEqual(result["status"], "BUILD_REQUIRED")
+            self.assertFalse(result["runnable"])
+            self.assertFalse((harness / "flow.yaml").exists())
+            self.assertFalse((harness / "references" / "fact-contract.md").exists())
+            self.assertFalse((harness / "references" / "canvas-contract.md").exists())
+
+            copied = copy_teaching_contracts(harness, audit)
+
+            self.assertEqual(len(copied), 2)
             self.assertTrue((harness / "references" / "fact-contract.md").is_file())
             self.assertTrue((harness / "references" / "canvas-contract.md").is_file())
-            instruction = (harness / "planning" / "flowstep-instruction.md").read_text(encoding="utf-8")
-            self.assertIn("references/fact-contract.md", instruction)
-            self.assertIn("Teaching contracts", instruction)
-            skill_md = (codebase / ".agents" / "skills" / "case-skill" / "SKILL.md").read_text(encoding="utf-8")
-            self.assertIn("m8m-flowchart.md", skill_md)
+            self.assertFalse((harness / "BUILD_REQUIRED_RUNTIME").exists())
+            self.assertFalse(
+                (codebase / ".agents" / "skills" / "case-skill" / "SKILL.md").exists()
+            )
 
 
 class DefaultV3Tests(unittest.TestCase):
@@ -136,39 +179,46 @@ class DefaultV3Tests(unittest.TestCase):
 
 
 class FactoryTests(unittest.TestCase):
-    def test_builder_self_flow_commits_every_compulsory_milestone(self) -> None:
+    def test_incomplete_legacy_builder_import_stops_before_validation_and_installation(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             source = Path(__file__).resolve().parents[1]
             target = Path(temp) / "m8m-harness-builder"
             (target / "flows").mkdir(parents=True)
             shutil.copy2(source / "SKILL.md", target / "SKILL.md")
-            shutil.copy2(source / "flows" / "m8m_build_v1.yaml", target / "flows" / "m8m_build_v1.yaml")
+            shutil.copy2(source / "flows" / "m8m_build_v2.yaml", target / "flows" / "m8m_build_v2.yaml")
             codebase = Path(temp) / "repo"
-            result = run_factory(target, codebase, flow_id="m8m_self_v1", skill_name="m8m-self")
-            self.assertEqual(result["status"], "PASS", result)
+            runtime = Path(temp) / "runtime"
+            result = run_factory(
+                target,
+                codebase,
+                flow_id="m8m_self_v1",
+                skill_name="m8m-self",
+                harness_root=runtime,
+            )
+            self.assertEqual(result["status"], "BLOCKED", result)
             run_dir = Path(result["run_dir"])
             run_context = read_json(run_dir / "run-context.json")
             execution = read_json(run_dir / "flow-execution-record.json")
             self.assertEqual(run_context["context_policy"], "isolated")
             self.assertFalse(run_context["chat_history_allowed"])
             self.assertEqual(execution["cache"]["mode"], "off")
-            for milestone_id in (
-                "audit_complete",
-                "toolbox_ready",
-                "flow_generated",
-                "harness_validated",
-                "skill_shipped",
-            ):
-                manifest = load_chosen_output(run_dir, milestone_id)
-                self.assertEqual(manifest["schema"], "m8m_chosen_output_v1")
-                self.assertEqual(manifest["status"], "chosen")
-                self.assertFalse(
-                    (run_dir / "milestones" / milestone_id / "work" / "cache").exists(),
-                    "builder short-task milestones must stay cache-free by default",
-                )
+            self.assertEqual(result["action"]["step_id"], "audit_complete")
+            self.assertEqual(result["action"]["state"], "BLOCKED")
+            self.assertIn("import_flow_v4.py", " ".join(result["action"]["blockers"]))
+            self.assertFalse(
+                (run_dir / "milestones" / "audit_complete" / "out" / "chosen-output.json").exists()
+            )
+            self.assertEqual(result["milestones"]["audit_complete"]["status"], "BLOCKED")
+            self.assertEqual(result["milestones"]["toolbox_ready"]["status"], "PENDING")
+            self.assertEqual(result["milestones"]["flow_generated"]["status"], "PENDING")
+            self.assertEqual(result["milestones"]["harness_validated"]["status"], "PENDING")
+            self.assertEqual(result["milestones"]["skill_shipped"]["status"], "PENDING")
+            self.assertFalse((run_dir / "milestones" / "harness_validated" / "out" / "chosen-output.json").exists())
+            self.assertFalse((run_dir / "milestones" / "skill_shipped" / "out" / "chosen-output.json").exists())
             self.assertFalse((codebase / "flowsteps" / "cache").exists())
+            self.assertIn((runtime / "runs").resolve(), run_dir.resolve().parents)
 
-    def test_run_factory_ships_product_skill(self) -> None:
+    def test_run_factory_requires_explicit_import_for_a_bare_legacy_skill(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             skill = Path(temp) / "bare-skill"
             skill.mkdir()
@@ -177,21 +227,24 @@ class FactoryTests(unittest.TestCase):
                 encoding="utf-8",
             )
             codebase = Path(temp) / "repo"
-            result = run_factory(skill, codebase, flow_id="bare_v1", skill_name="bare-skill")
-            self.assertEqual(result["status"], "PASS")
-            self.assertTrue(Path(result["audit_json"]).is_file())
-            self.assertTrue(Path(result["product_skill"]).is_file())
-            self.assertTrue((codebase / ".claude" / "skills" / "bare-skill" / "SKILL.md").is_file())
-            chart = Path(result["flowchart_path"])
-            self.assertTrue(chart.is_file())
-            self.assertTrue(chart.with_suffix(".jpg").is_file())
-            self.assertIn("```text", chart.read_text(encoding="utf-8"))
-            self.assertNotIn("```mermaid", chart.read_text(encoding="utf-8"))
-            self.assertIn("m8m-flowchart.jpg", chart.read_text(encoding="utf-8"))
-            skill_md = Path(result["product_skill"]).read_text(encoding="utf-8")
-            self.assertIn("m8m-flowchart.md", skill_md)
+            result = run_factory(
+                skill,
+                codebase,
+                flow_id="bare_v1",
+                skill_name="bare-skill",
+                harness_root=Path(temp) / "runtime",
+            )
+            self.assertEqual(result["status"], "BLOCKED")
+            self.assertEqual(result["action"]["step_id"], "audit_complete")
+            self.assertIn("import_flow_v4.py", " ".join(result["action"]["blockers"]))
+            self.assertEqual(result["milestones"]["flow_generated"]["status"], "PENDING")
+            self.assertEqual(result["milestones"]["harness_validated"]["status"], "PENDING")
+            self.assertEqual(result["milestones"]["skill_shipped"]["status"], "PENDING")
+            self.assertNotIn("source_bundle_path", result)
+            self.assertFalse((codebase / ".claude" / "skills" / "bare-skill" / "SKILL.md").exists())
+            self.assertFalse((codebase / ".agents" / "skills" / "bare-skill" / "SKILL.md").exists())
 
-    def test_factory_passes_when_tools_are_generate_new(self) -> None:
+    def test_factory_requires_explicit_import_before_legacy_sketch_generation(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             skill = Path(temp) / "crop-skill"
             (skill / "scripts").mkdir(parents=True)
@@ -204,18 +257,24 @@ class FactoryTests(unittest.TestCase):
                 encoding="utf-8",
             )
             codebase = Path(temp) / "repo"
-            result = run_factory(skill, codebase, flow_id="crop_v1", skill_name="crop-skill")
-            self.assertEqual(result["status"], "PASS")
-            self.assertTrue(Path(result["flowchart_path"]).is_file())
-            stub = codebase / "flowsteps" / "tools" / "crop_4x5" / "tool.py"
-            self.assertTrue(stub.is_file())
-            self.assertIn("NotImplementedError", stub.read_text(encoding="utf-8"))
-            notes = " ".join(result.get("notes") or [])
-            self.assertIn("generate-new", notes)
-            self.assertIn("crop_4x5", notes)
-            validation = result["milestones"]["harness_validated"]
-            self.assertEqual(validation.get("status"), "PASS")
-            self.assertTrue(Path(validation["chosen_output"]).is_file())
+            result = run_factory(
+                skill,
+                codebase,
+                flow_id="crop_v1",
+                skill_name="crop-skill",
+                harness_root=Path(temp) / "runtime",
+            )
+            self.assertEqual(result["status"], "BLOCKED", result)
+            self.assertEqual(result["action"]["step_id"], "audit_complete")
+            self.assertIn("import_flow_v4.py", " ".join(result["action"]["blockers"]))
+            run_dir = Path(result["run_dir"])
+            self.assertFalse(
+                (run_dir / "milestones" / "flow_generated" / "out" / "chosen-output.json").exists()
+            )
+            self.assertEqual(result["milestones"]["flow_generated"]["status"], "PENDING")
+            self.assertEqual(result["milestones"]["harness_validated"]["status"], "PENDING")
+            self.assertEqual(result["milestones"]["skill_shipped"]["status"], "PENDING")
+            self.assertFalse((codebase / ".agents" / "skills" / "crop-skill").exists())
 
     def test_audit_name_hints_are_notes_not_p0(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -262,7 +321,7 @@ class LegacyV2HardCutover(unittest.TestCase):
     def test_python_api_legacy_v2_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             skill = Path(temp) / "legacy"
-            with self.assertRaisesRegex(FlowError, "m8m-harness-builder 2.0"):
+            with self.assertRaisesRegex(FlowError, "m8m-harness-builder 3.1"):
                 generate_harness(skill, flow_id="legacy_v1", step_ids=["alpha"])
             self.assertFalse((skill / "steps").exists())
 

@@ -109,7 +109,7 @@ def render_mermaid(items: list[dict[str, Any]]) -> str:
             fe = item["ledger"]
             loop_line = f"<br/>for:{fe.get('path')} max={fe.get('max_items')}"
         elif item.get("loop") == "judge":
-            loop_line = "<br/>judge until ok"
+            loop_line = "<br/>judge until PASS"
         elif item.get("branch"):
             paths = []
             for path in (item.get("branch") or {}).get("paths") or []:
@@ -190,11 +190,11 @@ def render_flowchart(
         f"# M8M flowchart: {title}",
         "",
         "One chart. Milestone to milestone. Each node declares named output ports.",
-        "FlowSteps refine candidates; the judge chooses one bundle. Without chosen-output.json the node is BLOCKED.",
+        "FlowSteps refine candidates; admission always runs and an authored judge is optional. Without chosen-output.json the node is BLOCKED.",
         "Run state is authoritative. Optional cross-run cache only supplies a candidate for the current judge.",
         "Execution context is isolated: a fresh run does not inherit orchestration chat or prior-row memory.",
         "FlowSteps inside a node are a guide (one preferred tool each), not a compulsory path.",
-        "cycle = wrap over a frozen ledger (pass preserves, fail purges). judge = retry until worker ok.",
+        "cycle = wrap over a frozen ledger (pass preserves, fail purges). judge = optional semantic retry until PASS.",
         "The JPEG is the audit copy: portable, human-labeled, native to review.",
         "It is rewritten on generate and on every step edit.",
         "",
@@ -233,7 +233,7 @@ def render_flowchart(
             fe = item["ledger"]
             control = f"for `{fe.get('path')}` max={fe.get('max_items')}"
         elif item.get("loop") == "judge":
-            control = "judge until ok"
+            control = "judge until PASS"
         elif item.get("branch"):
             paths = []
             for path in (item.get("branch") or {}).get("paths") or []:
@@ -273,7 +273,7 @@ def render_flowchart(
             "",
             "Sequence inside each milestone. Prefer the named tool. Optional.",
             "If it fails, recover like a normal agent. The prompt for that step is the",
-            "matching section of the milestone gem. A judge-approved chosen output bundle is still compulsory.",
+            "matching section of the milestone gem. Admission is compulsory; semantic judgment is optional.",
             "",
             "| Milestone | # | FlowStep | What it means | Preferred tool | Gem section |",
             "| --- | ---: | --- | --- | --- | --- |",
@@ -313,10 +313,10 @@ def render_flowchart(
                 f"`{cy.get('join') or '—'}` | `{cy.get('worker') or 'cycle_receipt'}` | "
                 f"{cy.get('pass') or 'semantic pass on this ledger row'} |"
             )
-    lines.extend(["", "## Judge (until ok)", ""])
+    lines.extend(["", "## Optional semantic judge", ""])
     judges = [item for item in nodes if item.get("loop") == "judge"]
     if not judges:
-        lines.append("None. No judge-until-ok milestone.")
+        lines.append("None. These milestones commit after structural admission with zero judge calls.")
     else:
         lines.extend(
             [
@@ -326,8 +326,8 @@ def render_flowchart(
         )
         for item in judges:
             lines.append(
-                f"| `{item['id']}` | `{item.get('worker') or 'ok_receipt'}` | "
-                f"`{item.get('receipt_schema') or 'schemas/ok_receipt.json'}` |"
+                f"| `{item['id']}` | `{item.get('worker') or 'BLOCKED: missing judge'}` | "
+                f"`{item.get('receipt_schema') or 'BLOCKED: missing schema'}` |"
             )
     lines.extend(["", "## Branch (after the milestone)", ""])
     branches = [item for item in nodes if item.get("branch")]
@@ -336,7 +336,7 @@ def render_flowchart(
     else:
         lines.extend(
             [
-                "AI drafts the path. The worker writes `{ok, branch}`. Skip is not BLOCK.",
+                "After candidate admission, the runtime invokes the exact bound control worker for `{ok, branch}`. Skip is not BLOCK.",
                 "",
                 "| Milestone | Worker | Default | Paths | Join |",
                 "| --- | --- | --- | --- | --- |",
@@ -357,8 +357,8 @@ def render_flowchart(
     lines.extend(
         [
             "",
-            "Proceed only when the worker receipt is `ok: true` and the current named outputs are committed as `chosen-output.json`.",
-            "Branch is after that PASS. The model drafts; the tool writes `branch`.",
+            "Proceed only after structural admission and, when declared, semantic judge `PASS`; then commit current named outputs as `chosen-output.json`.",
+            "Branch is after that commit. Candidate handlers never write control; the runtime-owned control call writes `branch`.",
             "",
         ]
     )

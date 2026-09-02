@@ -140,7 +140,7 @@ def write_milestone_gems(
     *,
     overwrite: bool = False,
 ) -> list[str]:
-    """One gem per milestone: rule of success + one prompt section per FlowStep."""
+    """Write one FlowStep-guidance Gem per milestone."""
     from flowstep_runtime import normalize_flowsteps
     from humanize_chart import success_line, title_id
 
@@ -148,7 +148,7 @@ def write_milestone_gems(
     dest_dir = Path(harness) / TEACHING_DIRNAME
     template = Path(__file__).resolve().parents[1] / "templates" / "milestone" / "gem.md"
     body = template.read_text(encoding="utf-8") if template.is_file() else (
-        "# __TITLE__\n\nRule of success: __SUCCESS__\n"
+        "# __TITLE__\n\n## FlowSteps\n\n__FLOWSTEP_SECTIONS__\n"
     )
     for item in milestones:
         mid = str(item.get("id") or "").strip()
@@ -168,15 +168,32 @@ def write_milestone_gems(
             judge_line = (
                 "- Loop: judge (wait). No draft yet → pause the roster "
                 "(row waiting, session exits). Resume: find <run>/roster.json, "
-                "write milestones/<id>/work/draft.json, judge the gem. "
-                "Gem fail → keep working on this box. Pass receipt → next."
+                "write milestones/<id>/work/draft.json. FlowSteps follow the Gem; "
+                "the judge evaluates the derived expectation and current candidate. "
+                "RETRY → keep working on this box. PASS → next."
             )
         elif loop == "judge":
-            judge_line = "- Loop: judge. Stay on this box until that worker receipt is ok. Exists is not enough."
+            judge_line = "- Loop: judge. The separate worker evaluates the derived expectation and returns PASS, RETRY, or BLOCKED."
         elif worker:
             judge_line = "- Loop: none. The worker accepts the current candidate in one shot."
         else:
-            judge_line = "- Loop: none. The closed candidate schema is the default judge."
+            judge_line = "- Loop: none. Structural admission validates the closed candidate; no semantic judge runs."
+        intelligence = str(item.get("intelligence") or "none")
+        if intelligence == "none":
+            classification = (
+                "This milestone is deterministic tool work (`model: none`). Each "
+                "FlowStep must be a typed, fixture-testable, in-process product tool."
+            )
+        else:
+            justification = str(
+                item.get("model_justification")
+                or "the candidate requires judgment that a fixture cannot decide"
+            ).strip()
+            classification = (
+                f"This milestone uses bounded `{intelligence}` intelligence because "
+                f"{justification}. Deterministic sub-operations remain declared "
+                "in-process tools; the model returns only candidate data."
+            )
         flowsteps, _ = normalize_flowsteps(
             flowsteps=item.get("flowsteps"),
             tools=item.get("tools"),
@@ -188,6 +205,7 @@ def write_milestone_gems(
             .replace("__KIND__", kind)
             .replace("__WORKER__", worker or "—")
             .replace("__JUDGE_LINE__", judge_line)
+            .replace("__CLASSIFICATION__", classification)
             .replace("__FLOWSTEP_SECTIONS__", render_flowstep_gem_sections(flowsteps))
         )
         dest.parent.mkdir(parents=True, exist_ok=True)

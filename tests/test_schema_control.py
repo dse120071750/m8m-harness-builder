@@ -1,16 +1,26 @@
 from __future__ import annotations
 
 import json
+import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import support  # noqa: F401
 
 from audit_harness import audit_skill, infer_schema_control, render_audit_markdown, write_audit_markdown
 from m8m_flowchart import render_mermaid, write_flowchart
 from toolbox_plan import build_toolbox_plan, render_toolbox_plan_markdown
-from flowstep_runtime import FlowError, load_flow, read_json, step_class_hint
+from flowstep_runtime import (
+    FlowError,
+    implementation_files,
+    load_flow,
+    read_json,
+    step_class_hint,
+    validate_against_schema,
+)
+from flowstep_tools import load_library_tool, tools_root
 from generate_harness import generate_from_audit, generate_tool, generate_v3_flow
 from run_flow import advance
 from schema_gate import is_control_name
@@ -66,15 +76,165 @@ class ControlNameTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             codebase = Path(temp) / "repo"
             generate_tool(codebase, "hash_bind")
-            result = generate_v3_flow(codebase, "bad_v1", ["if_ready"], tools=["hash_bind"])
-            self.assertEqual(result["status"], "PASS")
+            result = generate_v3_flow(
+                codebase,
+                "bad_v1",
+                ["if_ready"],
+                tools=["hash_bind"],
+                milestone_specs=[
+                    {
+                        "id": "if_ready",
+                        "success": "The bounded condition record is available.",
+                        "output_contract": "if_ready_v1",
+                        "outputs": [
+                            {
+                                "id": "result",
+                                "name": "Condition record",
+                                "kind": "json",
+                                "cardinality": "one",
+                                "required": True,
+                            }
+                        ],
+                        "output_schema_object": {"type": "object"},
+                        "tools": ["hash_bind"],
+                        "flowsteps": [
+                            {
+                                "id": "hash_bind",
+                                "tool": "hash_bind@1.0.0",
+                            }
+                        ],
+                        "execution": {
+                            "candidate_executor": {
+                                "ref": "handler.bad_v1.if_ready@3.1.0"
+                            },
+                            "tool_bindings": [
+                                {
+                                    "tool": "hash_bind",
+                                    "ref": "hash_bind@1.0.0",
+                                }
+                            ],
+                        },
+                    }
+                ],
+            )
+            self.assertEqual(result["status"], "BUILD_REQUIRED")
             self.assertTrue(any("if_ready" in note for note in result.get("notes") or []))
             self.assertTrue(Path(result["flowchart_path"]).is_file())
 
 
+class SchemaValidationPathTests(unittest.TestCase):
+    def test_validation_does_not_physically_resolve_schema_path(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            schema_path = Path(temp) / "contract.schema.json"
+            _write(schema_path, json.dumps({"type": "object", "required": ["ok"]}))
+            with patch.object(Path, "resolve", side_effect=AssertionError("physical resolve is forbidden")):
+                validate_against_schema({"ok": True}, schema_path)
+
+    def test_relative_sibling_ref_never_uses_remote_resolver(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            linked_path = root / "linked.schema.json"
+            schema_path = root / "contract.schema.json"
+            _write(
+                linked_path,
+                json.dumps(
+                    {
+                        "$schema": "https://json-schema.org/draft/2020-12/schema",
+                        "$id": "linked.schema.json",
+                        "type": "object",
+                        "required": ["ok"],
+                    }
+                ),
+            )
+            _write(
+                schema_path,
+                json.dumps(
+                    {
+                        "$schema": "https://json-schema.org/draft/2020-12/schema",
+                        "$id": "contract.schema.json",
+                        "$ref": "linked.schema.json",
+                    }
+                ),
+            )
+            with patch(
+                "jsonschema.RefResolver.resolve_remote",
+                side_effect=AssertionError("closed schema attempted remote resolution"),
+            ):
+                validate_against_schema({"ok": True}, schema_path)
+
+    def test_tool_root_does_not_physically_resolve_codebase(self) -> None:
+        with patch.object(Path, "resolve", side_effect=AssertionError("physical resolve is forbidden")):
+            root = tools_root(Path(r"D:\nisan-n8n"))
+        self.assertEqual(root, Path(r"D:\nisan-n8n\flowsteps\tools"))
+
+    def test_implementation_freeze_includes_complete_tool_package(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            project = Path(temp) / "repo"
+            harness = project / "flowsteps" / "flows" / "demo_v1"
+            tool = project / "flowsteps" / "tools" / "demo_tool"
+            for path in (
+                harness / "flow.yaml",
+                harness / "milestones" / "done" / "assemble.py",
+                harness / "schemas" / "done.json",
+                tool / "tool.py",
+                tool / "input.schema.json",
+                tool / "output.schema.json",
+                tool / "tests" / "test_tool.py",
+            ):
+                _write(path, "{}" if path.suffix == ".json" else "# fixture\n")
+            flow = {
+                "_flow_path": harness / "flow.yaml",
+                "steps": [
+                    {
+                        "id": "done",
+                        "handler": "milestones/done/assemble.py",
+                        "output_schema": "schemas/done.json",
+                        "flowsteps": [
+                            {
+                                "id": "inspect_result",
+                                "tool": "demo_tool@1.0.0",
+                            }
+                        ],
+                        "tools": ["inspect_result"],
+                        "execution": {
+                            "candidate_executor": {
+                                "ref": "handler.demo_v1.done@3.1.0"
+                            },
+                            "tool_bindings": [
+                                {
+                                    "tool": "inspect_result",
+                                    "ref": "demo_tool@1.0.0",
+                                }
+                            ],
+                        },
+                    }
+                ],
+            }
+            frozen = implementation_files(harness, flow)
+            self.assertIn(tool / "tool.py", frozen)
+            self.assertIn(tool / "input.schema.json", frozen)
+            self.assertIn(tool / "output.schema.json", frozen)
+            # Tool packages are frozen as complete importable closures.  A
+            # helper under tests/ is still executable when package code imports
+            # it, so excluding it would reopen same-run implementation drift.
+            self.assertIn(tool / "tests" / "test_tool.py", frozen)
+
+    def test_library_tool_load_restores_global_import_path(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            codebase = Path(temp) / "repo"
+            tool = codebase / "flowsteps" / "tools" / "path_mutator"
+            _write(tool / "tool.py", "import sys\nsys.path.insert(0, 'WORKSPACE_POISON')\ndef run(input_data, **_): return input_data\n")
+            before = list(sys.path)
+            load_library_tool(codebase, "path_mutator")
+            self.assertEqual(sys.path, before)
+
+
 class WriterSkillTests(unittest.TestCase):
     def test_skill_md_teaches_chosen_output_runtime(self) -> None:
-        text = (Path(__file__).resolve().parents[1] / "SKILL.md").read_text(encoding="utf-8")
+        root = Path(__file__).resolve().parents[1]
+        pointer = (root / "SKILL.md").read_text(encoding="utf-8")
+        self.assertIn("references/builder-authoring.md", pointer)
+        text = (root / "references" / "builder-authoring.md").read_text(encoding="utf-8")
         self.assertIn("flowstep_flow_v4", text)
         self.assertIn("flowstep_output_v3", text)
         self.assertIn("m8m_chosen_output_v1", text)
@@ -631,7 +791,7 @@ class FlowchartMarkdownTests(unittest.TestCase):
             self.assertIn("flowchart TD", text)
             self.assertNotIn("```mermaid", text)
             self.assertIn("## Cycle", text)
-            self.assertIn("## Judge (until ok)", text)
+            self.assertIn("## Optional semantic judge", text)
             self.assertIn("## Toolbox plan", text)
             audit_md = (root / "planning" / "flowstep-audit.md").read_text(encoding="utf-8")
             self.assertNotIn("```mermaid", audit_md)
@@ -691,11 +851,43 @@ class ToolFailRecoveryTests(unittest.TestCase):
                 milestone_specs=[
                     {
                         "id": "source_ready",
+                        "success": "The source result is available for recovery.",
+                        "output_contract": "source_ready_v1",
+                        "outputs": [
+                            {
+                                "id": "result",
+                                "name": "Source result",
+                                "kind": "json",
+                                "cardinality": "one",
+                                "required": True,
+                            }
+                        ],
+                        "output_schema_object": {
+                            "type": "object",
+                            "additionalProperties": True,
+                        },
                         "tools": ["hash_bind"],
+                        "flowsteps": [
+                            {
+                                "id": "hash_bind",
+                                "tool": "hash_bind@1.0.0",
+                            }
+                        ],
                         "intelligence": "completion",
                         "model_justification": "recover when the listed downloader fails",
                         "on_tool_fail": "need_model",
                         "max_model_attempts": 2,
+                        "execution": {
+                            "candidate_executor": {
+                                "ref": "handler.recover_v1.source_ready@3.1.0"
+                            },
+                            "tool_bindings": [
+                                {
+                                    "tool": "hash_bind",
+                                    "ref": "hash_bind@1.0.0",
+                                }
+                            ],
+                        },
                     }
                 ],
             )
@@ -709,10 +901,6 @@ class ToolFailRecoveryTests(unittest.TestCase):
                 harness / "milestones" / "source_ready" / "draft.schema.json",
                 json.dumps({"type": "object", "additionalProperties": True}),
             )
-            _write(
-                harness / "schemas" / "source_ready_v1.json",
-                json.dumps({"type": "object", "additionalProperties": True}),
-            )
             request = Path(temp) / "request.json"
             request.write_text(json.dumps({"ok": True}), encoding="utf-8")
             run = Path(temp) / "run-rec"
@@ -723,7 +911,12 @@ class ToolFailRecoveryTests(unittest.TestCase):
             draft.write_text(json.dumps({"retry": 1}), encoding="utf-8")
             second = advance(harness, run, draft_path=draft)
             self.assertEqual(second["state"], "ACTION_REQUIRED")
-            self.assertEqual(second["attempt"], 2)
+            # Candidate attempt identity stays frozen until a semantic judge
+            # requests a retry. Model recovery has its own bounded counter.
+            self.assertEqual(second["attempt"], 1)
+            model_request = read_json(run / second["model_request_path"])
+            self.assertEqual(model_request["attempt"], 2)
+            self.assertEqual(model_request["max_model_attempts"], 2)
             draft.write_text(json.dumps({"retry": 2}), encoding="utf-8")
             third = advance(harness, run, draft_path=draft)
             self.assertEqual(third["state"], "BLOCKED")
@@ -740,8 +933,40 @@ class ToolFailRecoveryTests(unittest.TestCase):
                 milestone_specs=[
                     {
                         "id": "source_ready",
+                        "success": "The source result is available.",
+                        "output_contract": "source_ready_v1",
+                        "outputs": [
+                            {
+                                "id": "result",
+                                "name": "Source result",
+                                "kind": "json",
+                                "cardinality": "one",
+                                "required": True,
+                            }
+                        ],
+                        "output_schema_object": {
+                            "type": "object",
+                            "additionalProperties": True,
+                        },
                         "tools": ["hash_bind"],
+                        "flowsteps": [
+                            {
+                                "id": "hash_bind",
+                                "tool": "hash_bind@1.0.0",
+                            }
+                        ],
                         "on_tool_fail": "BLOCKED",
+                        "execution": {
+                            "candidate_executor": {
+                                "ref": "handler.rigid_v1.source_ready@3.1.0"
+                            },
+                            "tool_bindings": [
+                                {
+                                    "tool": "hash_bind",
+                                    "ref": "hash_bind@1.0.0",
+                                }
+                            ],
+                        },
                     }
                 ],
             )

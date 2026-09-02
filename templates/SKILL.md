@@ -1,32 +1,23 @@
 ---
 name: __SKILL_NAME__
-description: M8M product skill. Milestones consume the previous output schema. FlowSteps inside each milestone run project tools. Use the $m8m-harness-builder driver.
+description: M8M 3.1 product skill whose closed native source compiles into a displayable, executable milestone workflow.
 ---
 
 # __SKILL_NAME__
 
-Write this file only after `validate_harness.py` returns PASS.
+Invoke `$__SKILL_NAME__` through `agents/openai.yaml`. The canvas owns the
+closed public workflow contracts and each node owns one exact
+`agents/<milestone>.yaml` plus `references/<milestone>.md` Gem.
 
-Do not execute steps from markdown. Run the driver:
+Canonical `flow.yaml` is generated review output, never a second authoring
+surface. A generated tool remains `BUILD_REQUIRED` and `non_runnable` until
+implemented and validated.
+Use generated `planning/m8m-flowchart.md` only as the human-readable canvas
+projection; it never replaces `agents/openai.yaml` as graph authority.
 
-```powershell
-python __BUILDER_ROOT__\scripts\run_flow.py --skill-dir <this-skill> --run-dir <run-dir> --request <request.json>
-```
-
-Or `python scripts/run.py --run-dir <run-dir> --request <request.json>`.
-
-If the driver returns `ACTION_REQUIRED`, perform only the frozen `model_request`,
-write that JSON to `draft_path`, then advance again with `--draft`.
-
-The skill instruction is
-`<codebase>/flowsteps/__FLOW_ID__/planning/flowstep-instruction.md`.
-Tools live in that codebase tree, not in this C: skill.
-
-Every step is `class: tool` or `class: intelligence`. Fetch, crop, hash,
-render, and package are tools. Do not write those on the fly.
-
-for is a ledger milestone (walk items until remaining=0). judge (if)
-retries until the worker receipt is ok. The worker is a repo tool.
-
-Generated files go in `address.write_to` inside the run session folder.
-Do not invent a folder structure.
+Execution is owned by this codebase. `scripts/m8m_run.py` points only to the
+codebase launcher at `flowsteps/flows/<flow_id>/launch.py`; that launcher
+selects a digest-addressed runtime release installed beside the harness. It
+must never import or invoke `m8m-harness-builder`. This skill never pushes,
+publishes, deploys, or activates anything. Builder 2.x run folders are
+untrusted import evidence.

@@ -9,6 +9,7 @@ from support import EXAMPLE, optional_product_repo, optional_sample_skill
 
 from audit_harness import (
     AUDIT_SCHEMA,
+    _is_action_step,
     audit_harness,
     audit_skill,
     main,
@@ -33,6 +34,18 @@ REQUIRED_HEADINGS = (
 
 
 class AuditHarnessTests(unittest.TestCase):
+    def test_external_state_suffixes_remain_milestones(self) -> None:
+        for step_id in ("base_written", "case_io_complete"):
+            self.assertFalse(
+                _is_action_step(
+                    {
+                        "id": step_id,
+                        "intelligence": "none",
+                        "handler": f"milestones/{step_id}/assemble.py",
+                    }
+                )
+            )
+
     def test_article_repo_flow_is_milestone_toolbox(self) -> None:
         product = optional_product_repo()
         if product is None:
@@ -105,8 +118,232 @@ class AuditHarnessTests(unittest.TestCase):
                 )
             )
 
+    def test_external_milestone_requires_phase_journal(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "repo" / "flowsteps" / "flows" / "publish_v1"
+            root.mkdir(parents=True)
+            (root / "flow.yaml").write_text(
+                "\n".join(
+                    [
+                        "schema: flowstep_flow_v4",
+                        "flow_id: publish_v1",
+                        "version: 1",
+                        "milestones:",
+                        "  - id: published_live",
+                        "    success: Live readback passes.",
+                        "    output_contract: published_v1",
+                        "    output_schema: output.schema.json",
+                        "    outputs:",
+                        "      - {id: result, name: Published, kind: json, cardinality: one, required: true}",
+                        "    handler: assemble.py",
+                        "    inputs: {request: user.request}",
+                        "    tools: [publish_case]",
+                        "    intelligence: none",
+                        "    on_tool_fail: retryable",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            report = audit_harness(root)
+            self.assertTrue(
+                any(
+                    item["severity"] == "P0" and "phase_journal" in item["note"]
+                    for item in report["findings"]
+                )
+            )
+
+    def test_v4_blank_expectation_fields_are_p0_findings(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "repo" / "flowsteps" / "flows" / "blank_v1"
+            root.mkdir(parents=True)
+            (root / "flow.yaml").write_text(
+                "\n".join(
+                    [
+                        "schema: flowstep_flow_v4",
+                        "flow_id: blank_v1",
+                        "version: 1",
+                        "milestones:",
+                        "  - id: result_ready",
+                        "    success: '   '",
+                        "    output_contract: '   '",
+                        "    output_schema: '   '",
+                        "    outputs:",
+                        "      - {id: '   ', name: '   ', kind: json, cardinality: one, required: true}",
+                        "    handler: assemble.py",
+                        "    intelligence: none",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            report = audit_harness(root)
+            notes = {item["note"] for item in report["findings"] if item["severity"] == "P0"}
+            self.assertIn("missing milestone success goal", notes)
+            self.assertIn("missing non-blank output_contract", notes)
+            self.assertIn("missing non-blank output_schema", notes)
+            self.assertIn("outputs[0].id must be non-blank", notes)
+            self.assertIn("outputs[0].name must be non-blank", notes)
+
+    def test_v4_output_schema_must_close_root_and_outputs_object(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "repo" / "flowsteps" / "flows" / "open_schema_v1"
+            root.mkdir(parents=True)
+            (root / "flow.yaml").write_text(
+                "\n".join(
+                    [
+                        "schema: flowstep_flow_v4",
+                        "flow_id: open_schema_v1",
+                        "version: 1",
+                        "milestones:",
+                        "  - id: result_ready",
+                        "    success: A result is ready.",
+                        "    output_contract: result_v1",
+                        "    output_schema: output.schema.json",
+                        "    outputs:",
+                        "      - {id: result, name: Result, kind: json, cardinality: one, required: true}",
+                        "    handler: assemble.py",
+                        "    intelligence: none",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            (root / "output.schema.json").write_text(
+                json.dumps(
+                    {
+                        "type": "object",
+                        "properties": {
+                            "outputs": {
+                                "type": "object",
+                                "properties": {"result": {"type": "object"}},
+                                "required": ["result"],
+                            }
+                        },
+                        "required": ["outputs"],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            report = audit_harness(root)
+            notes = {item["note"] for item in report["findings"] if item["severity"] == "P0"}
+            self.assertIn(
+                "output_schema root must be an object with additionalProperties: false",
+                notes,
+            )
+            self.assertIn(
+                "output_schema outputs object must set additionalProperties: false",
+                notes,
+            )
+
+    def test_v4_audit_enforces_exact_judge_binding_shape(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "repo" / "flowsteps" / "flows" / "judge_shape_v1"
+            root.mkdir(parents=True)
+            common = [
+                "schema: flowstep_flow_v4",
+                "flow_id: judge_shape_v1",
+                "version: 1",
+                "milestones:",
+                "  - id: result_ready",
+                "    success: A result is ready.",
+                "    output_contract: result_v1",
+                "    output_schema: output.schema.json",
+                "    outputs:",
+                "      - {id: result, name: Result, kind: json, cardinality: one, required: true}",
+                "    handler: assemble.py",
+                "    intelligence: none",
+            ]
+            (root / "flow.yaml").write_text(
+                "\n".join(common + ["    loop: judge"]) + "\n",
+                encoding="utf-8",
+            )
+            report = audit_harness(root)
+            self.assertTrue(
+                any(
+                    item["severity"] == "P0"
+                    and "loop=judge requires closed" in item["note"]
+                    for item in report["findings"]
+                )
+            )
+            (root / "flow.yaml").write_text(
+                "\n".join(
+                    common
+                    + [
+                        "    loop: none",
+                        "    worker: result_judge@1.0.0",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            report = audit_harness(root)
+            self.assertTrue(
+                any(
+                    item["severity"] == "P0"
+                    and "loop=none forbids" in item["note"]
+                    for item in report["findings"]
+                )
+            )
 
 class AuditWorkerTests(unittest.TestCase):
+    def test_external_writer_script_outside_linked_flow_is_p0(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / "repo"
+            flow = repo / "flowsteps" / "flows" / "sample_v1"
+            skill = repo / "skill"
+            (skill / "scripts").mkdir(parents=True)
+            flow.mkdir(parents=True)
+            (skill / "SKILL.md").write_text(
+                "---\nname: sample-skill\ndescription: Sample publisher.\n---\n\n"
+                f"Live flow: `{flow}`\n",
+                encoding="utf-8",
+            )
+            writer = skill / "scripts" / "publish_case.py"
+            writer.write_text(
+                "def run(client):\n    return client.post('/commit', {})\n",
+                encoding="utf-8",
+            )
+            (flow / "flow.yaml").write_text(
+                "\n".join(
+                    [
+                        "schema: flowstep_flow_v4",
+                        "flow_id: sample_v1",
+                        "version: 1",
+                        "milestones:",
+                        "  - id: source_ready",
+                        "    success: Source is ready.",
+                        "    output_contract: source_v1",
+                        "    output_schema: output.schema.json",
+                        "    outputs:",
+                        "      - {id: result, name: Source, kind: json, cardinality: one, required: true}",
+                        "    handler: assemble.py",
+                        "    inputs: {request: user.request}",
+                        "    tools: [hash_bind]",
+                        "    intelligence: none",
+                        "    on_tool_fail: BLOCKED",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            report = audit_skill(skill)
+            self.assertTrue(
+                any(
+                    item["severity"] == "P0" and "outside the linked M8M flow" in item["note"]
+                    for item in report["grade"]["findings"]
+                )
+            )
+            writer.write_text(
+                'M8M_EXTERNAL_SIDE_EFFECT_OWNER = "other-writer-skill"\n'
+                "def run(client):\n    return client.post('/commit', {})\n",
+                encoding="utf-8",
+            )
+            report = audit_skill(skill)
+            self.assertFalse(
+                any("outside the linked M8M flow" in item["note"] for item in report["grade"]["findings"])
+            )
+
     def test_text_pipeline_audit_writes_required_sections(self) -> None:
         report = audit_skill(EXAMPLE)
         self.assertEqual(report["schema"], AUDIT_SCHEMA)
@@ -251,7 +488,18 @@ class AuditWorkerTests(unittest.TestCase):
             self.skipTest("sample case-io flow not in M8M_PRODUCT_REPO")
         report = audit_skill(skill)
         ids = [item["id"] for item in report["proposed_milestones"]]
-        self.assertEqual(ids, ["live_case_bound", "package_admitted", "write_verified"])
+        for expected in (
+            "request_ready",
+            "package_admitted",
+            "restyle_with_floor_base_written",
+            "restyle_with_floor_floor_written",
+            "restyle_with_floor_dna_written",
+            "restyle_with_floor_facts_written",
+            "restyle_with_floor_final_verified",
+            "restyle_without_floor_final_verified",
+            "case_io_complete",
+        ):
+            self.assertIn(expected, ids)
         self.assertIn("existing-case-patch-worker", {item["id"] for item in report["current_tools"]})
 
     def test_article_skill_keeps_six_milestones(self) -> None:

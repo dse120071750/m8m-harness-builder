@@ -1,0 +1,57 @@
+schema: m8m_milestone_agent_v1
+agent_id: skill_shipped
+role: milestone
+success: Local installation is bound to the exact portable workflow source bundle and its linked staged harness report, contains only declared validated members, and records no push, publication, deployment, or activation.
+output_contract: m8m_builder_installation_receipt_v2
+output_schema: contracts/m8m_builder_installation_receipt_v2.schema.json
+outputs:
+  - id: installation_receipt
+    name: Validated local installation receipt
+    kind: json
+    cardinality: one
+    required: true
+handler: scripts/m8m_build_steps.py
+test: flowsteps/tools/install_local_skill/tests/test_tool.py
+input_schema: contracts/m8m_builder_input_v1.schema.json
+inputs:
+  request: user.request
+  workflow_source_bundle:
+    from: flow_generated.m8m_builder_source_bundle_v2
+    output: workflow_source_bundle
+  staged_harness:
+    from: flow_generated.m8m_builder_source_bundle_v2
+    output: staged_harness
+  validation:
+    from: harness_validated.m8m_builder_validation_report_v2
+    output: validation_report
+  workflow_package:
+    from: harness_validated.m8m_builder_validation_report_v2
+    output: workflow_package
+flowsteps:
+  - id: install_local_skill
+    tool: install_local_skill
+tools:
+  - install_local_skill
+execution:
+  candidate_executor:
+    ref: handler.m8m_build_v2.skill_shipped@3.1.0
+  tool_bindings:
+    - tool: install_local_skill
+      ref: install_local_skill@3.1.0
+intelligence: none
+on_tool_fail: BLOCKED
+loop: none
+gem: references/skill_shipped.md
+read_paths:
+  - references/skill_shipped.md
+observer:
+  title: Local skill installation
+  summary: Verify the portable source bundle and its staged harness report, then copy only validated staged members locally.
+  actions:
+    - flowstep_id: install_local_skill
+      title: Install the verified skill locally
+      summary: Recheck both generation outputs and the bound validation before copying only declared staged members.
+  outputs:
+    - output_id: installation_receipt
+      title: Validated local installation receipt
+      summary: A required JSON receipt for the bounded local copy operation.

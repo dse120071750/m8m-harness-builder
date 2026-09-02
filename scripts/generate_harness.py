@@ -1,13 +1,16 @@
-"""Generate a v4 milestone flow with named, judge-approved chosen outputs."""
+"""Generate a v4 milestone flow with named admitted, optionally judged outputs."""
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import sys
 from pathlib import Path
 from typing import Any
+
+import yaml
 
 from flowstep_instruction import write_instruction
 from flowstep_runtime import (
@@ -18,26 +21,27 @@ from flowstep_runtime import (
     find_flow_path,
     harness_output_schema,
     is_under_home_skills,
+    local_tool_package_name,
     load_flow,
     normalize_flowsteps,
     resolve_harness_dir,
+    runtime_package_name,
     step_class_hint,
 )
-from flowstep_tools import tools_root
+from flowstep_tools import tools_root, validate_library_tool
 from m8m_flowchart import flowchart_path
 from teaching_contracts import copy_teaching_contracts, write_milestone_gems
-from humanize_chart import success_line
-from milestone_pair import pair_milestone
 from toolbox_plan import build_toolbox_plan, existing_toolbox_ids
 from tool_vs_intelligence import from_audit as classification_from_audit
 from tool_vs_intelligence import from_flow as classification_from_flow
 from tool_vs_intelligence import render_markdown as render_classification_markdown
 
 
-BUILDER_ROOT = Path(__file__).resolve().parents[1]
+BUILDER_ROOT = Path(os.path.abspath(str(Path(__file__).parent.parent)))
 TEMPLATE_DIR = BUILDER_ROOT / "templates"
 DEFAULT_BUILDER = BUILDER_ROOT
 SEEDS_DIR = BUILDER_ROOT / "seeds"
+BUILD_REQUIRED_MARKER = "BUILD_REQUIRED"
 
 
 def _render(template_name: str, mapping: dict[str, str]) -> str:
@@ -209,10 +213,11 @@ def _copy_seed(codebase: Path, tool_id: str, *, overwrite: bool) -> list[str]:
 def generate_tool(codebase: Path, tool_id: str, *, overwrite: bool = False) -> dict[str, Any]:
     if not STEP_ID_RE.match(tool_id):
         raise FlowError(f"invalid tool id: {tool_id}")
-    root = Path(codebase).resolve()
+    root = Path(os.path.abspath(str(codebase)))
     if is_under_home_skills(root):
         raise FlowError("--codebase must be the repo root, not ~/.codex/skills or ~/.claude/skills")
     dest = tools_root(root) / tool_id
+    had_implementation = dest.is_dir() and any(dest.iterdir())
     dest.mkdir(parents=True, exist_ok=True)
     if seed_path(tool_id) is not None:
         written = _copy_seed(root, tool_id, overwrite=overwrite)
@@ -223,29 +228,64 @@ def generate_tool(codebase: Path, tool_id: str, *, overwrite: bool = False) -> d
             "tool_dir": str(dest),
             "seeded": True,
             "origin": "existing",
+            "runnable": True,
+            "non_runnable": False,
             "written": written,
         }
+    marker = dest / BUILD_REQUIRED_MARKER
+    if had_implementation and not marker.is_file():
+        try:
+            existing_blockers = validate_library_tool(root, tool_id)
+        except Exception as exc:  # noqa: BLE001 - report malformed local work as a build blocker
+            existing_blockers = [f"{tool_id}: tool validation failed: {exc}"]
+        if not existing_blockers:
+            return {
+                "schema": "flowstep_tool_generate_v3",
+                "status": "PASS",
+                "tool_id": tool_id,
+                "tool_dir": str(dest),
+                "seeded": False,
+                "origin": "local-implementation",
+                "runnable": True,
+                "non_runnable": False,
+                "blockers": [],
+                "note": "preserved an existing validated local implementation",
+                "written": [],
+            }
+    marker_written: list[str] = []
+    if overwrite or not had_implementation:
+        if _write_text(
+            marker,
+            "BUILD_REQUIRED: implement and test this generated tool, then remove this marker.\n",
+            overwrite=True,
+        ):
+            marker_written.append(str(marker))
     if tool_id.endswith("_judge"):
         written = _write_judge_package(dest, tool_id, overwrite=overwrite)
-        return {
-            "schema": "flowstep_tool_generate_v3",
-            "status": "PASS",
-            "tool_id": tool_id,
-            "tool_dir": str(dest),
-            "seeded": False,
-            "origin": "generate-new",
-            "note": "generate-new judge stub; it reads the gem and writes {ok}",
-            "written": written,
-        }
-    written = _write_package(dest, tool_id, previous_id=None, overwrite=overwrite)
+        note = "generated judge scaffold; implement its milestone-specific approval rule"
+    else:
+        written = _write_package(dest, tool_id, previous_id=None, overwrite=overwrite)
+        note = "generated tool scaffold; implement its public contract and tests"
+    written.extend(marker_written)
+    blockers: list[str] = []
+    if marker.is_file():
+        blockers.append(f"{tool_id}: {BUILD_REQUIRED_MARKER} marker is present")
+    try:
+        blockers.extend(validate_library_tool(root, tool_id))
+    except Exception as exc:  # noqa: BLE001 - malformed scaffolds are build blockers
+        blockers.append(f"{tool_id}: tool validation failed: {exc}")
+    runnable = not blockers
     return {
         "schema": "flowstep_tool_generate_v3",
-        "status": "PASS",
+        "status": "PASS" if runnable else "BUILD_REQUIRED",
         "tool_id": tool_id,
         "tool_dir": str(dest),
         "seeded": False,
-        "origin": "generate-new",
-        "note": "generate-new stub; fill in tool.py later",
+        "origin": "local-implementation" if runnable else "generate-new",
+        "runnable": runnable,
+        "non_runnable": not runnable,
+        "blockers": blockers,
+        "note": note,
         "written": written,
     }
 
@@ -274,15 +314,115 @@ def _output_declarations(spec: dict[str, Any], *, milestone_id: str, kind: str) 
                 }
             )
         return outputs
-    return [
-        {
-            "id": "result",
-            "name": milestone_id.replace("_", " ").title(),
-            "kind": kind,
-            "cardinality": "one",
-            "required": True,
-        }
-    ]
+    raise FlowError(
+        f"{milestone_id}: named outputs are BUILD_REQUIRED; the builder will not invent a result port"
+    )
+
+
+def _milestone_authoring_gaps(
+    milestones: list[str],
+    milestone_specs: list[dict[str, Any]] | None,
+) -> dict[str, list[str]]:
+    """Find expectation authority that cannot be inferred by a generator."""
+
+    by_id = {
+        str(item.get("id") or ""): item
+        for item in (milestone_specs or [])
+        if isinstance(item, dict)
+    }
+    gaps: dict[str, list[str]] = {}
+    for milestone_id in milestones:
+        spec = by_id.get(milestone_id)
+        missing: list[str] = []
+        if spec is None:
+            missing.extend(
+                [
+                    "success",
+                    "output_contract",
+                    "output_schema",
+                    "outputs",
+                    "execution.candidate_executor",
+                ]
+            )
+        else:
+            if not str(spec.get("success") or "").strip():
+                missing.append("success")
+            if not str(spec.get("output_contract") or "").strip():
+                missing.append("output_contract")
+            if not isinstance(spec.get("output_schema_object"), dict):
+                missing.append("output_schema")
+            if not isinstance(spec.get("outputs"), list) or not spec.get("outputs"):
+                missing.append("outputs")
+            execution = spec.get("execution")
+            candidate_executor = (
+                execution.get("candidate_executor")
+                if isinstance(execution, dict)
+                else None
+            )
+            if not isinstance(candidate_executor, dict) or not str(
+                candidate_executor.get("ref") or ""
+            ).strip():
+                missing.append("execution.candidate_executor")
+            flowsteps = [
+                item
+                for item in spec.get("flowsteps") or []
+                if isinstance(item, dict)
+            ]
+            bindings = (
+                execution.get("tool_bindings")
+                if isinstance(execution, dict)
+                else None
+            )
+            binding_map = {
+                str(item.get("tool") or ""): str(item.get("ref") or "")
+                for item in bindings or []
+                if isinstance(item, dict)
+            }
+            expected_ids = [str(item.get("id") or "") for item in flowsteps]
+            if list(binding_map) != expected_ids or any(
+                binding_map.get(str(item.get("id") or ""))
+                != str(item.get("tool") or "")
+                for item in flowsteps
+            ):
+                missing.append("execution.tool_bindings")
+            else:
+                try:
+                    for item in flowsteps:
+                        local_tool_package_name(
+                            str(item.get("tool") or ""),
+                            label=f"{milestone_id}.{item.get('id')}.tool",
+                        )
+                except FlowError:
+                    missing.append("versioned_flowstep_tools")
+            control = (
+                spec.get("branch")
+                if isinstance(spec.get("branch"), dict)
+                else spec.get("cycle")
+                if isinstance(spec.get("cycle"), dict)
+                else None
+            )
+            if isinstance(control, dict):
+                control_worker = str(control.get("worker") or "").strip()
+                if (
+                    not control_worker
+                    or control_worker not in expected_ids
+                    or not binding_map.get(control_worker)
+                ):
+                    missing.append("execution.control_worker_binding")
+            if str(spec.get("loop") or "none") == "judge":
+                judge = execution.get("judge") if isinstance(execution, dict) else None
+                if not isinstance(judge, dict) or not str(judge.get("ref") or "").strip():
+                    missing.append("execution.judge")
+                for field in ("worker", "judge_abi", "receipt_schema", "max_attempts"):
+                    if not spec.get(field):
+                        missing.append(field)
+            if spec.get("_judge_inferred"):
+                missing.append("authored_judge_authority")
+            if spec.get("_expectation_authored") is False:
+                missing.append("authored_expectation_authority")
+        if missing:
+            gaps[milestone_id] = list(dict.fromkeys(missing))
+    return gaps
 
 
 def _candidate_output_schema(
@@ -331,8 +471,7 @@ def _candidate_output_schema(
                 "additionalProperties": False,
                 "required": required,
                 "properties": properties,
-            },
-            "receipt": {"type": "object"},
+            }
         },
     }
 
@@ -363,7 +502,32 @@ def generate_v4_flow(
     unknown = sorted(intel - set(milestones))
     if unknown:
         raise FlowError(f"--intelligence names unknown milestones: {unknown}")
+    authoring_gaps = _milestone_authoring_gaps(milestones, milestone_specs)
+    if authoring_gaps:
+        notes = [
+            f"{milestone_id}: BUILD_REQUIRED missing " + ", ".join(fields)
+            for milestone_id, fields in authoring_gaps.items()
+        ]
+        notes.append(
+            "No canonical flow.yaml was emitted because success, contract, schema, and named outputs are authored authority."
+        )
+        return {
+            "schema": "flowstep_harness_generate_v4",
+            "status": "BUILD_REQUIRED",
+            "runnable": False,
+            "non_runnable": True,
+            "build_required_tools": [],
+            "build_required_milestones": authoring_gaps,
+            "harness_dir": str(harness),
+            "codebase": str(Path(os.path.abspath(str(codebase)))),
+            "flow_id": flow_id,
+            "milestones": milestones,
+            "tools": sorted(set(tools or [])),
+            "written": [],
+            "notes": notes,
+        }
     notes: list[str] = []
+    tool_generation: dict[str, dict[str, Any]] = {}
     for mid in milestones:
         if not STEP_ID_RE.match(mid):
             raise FlowError(f"invalid milestone id: {mid}")
@@ -373,24 +537,38 @@ def generate_v4_flow(
             notes.append(f"{mid}: name looks like a tool; still drawn — consider it a FlowStep under a checkpoint")
     listed_tools: set[str] = set(tools or [])
     for spec in milestone_specs or []:
-        for tool_id in spec.get("tools") or []:
-            if tool_id:
-                listed_tools.add(str(tool_id))
+        execution = spec.get("execution") if isinstance(spec.get("execution"), dict) else {}
+        for binding in execution.get("tool_bindings") or []:
+            if not isinstance(binding, dict) or not binding.get("ref"):
+                continue
+            try:
+                listed_tools.add(
+                    local_tool_package_name(
+                        str(binding["ref"]),
+                        label=(
+                            f"{spec.get('id')}.execution.tool_bindings"
+                            f"[{binding.get('tool')}].ref"
+                        ),
+                    )
+                )
+            except FlowError:
+                continue
         if spec.get("worker"):
-            listed_tools.add(str(spec["worker"]))
+            worker = str(spec["worker"])
+            listed_tools.add(
+                runtime_package_name(worker, label=f"{spec.get('id')}.worker")
+                if spec.get("judge_abi")
+                else worker
+            )
         if spec.get("branch"):
             listed_tools.add(str((spec.get("branch") or {}).get("worker") or spec.get("worker") or "branch_receipt"))
         if spec.get("cycle"):
             listed_tools.add(str((spec.get("cycle") or {}).get("worker") or spec.get("worker") or "cycle_receipt"))
-        for raw in spec.get("flowsteps") or []:
-            if isinstance(raw, dict) and raw.get("tool"):
-                listed_tools.add(str(raw["tool"]))
-            elif isinstance(raw, str) and raw:
-                listed_tools.add(raw)
     for tool_id in sorted(listed_tools):
         tool_result = generate_tool(codebase, tool_id, overwrite=overwrite)
-        if not tool_result.get("seeded"):
-            notes.append(f"{tool_id}: generate-new stub")
+        tool_generation[tool_id] = tool_result
+        if tool_result.get("status") != "PASS":
+            notes.append(f"{tool_id}: BUILD_REQUIRED non-runnable scaffold")
     spec_by_id = {str(item["id"]): item for item in (milestone_specs or [])}
     items = []
     previous = None
@@ -428,7 +606,7 @@ def generate_v4_flow(
         on_tool_fail = spec.get("on_tool_fail") or "need_model"
         item: dict[str, Any] = {
             "id": mid,
-            "output_contract": spec.get("output_contract") or f"{mid}_v1",
+            "output_contract": spec["output_contract"],
             "output_schema": f"schemas/{mid}_v1.json",
             "input_schema": f"milestones/{mid}/input.schema.json",
             "flowsteps": flowsteps,
@@ -444,6 +622,10 @@ def generate_v4_flow(
             "_is_last": is_last,
             "_asset_kind": asset_kind,
         }
+        if isinstance(spec.get("execution"), dict):
+            item["execution"] = json.loads(
+                json.dumps(spec["execution"], ensure_ascii=False, allow_nan=False)
+            )
         if isinstance(spec.get("cache"), dict):
             item["cache"] = dict(spec["cache"])
         if spec.get("inputs"):
@@ -489,6 +671,8 @@ def generate_v4_flow(
             item["loop"] = loop
             item["worker"] = spec.get("worker") or ("ledger_receipt" if loop == "for" else "")
             item["receipt_schema"] = spec.get("receipt_schema") or f"schemas/{mid}_receipt_v1.json"
+            if loop == "judge":
+                item["judge_abi"] = spec["judge_abi"]
             if spec.get("max_attempts"):
                 item["max_attempts"] = spec["max_attempts"]
         if spec.get("ledger") or spec.get("foreach"):
@@ -527,14 +711,15 @@ def generate_v4_flow(
                 item["tools"].append(item["worker"])
         if spec.get("on_cycle"):
             item["on_cycle"] = spec["on_cycle"]
-        item["success"] = str(spec.get("success") or "").strip() or success_line(item)
-        if spec.get("gem"):
-            item["gem"] = spec["gem"]
-        pair_milestone(item)
+        item["success"] = str(spec["success"]).strip()
+        item["gem"] = str(spec.get("gem") or f"references/{mid}.md")
         worker = str(item.get("worker") or "")
-        if worker.endswith("_judge"):
-            if worker not in item["tools"]:
-                item["tools"].append(worker)
+        if worker and item.get("judge_abi"):
+            if worker in item["tools"]:
+                item["tools"].remove(worker)
+            item["flowsteps"] = [
+                row for row in item["flowsteps"] if str(row.get("tool") or "") != worker
+            ]
         elif worker and item["tools"] and worker not in item["tools"]:
             item["tools"].append(worker)
         elif worker in {"hash_bind", "schema_validate"} and not item["tools"]:
@@ -543,9 +728,15 @@ def generate_v4_flow(
     for item in items:
         worker = str(item.get("worker") or "")
         if worker:
-            tool_result = generate_tool(codebase, worker, overwrite=overwrite)
-            if not tool_result.get("seeded"):
-                notes.append(f"{worker}: generate-new stub")
+            package_name = (
+                runtime_package_name(worker, label=f"{item['id']}.worker")
+                if item.get("judge_abi")
+                else worker
+            )
+            tool_result = generate_tool(codebase, package_name, overwrite=overwrite)
+            tool_generation[package_name] = tool_result
+            if tool_result.get("status") != "PASS":
+                notes.append(f"{worker}: BUILD_REQUIRED non-runnable scaffold")
         previous = item
     flow = {
         "schema": "flowstep_flow_v4",
@@ -566,6 +757,14 @@ def generate_v4_flow(
     flow_public["milestones"] = public_items
     if _write_text(flow_path, yaml_dump_v4(flow_public), overwrite=overwrite or not flow_path.exists()):
         created.append(str(flow_path))
+    unpackaged_marker = harness / "BUILD_REQUIRED_RUNTIME"
+    unpackaged_marker.write_text(
+        "This piecemeal scaffold has no codebase-owned runtime release. "
+        "Run the complete m8m-harness-builder workflow before execution.\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    created.append(str(unpackaged_marker))
     previous_id = None
     for item in items:
         mid = item["id"]
@@ -599,11 +798,21 @@ def generate_v4_flow(
             "STEP_ID": mid,
             "TOOLS_JSON": json.dumps(item["tools"]),
             "FLOWSTEPS_JSON": json.dumps(item.get("flowsteps") or []),
+            "TOOL_BINDINGS_JSON": json.dumps(
+                (item.get("execution") or {}).get("tool_bindings") or []
+            ),
             "INTELLIGENCE": item["intelligence"],
             "IS_LAST": "True" if item["_is_last"] else "False",
             "ASSET_KIND": item.get("_asset_kind") or "file",
             "OUTPUTS_JSON": json.dumps(item.get("outputs") or []),
             "WORKER": item.get("worker") or "",
+            "CONTROL_KIND": (
+                "branch"
+                if item.get("branch")
+                else "cycle"
+                if item.get("cycle")
+                else ""
+            ),
             "LOOP": item.get("loop") or "none",
         }
         assemble = harness / "milestones" / mid / "assemble.py"
@@ -627,21 +836,44 @@ def generate_v4_flow(
                 created.append(str(item_schema_path))
         if item.get("loop") in {"for", "judge"}:
             receipt_path = harness / str(item.get("receipt_schema") or f"schemas/{mid}_receipt_v1.json")
-            receipt_obj = {
-                "$schema": "https://json-schema.org/draft/2020-12/schema",
-                "$id": f"{mid}.receipt.schema.json",
-                "type": "object",
-                "additionalProperties": False,
-                "required": ["ok"],
-                "properties": {
-                    "ok": {"type": "boolean"},
-                    "remaining": {"type": "integer", "minimum": 0},
-                    "done": {"type": "integer", "minimum": 0},
-                    "code": {"type": "string"},
-                    "attempt": {"type": "integer", "minimum": 1},
-                    "item_id": {"type": "string"},
-                },
-            }
+            if item.get("loop") == "judge":
+                receipt_obj = {
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "$id": f"{mid}.judge-result.schema.json",
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["decision", "reasons", "blockers"],
+                    "properties": {
+                        "decision": {"enum": ["PASS", "RETRY", "BLOCKED"]},
+                        "reasons": {
+                            "type": "array",
+                            "minItems": 1,
+                            "maxItems": 8,
+                            "items": {"type": "string", "minLength": 1, "maxLength": 512},
+                        },
+                        "blockers": {
+                            "type": "array",
+                            "maxItems": 8,
+                            "items": {"type": "string", "minLength": 1, "maxLength": 512},
+                        },
+                    },
+                }
+            else:
+                receipt_obj = {
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "$id": f"{mid}.receipt.schema.json",
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["ok"],
+                    "properties": {
+                        "ok": {"type": "boolean"},
+                        "remaining": {"type": "integer", "minimum": 0},
+                        "done": {"type": "integer", "minimum": 0},
+                        "code": {"type": "string"},
+                        "attempt": {"type": "integer", "minimum": 1},
+                        "item_id": {"type": "string"},
+                    },
+                }
             if _write_json(receipt_path, receipt_obj, overwrite=overwrite):
                 created.append(str(receipt_path))
         if item.get("branch"):
@@ -709,11 +941,39 @@ def generate_v4_flow(
     table_path.parent.mkdir(parents=True, exist_ok=True)
     table_path.write_text(json.dumps(table, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     created.append(str(table_path))
+    build_required_tools = sorted(
+        tool_id
+        for tool_id, result in tool_generation.items()
+        if result.get("status") != "PASS" or result.get("non_runnable")
+    )
+    build_required_handlers = []
+    for item in items:
+        handler_path = harness / str(item["handler"])
+        source = handler_path.read_text(encoding="utf-8") if handler_path.is_file() else ""
+        if (
+            'M8M_BUILD_STATUS = "BUILD_REQUIRED"' in source
+            or "M8M_BUILD_STATUS = 'BUILD_REQUIRED'" in source
+            or "M8M_RUNNABLE = False" in source
+        ):
+            build_required_handlers.append(str(item["id"]))
+    # Piecemeal generation never packages the codebase-owned runtime release.
+    # Even a fully implemented tool/handler scaffold is therefore not an
+    # executable product harness until the canonical five-milestone Builder
+    # workflow validates and installs it.
+    build_required_runtime = True
+    build_required = bool(
+        build_required_runtime or build_required_tools or build_required_handlers
+    )
     return {
         "schema": "flowstep_harness_generate_v4",
-        "status": "PASS",
+        "status": "BUILD_REQUIRED" if build_required else "PASS",
+        "runnable": not build_required,
+        "non_runnable": build_required,
+        "build_required_tools": build_required_tools,
+        "build_required_handlers": build_required_handlers,
+        "build_required_runtime": build_required_runtime,
         "harness_dir": str(harness),
-        "codebase": str(Path(codebase).resolve()),
+        "codebase": str(Path(os.path.abspath(str(codebase)))),
         "flow_id": flow_id,
         "milestones": milestones,
         "tools": sorted({tool for item in items for tool in item["tools"]}),
@@ -722,8 +982,20 @@ def generate_v4_flow(
         "flowchart_jpg": str(jpg),
         "tool_vs_intelligence": table,
         "tool_vs_intelligence_path": str(table_path),
+        "tool_generation": [tool_generation[key] for key in sorted(tool_generation)],
         "written": created,
-        "notes": notes,
+        "notes": [
+            *notes,
+            "Piecemeal generation has no codebase-owned runtime release; complete the canonical Builder workflow before execution.",
+            *(
+                [
+                    "Generated candidate handlers are BUILD_REQUIRED/non-runnable until each "
+                    "milestone-specific implementation returns explicit named outputs."
+                ]
+                if build_required_handlers
+                else []
+            ),
+        ],
     }
 
 
@@ -732,7 +1004,7 @@ generate_v3_flow = generate_v4_flow
 
 
 def load_audit_report(path: Path) -> dict[str, Any]:
-    path = path.resolve()
+    path = Path(os.path.abspath(str(path)))
     if path.suffix.lower() == ".json":
         return json.loads(path.read_text(encoding="utf-8"))
     sibling = path.with_name("flowstep-audit.json") if path.name.endswith(".md") else path.with_suffix(".json")
@@ -749,7 +1021,7 @@ def write_product_skill(
     overwrite: bool = False,
     classification: dict[str, Any] | None = None,
 ) -> str:
-    root = Path(codebase).resolve()
+    root = Path(os.path.abspath(str(codebase)))
     table = render_classification_markdown(classification or {"rows": []})
     mapping = {
         "SKILL_NAME": skill_name,
@@ -821,9 +1093,27 @@ def generate_from_audit(
         if row.get("tool_id"):
             tool_ids.append(str(row["tool_id"]))
     for item in proposed:
-        for tool_id in item.get("tools") or []:
-            tool_ids.append(str(tool_id))
-        if item.get("worker"):
+        bindings = (
+            (item.get("execution") or {}).get("tool_bindings") or []
+            if isinstance(item.get("execution"), dict)
+            else []
+        )
+        if bindings:
+            for binding in bindings:
+                if isinstance(binding, dict) and binding.get("ref"):
+                    tool_ids.append(
+                        local_tool_package_name(
+                            str(binding["ref"]),
+                            label=(
+                                f"{item.get('id')}.execution.tool_bindings"
+                                f"[{binding.get('tool')}].ref"
+                            ),
+                        )
+                    )
+        else:
+            for tool_id in item.get("tools") or []:
+                tool_ids.append(str(tool_id))
+        if item.get("worker") and not item.get("judge_abi"):
             tool_ids.append(str(item["worker"]))
         if isinstance(item.get("branch"), dict) and item["branch"].get("worker"):
             tool_ids.append(str(item["branch"]["worker"]))
@@ -831,7 +1121,7 @@ def generate_from_audit(
     for tool_id in tool_ids:
         if tool_id and tool_id not in unique_tools:
             unique_tools.append(tool_id)
-    toolbox = [generate_tool(codebase, tool_id, overwrite=overwrite) for tool_id in unique_tools]
+    toolbox: list[dict[str, Any]] = []
     specs = []
     for item in proposed:
         tools = [str(tool_id) for tool_id in (item.get("tools") or []) if tool_id]
@@ -849,6 +1139,7 @@ def generate_from_audit(
             "loop": item.get("loop"),
             "ledger": item.get("ledger"),
             "worker": item.get("worker"),
+            "judge_abi": item.get("judge_abi"),
             "receipt_schema": item.get("receipt_schema"),
             "max_attempts": item.get("max_attempts"),
             "foreach": item.get("foreach"),
@@ -858,9 +1149,12 @@ def generate_from_audit(
             "on_cycle": item.get("on_cycle"),
             "on_tool_fail": item.get("on_tool_fail"),
             "success": item.get("success"),
+            "_expectation_authored": (audit.get("grade") or {}).get("flow_schema") == "flowstep_flow_v4",
+            "_judge_inferred": bool(item.get("_judge_inferred")),
             "gem": item.get("gem"),
             "max_model_attempts": item.get("max_model_attempts"),
             "cache": item.get("cache") if isinstance(item.get("cache"), dict) else None,
+            "execution": item.get("execution") if isinstance(item.get("execution"), dict) else None,
             "_gate_schemas": {
                 str(edge["when"]): edge["schema"]
                 for edge in (item.get("next") or [])
@@ -878,6 +1172,14 @@ def generate_from_audit(
         toolbox_plan=audit.get("toolbox_plan")
         or build_toolbox_plan(proposed, audit.get("python_standardization") or []),
     )
+    if result.get("build_required_milestones"):
+        result["toolbox"] = []
+        result["skill_name"] = name
+        return result
+    toolbox = [
+        generate_tool(codebase, tool_id, overwrite=overwrite)
+        for tool_id in unique_tools
+    ]
     _copy_missing_control_schemas(Path(result["harness_dir"]), audit)
     copied_teaching = copy_teaching_contracts(
         Path(result["harness_dir"]), audit, overwrite=overwrite
@@ -904,11 +1206,30 @@ def generate_from_audit(
     result["skill_name"] = name
     result["tool_vs_intelligence"] = table
     result["tool_vs_intelligence_path"] = str(table_path)
-    result["status"] = "PASS"
-    unseeded = [item["tool_id"] for item in toolbox if not item.get("seeded")]
-    if unseeded:
+    build_required = sorted(
+        {
+            *(
+                str(item["tool_id"])
+                for item in toolbox
+                if item.get("status") != "PASS" or item.get("non_runnable")
+            ),
+            *(str(item) for item in result.get("build_required_tools") or []),
+        }
+    )
+    build_required_handlers = sorted(
+        str(item) for item in result.get("build_required_handlers") or []
+    )
+    has_build_required = bool(build_required or build_required_handlers)
+    result["status"] = "BUILD_REQUIRED" if has_build_required else "PASS"
+    result["runnable"] = not has_build_required
+    result["non_runnable"] = has_build_required
+    result["build_required_tools"] = build_required
+    if build_required:
         result.setdefault("notes", [])
-        result["notes"].append("generate-new stubs (fill in later): " + ", ".join(unseeded))
+        result["notes"].append(
+            "BUILD_REQUIRED non-runnable tools (implement before validation): "
+            + ", ".join(build_required)
+        )
     return result
 
 
@@ -937,6 +1258,15 @@ def yaml_dump_v4(flow: dict[str, Any]) -> str:
             lines.append(f"    success: {json.dumps(str(item['success']), ensure_ascii=False)}")
         if item.get("gem"):
             lines.append(f"    gem: {item['gem']}")
+        if isinstance(item.get("execution"), dict):
+            lines.append("    execution:")
+            execution_yaml = yaml.safe_dump(
+                item["execution"],
+                sort_keys=False,
+                allow_unicode=True,
+                default_flow_style=False,
+            ).rstrip()
+            lines.extend(f"      {line}" for line in execution_yaml.splitlines())
         if isinstance(item.get("cache"), dict):
             cache = item["cache"]
             lines.append("    cache:")
@@ -985,6 +1315,8 @@ def yaml_dump_v4(flow: dict[str, Any]) -> str:
             lines.append(f"    loop: {item['loop']}")
             if item.get("worker"):
                 lines.append(f"    worker: {item['worker']}")
+            if item.get("judge_abi"):
+                lines.append(f"    judge_abi: {item['judge_abi']}")
             if item.get("receipt_schema"):
                 lines.append(f"    receipt_schema: {item['receipt_schema']}")
             if item.get("max_attempts"):
@@ -1048,7 +1380,7 @@ def generate_harness(
 ) -> dict[str, Any]:
     raise FlowError(
         "legacy v2 harness generation was removed; regenerate with "
-        "m8m-harness-builder 2.0 using --from-audit or --milestone"
+        "m8m-harness-builder 3.1 using --from-audit or --milestone"
     )
 
 
@@ -1110,7 +1442,7 @@ def main(argv: list[str] | None = None) -> int:
         elif args.steps:
             raise FlowError(
                 "v2 --step generation was removed; regenerate with "
-                "m8m-harness-builder 2.0 using --from-audit or --milestone"
+                "m8m-harness-builder 3.1 using --from-audit or --milestone"
             )
         else:
             raise FlowError("pass --from-audit, --milestone, or --tool")

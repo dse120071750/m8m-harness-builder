@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from flowstep_runtime import local_tool_package_name
+
 TABLE_SCHEMA = "tool_vs_intelligence_table_v1"
 TOOL_TEST = "same input → same action; fixture-testable; receipt not opinion; junior can implement from schema"
 INTEL_TEST = "fails at least one of the four tests; no fixture without a model"
@@ -133,7 +135,27 @@ def from_audit(audit: dict[str, Any]) -> dict[str, Any]:
                     "milestone": mid,
                 }
             )
-        for tool_id in item.get("tools") or []:
+        bindings = (
+            (item.get("execution") or {}).get("tool_bindings") or []
+            if isinstance(item.get("execution"), dict)
+            else []
+        )
+        packages = (
+            [
+                local_tool_package_name(
+                    str(binding.get("ref") or ""),
+                    label=(
+                        f"{mid}.execution.tool_bindings"
+                        f"[{binding.get('tool')}].ref"
+                    ),
+                )
+                for binding in bindings
+                if isinstance(binding, dict) and binding.get("ref")
+            ]
+            if bindings
+            else [str(tool_id) for tool_id in item.get("tools") or [] if tool_id]
+        )
+        for tool_id in packages:
             rows.append(
                 {
                     "id": str(tool_id),
@@ -189,7 +211,27 @@ def from_flow(flow: dict[str, Any]) -> dict[str, Any]:
                     "milestone": mid,
                 }
             )
-        for tool_id in step.get("tools") or []:
+        bindings = (
+            (step.get("execution") or {}).get("tool_bindings") or []
+            if isinstance(step.get("execution"), dict)
+            else []
+        )
+        packages = (
+            [
+                local_tool_package_name(
+                    str(binding.get("ref") or ""),
+                    label=(
+                        f"{mid}.execution.tool_bindings"
+                        f"[{binding.get('tool')}].ref"
+                    ),
+                )
+                for binding in bindings
+                if isinstance(binding, dict) and binding.get("ref")
+            ]
+            if bindings
+            else [str(item) for item in step.get("tools") or [] if item]
+        )
+        for tool_id in packages:
             rows.append(
                 {
                     "id": str(tool_id),
@@ -200,7 +242,7 @@ def from_flow(flow: dict[str, Any]) -> dict[str, Any]:
                     "destination": f"flowsteps/tools/{tool_id}/",
                 }
             )
-        if not step.get("tools") and (intel in {None, "none"}):
+        if not packages and (intel in {None, "none"}):
             klass = "tool" if step.get("class") != "intelligence" else "intelligence"
             rows.append(
                 {

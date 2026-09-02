@@ -1,13 +1,30 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
-  "additionalProperties": true,
+  "additionalProperties": false,
+  "required": ["schema", "milestone_id", "inputs", "candidate", "control"],
   "properties": {
-    "recommended_cycle": { "enum": ["pass", "fail"] },
-    "cycle": { "enum": ["pass", "fail"] },
-    "row": { "type": "string" },
-    "ledger_row": { "type": "string" },
-    "reason": { "type": "string" },
-    "draft": { "type": "object" }
+    "schema": { "const": "m8m.cycle_control_request.v1" },
+    "milestone_id": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+    "inputs": { "type": "object" },
+    "candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["outputs"],
+      "properties": { "outputs": { "type": "object" } }
+    },
+    "control": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "cycle_id", "row", "round", "max_rounds", "pass_rule"],
+      "properties": {
+        "kind": { "const": "cycle" },
+        "cycle_id": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+        "row": { "type": "string" },
+        "round": { "type": "integer", "minimum": 1 },
+        "max_rounds": { "type": "integer", "minimum": 1 },
+        "pass_rule": { "type": "string" }
+      }
+    }
   }
 }

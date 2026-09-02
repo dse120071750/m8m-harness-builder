@@ -1,17 +1,17 @@
 # M8M flowchart: text_pipeline_v1
 
 One chart. Milestone to milestone. Each node declares named output ports.
-FlowSteps refine candidates; the judge chooses one bundle. Without chosen-output.json the node is BLOCKED.
+FlowSteps refine candidates; admission always runs and an authored judge is optional. Without chosen-output.json the node is BLOCKED.
 Run state is authoritative. Optional cross-run cache only supplies a candidate for the current judge.
 Execution context is isolated: a fresh run does not inherit orchestration chat or prior-row memory.
 FlowSteps inside a node are a guide (one preferred tool each), not a compulsory path.
-cycle = wrap over a frozen ledger (pass preserves, fail purges). judge = retry until worker ok.
+cycle = wrap over a frozen ledger (pass preserves, fail purges). judge = optional semantic retry until PASS.
 The JPEG is the audit copy: portable, human-labeled, native to review.
 It is rewritten on generate and on every step edit.
 
 - flow_id: `text_pipeline_v1`
 - source: `edit`
-- updated_at: 2026-08-24T14:57:10Z
+- updated_at: 2026-09-02T12:54:59Z
 
 ## Chart
 
@@ -56,7 +56,7 @@ develop this tool; a stub is a successful sketch.
 
 Sequence inside each milestone. Prefer the named tool. Optional.
 If it fails, recover like a normal agent. The prompt for that step is the
-matching section of the milestone gem. A judge-approved chosen output bundle is still compulsory.
+matching section of the milestone gem. Admission is compulsory; semantic judgment is optional.
 
 | Milestone | # | FlowStep | What it means | Preferred tool | Gem section |
 | --- | ---: | --- | --- | --- | --- |
@@ -66,13 +66,13 @@ matching section of the milestone gem. A judge-approved chosen output bundle is 
 
 None. No cycle wrap. Freeze a ledger first, then wrap milestones.
 
-## Judge (until ok)
+## Optional semantic judge
 
-None. No judge-until-ok milestone.
+None. These milestones commit after structural admission with zero judge calls.
 
 ## Branch (after the milestone)
 
 None. No branch after a milestone.
 
-Proceed only when the worker receipt is `ok: true` and the current named outputs are committed as `chosen-output.json`.
-Branch is after that PASS. The model drafts; the tool writes `branch`.
+Proceed only after structural admission and, when declared, semantic judge `PASS`; then commit current named outputs as `chosen-output.json`.
+Branch is after that commit. Candidate handlers never write control; the runtime-owned control call writes `branch`.

@@ -18,13 +18,16 @@ from flowstep_runtime import (
     cache_receipt_schema_path,
     candidate_cache_schema_path,
     canonical_json,
+    local_tool_package_name,
     read_json,
+    runtime_package_name,
     sha256_bytes,
     sha256_file,
     utc_now,
     validate_against_schema,
     write_json,
 )
+from session_layout import infer_harness_root_from_run
 
 
 CACHE_SCHEMA = "m8m_candidate_cache_entry_v1"
@@ -70,7 +73,16 @@ def _project_root(skill_dir: Path) -> Path:
     return root
 
 
-def cache_root(skill_dir: Path, flow: dict[str, Any]) -> Path:
+def cache_root(
+    skill_dir: Path,
+    flow: dict[str, Any],
+    *,
+    runtime_root: Path | None = None,
+) -> Path:
+    if runtime_root is not None:
+        return Path(runtime_root).resolve() / "cache" / "v1" / str(flow["flow_id"])
+    # Legacy run contexts did not freeze a host-local cache root. Keep their
+    # exact project cache only for explicit resume; new runs always pass one.
     return _project_root(skill_dir) / "flowsteps" / "cache" / "v1" / str(flow["flow_id"])
 
 
@@ -222,7 +234,25 @@ def milestone_implementation_fingerprint(skill_dir: Path, step: dict[str, Any]) 
         if path is not None:
             files[f"milestone:{field}:{path.name}"] = sha256_file(path)
     project = _project_root(skill_dir)
-    for tool_id in sorted({str(item) for item in (step.get("tools") or []) if item}):
+    implementation_tools = {
+        local_tool_package_name(
+            str(item.get("ref") or ""),
+            label=(
+                f"{step.get('id')}.execution.tool_bindings"
+                f"[{item.get('tool')}].ref"
+            ),
+        )
+        for item in (step.get("execution") or {}).get("tool_bindings") or []
+        if isinstance(item, dict) and item.get("ref")
+    }
+    if step.get("worker"):
+        worker = str(step["worker"])
+        implementation_tools.add(
+            runtime_package_name(worker, label=f"{step.get('id')}.worker")
+            if step.get("judge_abi")
+            else worker
+        )
+    for tool_id in sorted(implementation_tools):
         tool_root = project / "flowsteps" / "tools" / tool_id
         if not tool_root.is_dir():
             continue
@@ -237,8 +267,10 @@ def milestone_implementation_fingerprint(skill_dir: Path, step: dict[str, Any]) 
         "flowsteps": step.get("flowsteps") or [],
         "tools": step.get("tools") or [],
         "worker": step.get("worker"),
+        "judge_abi": step.get("judge_abi"),
         "model": step.get("model"),
         "intelligence": step.get("intelligence"),
+        "execution": step.get("execution") or {},
     }
     return sha256_bytes(canonical_json({"definition": definition, "files": files}))
 
@@ -277,8 +309,20 @@ def _key_info(
     }
 
 
-def _entry_dir(skill_dir: Path, flow: dict[str, Any], step: dict[str, Any], info: dict[str, str]) -> Path:
-    return cache_root(skill_dir, flow) / info["namespace_sha256"] / str(step["id"]) / info["cache_key_sha256"]
+def _entry_dir(
+    skill_dir: Path,
+    flow: dict[str, Any],
+    step: dict[str, Any],
+    info: dict[str, str],
+    *,
+    cache_root_path: Path | None = None,
+) -> Path:
+    base = (
+        Path(cache_root_path).resolve() / "v1" / str(flow["flow_id"])
+        if cache_root_path is not None
+        else cache_root(skill_dir, flow)
+    )
+    return base / info["namespace_sha256"] / str(step["id"]) / info["cache_key_sha256"]
 
 
 def _validate_entry_structure(
@@ -422,12 +466,15 @@ def prepare_candidate_cache(
     *,
     mode: str,
     namespace: str,
+    cache_root_path: Path | None = None,
     bypass_read: bool = False,
     row_id: str | None = None,
 ) -> dict[str, Any]:
     policy = step.get("cache") if isinstance(step.get("cache"), dict) else None
     if not policy:
         return {"enabled": False, "candidate": None}
+    if cache_root_path is None:
+        cache_root_path = infer_harness_root_from_run(run_dir) / "cache"
     mode = validate_cache_mode(mode)
     scope = cache_work_dir(run_dir, step, row_id)
     scope.mkdir(parents=True, exist_ok=True)
@@ -465,7 +512,13 @@ def prepare_candidate_cache(
         recorded = _write_receipt(run_dir, step, "disabled", row_id=row_id, details={"reason": "run cache mode is off"})
         return {"enabled": True, "candidate": None, "receipt": recorded, "row_id": row_id}
     info = _key_info(skill_dir, flow, step, input_data, namespace, row_id)
-    entry_dir = _entry_dir(skill_dir, flow, step, info)
+    entry_dir = _entry_dir(
+        skill_dir,
+        flow,
+        step,
+        info,
+        cache_root_path=cache_root_path,
+    )
     info_path = scope / "cache-key.json"
     write_json(info_path, {**info, "entry": str(entry_dir.resolve())}, overwrite=True)
     base = {**info, "entry": str(entry_dir.resolve())}

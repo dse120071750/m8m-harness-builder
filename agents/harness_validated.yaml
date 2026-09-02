@@ -1,0 +1,59 @@
+schema: m8m_milestone_agent_v1
+agent_id: harness_validated
+role: milestone
+success: Fail-closed validation proves the exact portable workflow source bundle and its linked staged harness report are runnable, contract-valid, complete, and contain no generated implementation sketch; one deterministic M8M transport package is emitted from those exact validated bytes.
+output_contract: m8m_builder_validation_report_v2
+output_schema: contracts/m8m_builder_validation_report_v2.schema.json
+outputs:
+  - id: validation_report
+    name: Fail-closed validation report
+    kind: json
+    cardinality: one
+    required: true
+  - id: workflow_package
+    name: Importable M8M workflow package
+    kind: file
+    cardinality: one
+    required: true
+handler: scripts/m8m_build_steps.py
+test: flowsteps/tools/validate_harness/tests/test_tool.py
+input_schema: contracts/m8m_builder_input_v1.schema.json
+inputs:
+  request: user.request
+  workflow_source_bundle:
+    from: flow_generated.m8m_builder_source_bundle_v2
+    output: workflow_source_bundle
+  staged_harness:
+    from: flow_generated.m8m_builder_source_bundle_v2
+    output: staged_harness
+flowsteps:
+  - id: validate_source_bundle
+    tool: validate_harness
+tools:
+  - validate_source_bundle
+execution:
+  candidate_executor:
+    ref: handler.m8m_build_v2.harness_validated@3.1.0
+  tool_bindings:
+    - tool: validate_source_bundle
+      ref: validate_harness@3.1.0
+intelligence: none
+on_tool_fail: BLOCKED
+loop: none
+gem: references/harness_validated.md
+read_paths:
+  - references/harness_validated.md
+observer:
+  title: Harness validation
+  summary: Prove that the exact portable source bundle and its linked staged harness are complete, runnable, and free of implementation sketches.
+  actions:
+    - flowstep_id: validate_source_bundle
+      title: Validate the staged harness
+      summary: Run fail-closed checks against both the portable source bundle and its linked staged harness report.
+  outputs:
+    - output_id: validation_report
+      title: Fail-closed validation report
+      summary: A required JSON PASS report bound to the staged source bundle.
+    - output_id: workflow_package
+      title: Importable M8M workflow package
+      summary: A deterministic transport archive containing the exact source bundle and every declared resource byte.

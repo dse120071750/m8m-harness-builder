@@ -30,6 +30,10 @@ They agree on three rules we adopt at the **milestone** grain:
    milestone candidate. The judge commits its declared named outputs;
    intelligence does not pick the next **milestone**.
 
+Tool work is in-process product code. It is not a subprocess, shell command,
+secondary workflow, or runtime-folder discovery routine. Read
+`flowstep-development.md` for the closed execution and approval boundary.
+
 Read this file once per new flow. Do not restate the catalog in `SKILL.md`.
 
 ## The test (use this, not vibes)
@@ -141,11 +145,20 @@ path; add a model only when a fixture test cannot express the work.
 - Skipping required named outputs because a tool failed or a model “approved”
 - Marking fetch, crop, hash, render, package, or schema-validate as the
   *first* move of a FlowStep when a repo tool exists
-- Intelligence choosing the next **milestone** or writing `ok` on a for/judge receipt (the worker tool owns that)
+- Candidate intelligence choosing the next **milestone**, returning a semantic judge decision, or writing dedicated branch/cycle control fields (the separate worker owns those)
+- Implementing a product FlowStep with `subprocess`, `Popen`, `os.system`,
+  `os.popen`, PowerShell, batch, shell, or another workflow/CLI launcher
+- Recursive discovery over the execution root, including `rg`,
+  `Get-ChildItem -Recurse`, `os.walk`, `Path.rglob`, or globstar traversal
+- Hand-writing chosen manifests, runtime judge/cache receipts, progress,
+  roster, or ledger state from a FlowStep
+- Separate stability-fetch or receipt-generation commands, or post-approval
+  FlowSteps other than one declared in-process `finalize`
 
 Not forbidden: recovering like a normal agent **inside** a milestone after
-the preferred tool failed, as long as the declared candidate schema PASSes
-and the milestone judge commits a chosen output bundle.
+the preferred tool failed, as long as the candidate passes structural
+admission and, when declared, the separate semantic judge returns PASS before
+the runtime commits a chosen output bundle.
 
 ## How the highest-star systems strengthen us
 

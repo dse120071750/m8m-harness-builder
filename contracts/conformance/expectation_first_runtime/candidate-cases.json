@@ -1,0 +1,161 @@
+{
+  "schema": "m8m.expectation_first_runtime_cases.v1",
+  "valid_candidates": {
+    "source_ready": {
+      "outputs": {
+        "source": {
+          "number": 7
+        }
+      }
+    },
+    "result_ready": {
+      "outputs": {
+        "result": {
+          "source_value": 7,
+          "approved": true
+        }
+      }
+    }
+  },
+  "expected_expectations": {
+    "source_ready": {
+      "schema": "m8m.milestone_expectation.v1",
+      "milestone_id": "source_ready",
+      "success": "One source record is structurally admitted.",
+      "output_contract": "m8m.parity_source.v1",
+      "output_schema_ref": "schemas/source.output.schema.json",
+      "outputs": [
+        {
+          "id": "source",
+          "name": "Admitted source",
+          "kind": "json",
+          "cardinality": "one",
+          "required": true
+        }
+      ]
+    },
+    "result_ready": {
+      "schema": "m8m.milestone_expectation.v1",
+      "milestone_id": "result_ready",
+      "success": "One result preserves the admitted source value and is approved for downstream use.",
+      "output_contract": "m8m.parity_result.v1",
+      "output_schema_ref": "schemas/result.output.schema.json",
+      "outputs": [
+        {
+          "id": "result",
+          "name": "Approved result",
+          "kind": "json",
+          "cardinality": "one",
+          "required": true
+        }
+      ]
+    }
+  },
+  "admission_cases": [
+    {
+      "id": "valid_result",
+      "milestone_id": "result_ready",
+      "candidate": {
+        "outputs": {
+          "result": {
+            "source_value": 7,
+            "approved": true
+          }
+        }
+      },
+      "admitted": true
+    },
+    {
+      "id": "candidate_control_is_forbidden",
+      "milestone_id": "result_ready",
+      "candidate": {
+        "outputs": {
+          "result": {
+            "source_value": 7,
+            "approved": true
+          }
+        },
+        "receipt": {
+          "decision": "PASS"
+        }
+      },
+      "admitted": false
+    },
+    {
+      "id": "required_output_is_missing",
+      "milestone_id": "result_ready",
+      "candidate": {
+        "outputs": {}
+      },
+      "admitted": false
+    }
+  ],
+  "judge_decision": {
+    "decision": "PASS",
+    "reasons": [
+      "The result preserves source value 7 and satisfies the milestone expectation."
+    ],
+    "blockers": []
+  },
+  "expected_structural_receipt": {
+    "schema": "m8m.milestone_judge_receipt.v1",
+    "milestone_id": "source_ready",
+    "attempt": 1,
+    "decision": "PASS",
+    "success_rule": "One source record is structurally admitted.",
+    "judge_ref": "m8m_structural_admission@1.0.0",
+    "reasons": [
+      "Candidate passed the declared output and schema admission; no semantic judge was invoked."
+    ],
+    "blockers": [],
+    "max_attempts": 1
+  },
+  "expected_semantic_receipt": {
+    "schema": "m8m.milestone_judge_receipt.v1",
+    "milestone_id": "result_ready",
+    "attempt": 1,
+    "decision": "PASS",
+    "success_rule": "One result preserves the admitted source value and is approved for downstream use.",
+    "judge_ref": "result_ready_judge@1.0.0",
+    "reasons": [
+      "The result preserves source value 7 and satisfies the milestone expectation."
+    ],
+    "blockers": [],
+    "max_attempts": 1
+  },
+  "expected_judge_request": {
+    "schema": "m8m.milestone_judge_request.v1",
+    "milestone_id": "result_ready",
+    "attempt": 1,
+    "max_attempts": 1,
+    "expectation": {
+      "schema": "m8m.milestone_expectation.v1",
+      "milestone_id": "result_ready",
+      "success": "One result preserves the admitted source value and is approved for downstream use.",
+      "output_contract": "m8m.parity_result.v1",
+      "output_schema_ref": "schemas/result.output.schema.json",
+      "outputs": [
+        {
+          "id": "result",
+          "name": "Approved result",
+          "kind": "json",
+          "cardinality": "one",
+          "required": true
+        }
+      ]
+    },
+    "inputs": {
+      "source": {
+        "number": 7
+      }
+    },
+    "candidate": {
+      "outputs": {
+        "result": {
+          "source_value": 7,
+          "approved": true
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "m8m_builder_result_v3.schema.json",
+  "title": "M8M Builder 3 terminal result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["installation_receipt"],
+  "properties": {
+    "installation_receipt": {
+      "$ref": "m8m_builder_installation_receipt_v2.schema.json#/properties/outputs/properties/installation_receipt"
+    }
+  }
+}

@@ -1,4 +1,4 @@
-"""Milestone gem: rule of success for the judge, plus one prompt section per FlowStep."""
+"""Milestone Gem rendering: one guidance section per FlowStep; YAML owns success."""
 
 from __future__ import annotations
 

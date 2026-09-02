@@ -1,4 +1,4 @@
-"""One gem + one worker per milestone. Judge loop only when exist ≠ good."""
+"""Proposal-only Gem and worker hints; canonical authority must be authored."""
 
 from __future__ import annotations
 
@@ -63,7 +63,7 @@ def is_wait_milestone(item: dict[str, Any]) -> bool:
 
 
 def pair_milestone(item: dict[str, Any]) -> dict[str, Any]:
-    """Attach gem + worker. Do not wrap cycle/branch in judge. Do not default ok_receipt."""
+    """Attach non-authoritative review hints; canonical compilation rejects inferred judges."""
     mid = str(item.get("id") or "").strip()
     if not mid:
         return item
@@ -84,15 +84,16 @@ def pair_milestone(item: dict[str, Any]) -> dict[str, Any]:
     current = str(item.get("worker") or "").strip()
     if needs_judge(item):
         item["loop"] = "judge"
+        item["judge_abi"] = "m8m_milestone_judge_v1"
         if is_wait_milestone(item) and str(item.get("intelligence") or "none") == "none":
             item["intelligence"] = "completion"
             item.setdefault(
                 "model_justification",
-                "pause until a usable reply is in the slot; judge reads the gem",
+                "pause until a usable reply is in the slot; FlowSteps read the Gem and any judge reads the derived expectation",
             )
-        if not current or current in GENERIC_JUDGE:
-            gate = pick_gate_tool(item.get("tools") or [])
-            item["worker"] = gate or judge_worker_id(mid)
+        candidate_tools = {str(tool) for tool in item.get("tools") or []}
+        if not current or current in GENERIC_JUDGE or current in candidate_tools:
+            item["worker"] = judge_worker_id(mid)
         item["receipt_schema"] = item.get("receipt_schema") or f"schemas/{mid}_receipt_v1.json"
         return item
 

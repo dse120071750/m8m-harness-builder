@@ -14,14 +14,29 @@ _spec.loader.exec_module(tool)
 
 
 class ToolTests(unittest.TestCase):
-    def test_draft_ok_writes_receipt(self) -> None:
-        out = tool.run({"gem_path": "references/box.md", "draft": {"ok": True}})
-        self.assertTrue(out["ok"])
-        self.assertEqual(out["code"], "pass")
+    def test_scaffold_requires_implementation_after_typed_request(self) -> None:
+        request = {
+            "schema": "m8m.milestone_judge_request.v1",
+            "milestone_id": "example_ready",
+            "attempt": 1,
+            "max_attempts": 2,
+            "expectation": {
+                "schema": "m8m.milestone_expectation.v1",
+                "milestone_id": "example_ready",
+                "success": "The example is accepted.",
+                "output_contract": "example_v1",
+                "output_schema_ref": "schemas/example.json",
+                "outputs": [],
+            },
+            "inputs": {},
+            "candidate": {"outputs": {}},
+        }
+        with self.assertRaises(NotImplementedError):
+            tool.run(request)
 
-    def test_missing_ok_raises(self) -> None:
+    def test_candidate_control_flag_is_not_a_judge_request(self) -> None:
         with self.assertRaises(ValueError):
-            tool.run({"gem_path": "references/box.md", "outputs": {"image": {"path": "a.png"}}})
+            tool.run({"accepted": True, "candidate": {"outputs": {}}})
 
 
 if __name__ == "__main__":

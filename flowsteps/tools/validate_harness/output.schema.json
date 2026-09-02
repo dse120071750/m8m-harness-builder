@@ -1,0 +1,4 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$ref": "../../../contracts/m8m_builder_validation_report_v2.schema.json"
+}

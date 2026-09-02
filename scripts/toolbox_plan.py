@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from flowstep_runtime import local_tool_package_name
 from flowstep_tools import infer_codebase, tools_root
 
 
@@ -98,7 +99,26 @@ def build_toolbox_plan(
         mid = str(item.get("id") or "")
         if not mid:
             continue
-        tools = [str(tool) for tool in (item.get("tools") or []) if tool]
+        bindings = (
+            (item.get("execution") or {}).get("tool_bindings") or []
+            if isinstance(item.get("execution"), dict)
+            else []
+        )
+        tools = (
+            [
+                local_tool_package_name(
+                    str(binding.get("ref") or ""),
+                    label=(
+                        f"{mid}.execution.tool_bindings"
+                        f"[{binding.get('tool')}].ref"
+                    ),
+                )
+                for binding in bindings
+                if isinstance(binding, dict) and binding.get("ref")
+            ]
+            if bindings
+            else [str(tool) for tool in (item.get("tools") or []) if tool]
+        )
         existing_cell: list[str] = []
         promote_cell: list[dict[str, str]] = []
         generate_cell: list[str] = []

@@ -1,0 +1,2 @@
+contracts/flowstep_flow_v4.schema.json text eol=lf
+contracts/conformance/flowstep_flow_v4/**/*.json text eol=lf

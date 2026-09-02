@@ -1,0 +1,252 @@
+schema: flowstep_flow_v4
+flow_id: m8m_build_v2
+version: 2
+context_policy: isolated
+max_run_seconds: 3600
+artifact_root: artifacts
+implementation_dependencies:
+  - scripts/m8m_build_steps.py
+  - scripts/audit_harness.py
+  - scripts/migrate_skill_source.py
+  - scripts/candidate_cache.py
+  - scripts/execution_identity.py
+  - scripts/flowstep_instruction.py
+  - scripts/flowstep_runtime.py
+  - scripts/run_flow.py
+  - scripts/runtime_release.py
+  - scripts/flowchart_jpg.py
+  - scripts/generate_harness.py
+  - scripts/flowstep_tools.py
+  - scripts/gem_text.py
+  - scripts/humanize_chart.py
+  - scripts/m8m_flowchart.py
+  - scripts/milestone_expectation.py
+  - scripts/milestone_pair.py
+  - scripts/package_archive.py
+  - scripts/schema_gate.py
+  - scripts/session_layout.py
+  - scripts/skill_source.py
+  - scripts/source_bundle.py
+  - scripts/teaching_contracts.py
+  - scripts/toolbox_plan.py
+  - scripts/tool_vs_intelligence.py
+  - scripts/validate_harness.py
+  - templates/run.py
+  - templates/codebase-launcher.py
+  - contracts/file_ref_v2.schema.json
+  - contracts/flow_sequence_action_v2.schema.json
+  - contracts/flowstep_flow_v4.schema.json
+  - contracts/flowstep_output_v3.schema.json
+  - contracts/flowstep_skill_audit_v1.schema.json
+  - contracts/m8m_cache_receipt_v1.schema.json
+  - contracts/m8m_candidate_cache_entry_v1.schema.json
+  - contracts/m8m_chosen_output_v1.schema.json
+  - contracts/m8m_context_capsule_v1.schema.json
+  - contracts/m8m_contract_bundle_lock_v1.schema.json
+  - contracts/m8m_goal_ledger_v1.schema.json
+  - contracts/m8m_milestone_judge_receipt_v1.schema.json
+  - contracts/m8m_milestone_expectation_v1.schema.json
+  - contracts/m8m_milestone_judge_request_v1.schema.json
+  - contracts/m8m_run_context_v2.schema.json
+  - contracts/m8m_run_storage_contract_v1.schema.json
+  - contracts/m8m_runtime_lock_v1.schema.json
+  - contracts/m8m_runtime_release_v1.schema.json
+  - contracts/m8m_skill_canvas_v1.schema.json
+  - contracts/m8m_milestone_agent_v1.schema.json
+  - contracts/m8m_source_asset_manifest_v1.schema.json
+  - contracts/m8m_workflow_source_bundle_proof_v1.schema.json
+  - contracts/m8m_workflow_source_bundle_v1.schema.json
+  - contracts/m8m_workflow_package_archive_v1.schema.json
+  - contracts/m8m_builder_input_v1.schema.json
+  - contracts/m8m_builder_request_v3.schema.json
+  - contracts/m8m_builder_configuration_v1.schema.json
+  - contracts/m8m_builder_result_v3.schema.json
+  - contracts/m8m_builder_source_audit_v2.schema.json
+  - contracts/m8m_builder_toolbox_manifest_v2.schema.json
+  - contracts/m8m_builder_source_bundle_v2.schema.json
+  - contracts/m8m_builder_validation_report_v2.schema.json
+  - contracts/m8m_builder_installation_receipt_v2.schema.json
+  - contracts/tool_vs_intelligence_table_v1.schema.json
+milestones:
+  - id: audit_complete
+    success: The source skill has a closed Builder 3 audit that classifies its form, ownership, and runtime, and identifies every milestone, output port, resource, implementation requirement, profile, capability, and migration blocker.
+    output_contract: m8m_builder_source_audit_v2
+    output_schema: contracts/m8m_builder_source_audit_v2.schema.json
+    outputs:
+      - id: source_audit
+        name: Closed source audit
+        kind: json
+        cardinality: one
+        required: true
+    handler: scripts/m8m_build_steps.py
+    test: flowsteps/tools/audit_skill/tests/test_tool.py
+    input_schema: contracts/m8m_builder_input_v1.schema.json
+    inputs:
+      request: user.request
+    flowsteps:
+      - id: audit_source
+        tool: audit_skill@3.1.0
+    tools: [audit_source]
+    execution:
+      candidate_executor:
+        ref: handler.m8m_build_v2.audit_complete@3.1.0
+      tool_bindings:
+        - tool: audit_source
+          ref: audit_skill@3.1.0
+    intelligence: none
+    loop: none
+    on_tool_fail: BLOCKED
+    gem: references/audit_complete.md
+  - id: toolbox_ready
+    success: The staged toolbox manifest identifies every implementation as runnable or explicitly BUILD_REQUIRED and lists every ordered staged member.
+    output_contract: m8m_builder_toolbox_manifest_v2
+    output_schema: contracts/m8m_builder_toolbox_manifest_v2.schema.json
+    outputs:
+      - id: toolbox_manifest
+        name: Toolbox requirement manifest
+        kind: json
+        cardinality: one
+        required: true
+    handler: scripts/m8m_build_steps.py
+    test: flowsteps/tools/install_toolbox/tests/test_tool.py
+    input_schema: contracts/m8m_builder_input_v1.schema.json
+    inputs:
+      request: user.request
+      audit:
+        from: audit_complete.m8m_builder_source_audit_v2
+        output: source_audit
+    flowsteps:
+      - id: construct_toolbox
+        tool: install_toolbox@3.1.0
+    tools: [construct_toolbox]
+    execution:
+      candidate_executor:
+        ref: handler.m8m_build_v2.toolbox_ready@3.1.0
+      tool_bindings:
+        - tool: construct_toolbox
+          ref: install_toolbox@3.1.0
+    intelligence: none
+    loop: none
+    on_tool_fail: BLOCKED
+    gem: references/toolbox_ready.md
+  - id: flow_generated
+    success: The exact portable Builder 3 workflow source bundle and its run-local staged harness report are both produced, with canonical workflow, resources, schemas, binding requirements, observer data, and derived review files staged only inside this run.
+    output_contract: m8m_builder_source_bundle_v2
+    output_schema: contracts/m8m_builder_source_bundle_v2.schema.json
+    outputs:
+      - id: workflow_source_bundle
+        name: Portable workflow source bundle
+        kind: json
+        cardinality: one
+        required: true
+      - id: staged_harness
+        name: Run-local staged harness report
+        kind: json
+        cardinality: one
+        required: true
+    handler: scripts/m8m_build_steps.py
+    test: flowsteps/tools/generate_from_audit/tests/test_tool.py
+    input_schema: contracts/m8m_builder_input_v1.schema.json
+    inputs:
+      request: user.request
+      audit:
+        from: audit_complete.m8m_builder_source_audit_v2
+        output: source_audit
+      toolbox:
+        from: toolbox_ready.m8m_builder_toolbox_manifest_v2
+        output: toolbox_manifest
+    flowsteps:
+      - id: compile_source_bundle
+        tool: generate_from_audit@3.1.0
+    tools: [compile_source_bundle]
+    execution:
+      candidate_executor:
+        ref: handler.m8m_build_v2.flow_generated@3.1.0
+      tool_bindings:
+        - tool: compile_source_bundle
+          ref: generate_from_audit@3.1.0
+    intelligence: none
+    loop: none
+    on_tool_fail: BLOCKED
+    gem: references/flow_generated.md
+  - id: harness_validated
+    success: Fail-closed validation proves the exact portable workflow source bundle and its linked staged harness report are runnable, contract-valid, complete, and contain no generated implementation sketch; one deterministic M8M transport package is emitted from those exact validated bytes.
+    output_contract: m8m_builder_validation_report_v2
+    output_schema: contracts/m8m_builder_validation_report_v2.schema.json
+    outputs:
+      - id: validation_report
+        name: Fail-closed validation report
+        kind: json
+        cardinality: one
+        required: true
+      - id: workflow_package
+        name: Importable M8M workflow package
+        kind: file
+        cardinality: one
+        required: true
+    handler: scripts/m8m_build_steps.py
+    test: flowsteps/tools/validate_harness/tests/test_tool.py
+    input_schema: contracts/m8m_builder_input_v1.schema.json
+    inputs:
+      request: user.request
+      workflow_source_bundle:
+        from: flow_generated.m8m_builder_source_bundle_v2
+        output: workflow_source_bundle
+      staged_harness:
+        from: flow_generated.m8m_builder_source_bundle_v2
+        output: staged_harness
+    flowsteps:
+      - id: validate_source_bundle
+        tool: validate_harness@3.1.0
+    tools: [validate_source_bundle]
+    execution:
+      candidate_executor:
+        ref: handler.m8m_build_v2.harness_validated@3.1.0
+      tool_bindings:
+        - tool: validate_source_bundle
+          ref: validate_harness@3.1.0
+    intelligence: none
+    loop: none
+    on_tool_fail: BLOCKED
+    gem: references/harness_validated.md
+  - id: skill_shipped
+    success: Local installation is bound to the exact portable workflow source bundle and its linked staged harness report, contains only declared validated members, and records no push, publication, deployment, or activation.
+    output_contract: m8m_builder_installation_receipt_v2
+    output_schema: contracts/m8m_builder_installation_receipt_v2.schema.json
+    outputs:
+      - id: installation_receipt
+        name: Validated local installation receipt
+        kind: json
+        cardinality: one
+        required: true
+    handler: scripts/m8m_build_steps.py
+    test: flowsteps/tools/install_local_skill/tests/test_tool.py
+    input_schema: contracts/m8m_builder_input_v1.schema.json
+    inputs:
+      request: user.request
+      workflow_source_bundle:
+        from: flow_generated.m8m_builder_source_bundle_v2
+        output: workflow_source_bundle
+      staged_harness:
+        from: flow_generated.m8m_builder_source_bundle_v2
+        output: staged_harness
+      validation:
+        from: harness_validated.m8m_builder_validation_report_v2
+        output: validation_report
+      workflow_package:
+        from: harness_validated.m8m_builder_validation_report_v2
+        output: workflow_package
+    flowsteps:
+      - id: install_local_skill
+        tool: install_local_skill@3.1.0
+    tools: [install_local_skill]
+    execution:
+      candidate_executor:
+        ref: handler.m8m_build_v2.skill_shipped@3.1.0
+      tool_bindings:
+        - tool: install_local_skill
+          ref: install_local_skill@3.1.0
+    intelligence: none
+    loop: none
+    on_tool_fail: BLOCKED
+    gem: references/skill_shipped.md

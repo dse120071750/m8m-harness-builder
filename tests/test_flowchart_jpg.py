@@ -14,6 +14,39 @@ from humanize_chart_zh import title_id as title_id_zh
 from m8m_flowchart import write_flowchart
 
 
+def _deterministic_specs(flow_id: str) -> list[dict]:
+    return [
+        {
+            "id": milestone_id,
+            "success": f"{milestone_id} produces one structurally admitted result.",
+            "output_contract": f"{milestone_id}_v1",
+            "outputs": [
+                {
+                    "id": "result",
+                    "name": f"{milestone_id} result",
+                    "kind": "json",
+                    "cardinality": "one",
+                    "required": True,
+                }
+            ],
+            "output_schema_object": {"type": "object"},
+            "tools": ["hash_bind"],
+            "flowsteps": [
+                {"id": "hash_bind", "tool": "hash_bind@1.0.0"}
+            ],
+            "execution": {
+                "candidate_executor": {
+                    "ref": f"handler.{flow_id}.{milestone_id}@3.1.0"
+                },
+                "tool_bindings": [
+                    {"tool": "hash_bind", "ref": "hash_bind@1.0.0"}
+                ],
+            },
+        }
+        for milestone_id in ("source_ready", "plan_frozen")
+    ]
+
+
 class HumanizeTests(unittest.TestCase):
     def test_milestone_and_flowstep_are_readable(self) -> None:
         self.assertEqual(title_id("source_ready"), "Source is ready")
@@ -37,7 +70,7 @@ class HumanizeTests(unittest.TestCase):
             success_line({"id": "source_ready", "asset_kind": "file", "success": "Source bytes are bound."}),
             "Source bytes are bound.",
         )
-        self.assertIn("Retry until the worker receipt is ok", success_line({"id": "card_aligned", "asset_kind": "image", "loop": "judge"}))
+        self.assertIn("Retry until the semantic judge returns PASS", success_line({"id": "card_aligned", "asset_kind": "image", "loop": "judge"}))
 
 
 class JpegWriteTests(unittest.TestCase):
@@ -80,6 +113,7 @@ class JpegWriteTests(unittest.TestCase):
                 "chart_v1",
                 ["source_ready", "plan_frozen"],
                 tools=["hash_bind"],
+                milestone_specs=_deterministic_specs("chart_v1"),
             )
             harness = Path(result["harness_dir"])
             md = harness / "planning" / "m8m-flowchart.md"
@@ -97,12 +131,12 @@ class JpegWriteTests(unittest.TestCase):
             gem = harness / "references" / "source_ready.md"
             self.assertTrue(gem.is_file())
             gem_text = gem.read_text(encoding="utf-8")
-            self.assertIn("Rule of success:", gem_text)
-            self.assertIn("Worker:", gem_text)
+            self.assertNotIn("Rule of success", gem_text)
+            self.assertIn("sole expectation", gem_text)
             self.assertNotIn('{"ok": True', (harness / "milestones" / "source_ready" / "assemble.py").read_text(encoding="utf-8"))
             self.assertIn("hash_bind", yaml_text)
 
-    def test_quality_milestone_gets_named_judge_stub(self) -> None:
+    def test_quality_name_inference_cannot_emit_a_judge_or_runnable_flow(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             codebase = Path(temp) / "repo"
             generate_tool(codebase, "hash_bind")
@@ -113,15 +147,11 @@ class JpegWriteTests(unittest.TestCase):
                 tools=["hash_bind"],
             )
             harness = Path(result["harness_dir"])
-            yaml_text = (harness / "flow.yaml").read_text(encoding="utf-8")
-            self.assertIn("loop: judge", yaml_text)
-            self.assertIn("worker: card_aligned_judge", yaml_text)
-            self.assertNotIn("worker: ok_receipt", yaml_text)
+            self.assertEqual(result["status"], "BUILD_REQUIRED")
+            self.assertFalse(result["runnable"])
+            self.assertFalse((harness / "flow.yaml").exists())
             judge = codebase / "flowsteps" / "tools" / "card_aligned_judge" / "tool.py"
-            self.assertTrue(judge.is_file())
-            self.assertIn("gem_path", judge.read_text(encoding="utf-8"))
-            gem = (harness / "references" / "card_aligned.md").read_text(encoding="utf-8")
-            self.assertIn("card_aligned_judge", gem)
+            self.assertFalse(judge.exists())
 
     def test_mark_step_rewrites_md_and_jpg(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -132,6 +162,7 @@ class JpegWriteTests(unittest.TestCase):
                 "edit_v1",
                 ["source_ready", "plan_frozen"],
                 tools=["hash_bind"],
+                milestone_specs=_deterministic_specs("edit_v1"),
             )
             harness = Path(result["harness_dir"])
             md = harness / "planning" / "m8m-flowchart.md"

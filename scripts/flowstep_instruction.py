@@ -18,6 +18,7 @@ from flowstep_runtime import (
     add_harness_location_args,
     find_flow_path,
     harness_dir_from_args,
+    local_tool_package_name,
     load_flow,
     read_json,
     render_flowstep_table,
@@ -91,8 +92,8 @@ def render_instruction(
         "",
         "This file is the skill instruction. Each section is a milestone.",
         "A milestone input schema is the previous milestone output schema.",
-        "Each milestone declares named output ports: FlowSteps refine candidates, the judge commits one chosen bundle, and only that bundle is downstream-visible.",
-        "Mark DONE only after the judge-approved current result is materialized as chosen-output.json.",
+        "Each milestone declares named output ports: FlowSteps refine candidates, structural admission always runs, and an authored semantic judge is optional.",
+        "Mark DONE only after admission (and judge PASS when declared) materializes the chosen output bundle in chosen-output.json.",
         "FlowSteps inside a milestone are a guide: prefer one tool each, in table order.",
         "The tool is optional. If it fails, recover like a normal agent. Do not skip required named outputs.",
         "",
@@ -104,10 +105,15 @@ def render_instruction(
         "## Run",
         "",
         "```powershell",
-        "python <builder>/scripts/run_flow.py --codebase <repo> --flow-id "
-        + flow["flow_id"]
-        + " --run-dir <run-dir> --request <request.json>",
+        "python <installed-skill>/scripts/m8m_run.py "
+        "--harness-root C:\\NisanRuntime --request <request.json>",
         "```",
+        "",
+        "The source repo is code/specification authority only. New mutable run state, goals, retries, checkpoints, milestone media, and candidate cache live under the host-local harness root.",
+        "Request file_ref_v2 assets are hash-verified and copied once into inputs/source-assets; milestones receive only the rewritten run-local paths.",
+        "File and media candidate paths must already resolve inside the active run; chosen-output commit copies them directly into the chosen bundle.",
+        "Resume an exact initialized legacy run only by its exact --run-dir; never discover or migrate it from the source repo.",
+        "Generic M8M does not export final packages. Any final archive copy remains the product runtime's authority.",
         "",
         "If a milestone returns ACTION_REQUIRED, write only the frozen draft and advance.",
         "",
@@ -133,7 +139,16 @@ def render_instruction(
             lines.append("")
         used = []
         for step in flow["steps"]:
-            for tool_id in step.get("tools") or []:
+            for binding in (step.get("execution") or {}).get("tool_bindings") or []:
+                if not isinstance(binding, dict) or not binding.get("ref"):
+                    continue
+                tool_id = local_tool_package_name(
+                    str(binding["ref"]),
+                    label=(
+                        f"{step.get('id')}.execution.tool_bindings"
+                        f"[{binding.get('tool')}].ref"
+                    ),
+                )
                 if tool_id not in used:
                     used.append(tool_id)
         lines.extend(["## Toolbox", ""])

@@ -1,0 +1,102 @@
+{
+  "schema": "flowstep_flow_v4",
+  "flow_id": "expectation_first_linear",
+  "version": 1,
+  "context_policy": "isolated",
+  "max_run_seconds": 900,
+  "artifact_root": "artifacts",
+  "milestones": [
+    {
+      "id": "source_ready",
+      "success": "One source record is structurally admitted.",
+      "output_contract": "m8m.parity_source.v1",
+      "output_schema": "schemas/source.output.schema.json",
+      "outputs": [
+        {
+          "id": "source",
+          "name": "Admitted source",
+          "kind": "json",
+          "cardinality": "one",
+          "required": true
+        }
+      ],
+      "handler": "handlers/source.py",
+      "flowsteps": [
+        {
+          "id": "admit_source",
+          "tool": "bind_source@1.0.0"
+        }
+      ],
+      "tools": ["admit_source"],
+      "intelligence": "none",
+      "execution": {
+        "candidate_executor": {
+          "ref": "handler.expectation_first_linear.source_ready@3.1.0"
+        },
+        "tool_bindings": [
+          {
+            "tool": "admit_source",
+            "ref": "bind_source@1.0.0"
+          }
+        ]
+      },
+      "on_tool_fail": "BLOCKED",
+      "side_effects": "none",
+      "loop": "none",
+      "max_attempts": 1,
+      "gem": "references/source_ready.md"
+    },
+    {
+      "id": "result_ready",
+      "success": "One result preserves the admitted source value and is approved for downstream use.",
+      "output_contract": "m8m.parity_result.v1",
+      "output_schema": "schemas/result.output.schema.json",
+      "outputs": [
+        {
+          "id": "result",
+          "name": "Approved result",
+          "kind": "json",
+          "cardinality": "one",
+          "required": true
+        }
+      ],
+      "handler": "handlers/result.py",
+      "inputs": {
+        "source": {
+          "from": "source_ready.m8m.parity_source.v1",
+          "output": "source"
+        }
+      },
+      "flowsteps": [
+        {
+          "id": "assemble_result",
+          "tool": "build_result@1.0.0"
+        }
+      ],
+      "tools": ["assemble_result"],
+      "intelligence": "none",
+      "execution": {
+        "candidate_executor": {
+          "ref": "handler.expectation_first_linear.result_ready@3.1.0"
+        },
+        "judge": {
+          "ref": "result_ready_judge@1.0.0"
+        },
+        "tool_bindings": [
+          {
+            "tool": "assemble_result",
+            "ref": "build_result@1.0.0"
+          }
+        ]
+      },
+      "on_tool_fail": "BLOCKED",
+      "side_effects": "none",
+      "loop": "judge",
+      "worker": "result_ready_judge@1.0.0",
+      "judge_abi": "m8m_milestone_judge_v1",
+      "receipt_schema": "schemas/judge-decision.schema.json",
+      "max_attempts": 1,
+      "gem": "references/result_ready.md"
+    }
+  ]
+}

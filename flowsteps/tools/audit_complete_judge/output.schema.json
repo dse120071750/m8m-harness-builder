@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "m8m_builder_audit_complete_judge_receipt_v1.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["ok", "code", "reasons"],
+  "properties": {
+    "ok": { "type": "boolean" },
+    "code": { "enum": ["source_audit_closed", "source_audit_incomplete"] },
+    "reasons": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 }
+    }
+  }
+}

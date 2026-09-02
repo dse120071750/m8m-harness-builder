@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["request", "workflow_source_bundle", "staged_harness", "validation"],
+  "properties": {
+    "request": { "$ref": "../../../contracts/m8m_builder_request_v3.schema.json" },
+    "workflow_source_bundle": {
+      "$ref": "../../../contracts/m8m_workflow_source_bundle_v1.schema.json"
+    },
+    "staged_harness": {
+      "$ref": "../../../contracts/m8m_builder_source_bundle_v2.schema.json#/properties/outputs/properties/staged_harness"
+    },
+    "validation": {
+      "$ref": "../../../contracts/m8m_builder_validation_report_v2.schema.json#/properties/outputs/properties/validation_report"
+    }
+  }
+}

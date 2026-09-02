@@ -12,13 +12,34 @@ _spec.loader.exec_module(tool)
 
 
 class CycleReceiptTests(unittest.TestCase):
-    def test_pass_and_fail(self) -> None:
-        self.assertEqual(tool.run({"recommended_cycle": "pass", "row": "001"})["cycle"], "pass")
-        self.assertEqual(tool.run({"draft": {"recommended_cycle": "fail"}, "row": "002"})["cycle"], "fail")
+    @staticmethod
+    def request(*, ready: bool | None, row: str) -> dict:
+        result = {"page": f"p-{row}"}
+        if ready is not None:
+            result["ready"] = ready
+        return {
+            "schema": "m8m.cycle_control_request.v1",
+            "milestone_id": "page_rendered",
+            "inputs": {"row": row},
+            "candidate": {"outputs": {"result": result}},
+            "control": {
+                "kind": "cycle",
+                "cycle_id": "pages",
+                "row": row,
+                "round": 1,
+                "max_rounds": 8,
+                "pass_rule": "the page is ready",
+            },
+        }
 
-    def test_undecided_not_ok(self) -> None:
-        receipt = tool.run({"row": "001"})
-        self.assertFalse(receipt["ok"])
+    def test_pass_and_fail(self) -> None:
+        self.assertEqual(tool.run(self.request(ready=True, row="001"))["cycle"], "pass")
+        self.assertEqual(tool.run(self.request(ready=False, row="002"))["cycle"], "fail")
+
+    def test_structurally_admitted_candidate_defaults_to_pass(self) -> None:
+        receipt = tool.run(self.request(ready=None, row="001"))
+        self.assertTrue(receipt["ok"])
+        self.assertEqual(receipt["cycle"], "pass")
 
 
 if __name__ == "__main__":

@@ -1,0 +1,57 @@
+{
+  "schema": "flowstep_flow_v4",
+  "flow_id": "platform_dag",
+  "version": 1,
+  "context_policy": "isolated",
+  "max_run_seconds": 300,
+  "artifact_root": "artifacts",
+  "graph": {
+    "semantics": "m8m.graph.dag.v1",
+    "roots": ["source_ready"],
+    "terminal": "result_ready",
+    "edges": [
+      {"id": "source_to_result", "from": "source_ready", "to": "result_ready"}
+    ]
+  },
+  "milestones": [
+    {
+      "id": "source_ready",
+      "success": "The source exists.",
+      "output_contract": "m8m.platform_source.v1",
+      "output_schema": "schemas/source.schema.json",
+      "outputs": [
+        {"id": "source", "name": "Source", "kind": "json", "cardinality": "one", "required": true}
+      ],
+      "handler": "handlers/source.py",
+      "inputs": {"request": "scheduler_job_run.request"},
+      "flowsteps": [{"id": "bind_source", "tool": "bind_source@1.0.0"}],
+      "intelligence": "none",
+      "on_tool_fail": "BLOCKED",
+      "loop": "none",
+      "max_attempts": 1
+    },
+    {
+      "id": "result_ready",
+      "success": "The result satisfies the declared goal.",
+      "output_contract": "m8m.platform_result.v1",
+      "output_schema": "schemas/result.schema.json",
+      "outputs": [
+        {"id": "result", "name": "Result", "kind": "json", "cardinality": "one", "required": true}
+      ],
+      "handler": "handlers/result.py",
+      "inputs": {"source": {"from": "source_ready.m8m.platform_source.v1", "output": "source"}},
+      "flowsteps": [{"id": "build_result", "tool": "build_result@1.0.0"}],
+      "intelligence": "none",
+      "execution": {
+        "candidate_executor": {"ref": "handler.platform_dag.result_ready@3.1.0"},
+        "judge": {"ref": "result_ready_judge@1.0.0"},
+        "tool_bindings": [{"tool": "build_result", "ref": "build_result@1.0.0"}]
+      },
+      "on_tool_fail": "BLOCKED",
+      "loop": "judge",
+      "worker": "result_ready_judge@1.0.0",
+      "judge_abi": "m8m_milestone_judge_v1",
+      "max_attempts": 1
+    }
+  ]
+}

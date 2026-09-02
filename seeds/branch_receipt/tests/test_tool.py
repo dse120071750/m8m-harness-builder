@@ -12,46 +12,43 @@ _spec.loader.exec_module(tool)
 
 
 class BranchReceiptTests(unittest.TestCase):
-    def test_direct_default_when_not_source_case(self) -> None:
-        receipt = tool.run(
-            {
+    @staticmethod
+    def request(*, case_type: str = "restyle", recommended: str = "") -> dict:
+        result = {"case_type": case_type}
+        if recommended:
+            result["recommended_branch"] = recommended
+        return {
+            "schema": "m8m.branch_control_request.v1",
+            "milestone_id": "intake_ready",
+            "inputs": {"request": {"case_type": case_type}},
+            "candidate": {"outputs": {"result": result}},
+            "control": {
+                "kind": "branch",
                 "paths": ["direct", "floorplan_source_case"],
                 "default": "direct",
-                "case_type": "restyle",
-            }
-        )
+                "join": "restyle_ready",
+            },
+        }
+
+    def test_direct_default_when_not_source_case(self) -> None:
+        receipt = tool.run(self.request())
         self.assertTrue(receipt["ok"])
         self.assertEqual(receipt["branch"], "direct")
         self.assertEqual(receipt["skipped"], ["floorplan_source_case"])
 
     def test_source_case_path(self) -> None:
-        receipt = tool.run(
-            {
-                "paths": ["direct", "floorplan_source_case"],
-                "default": "direct",
-                "case_type": "source_case",
-            }
-        )
+        receipt = tool.run(self.request(case_type="source_case"))
         self.assertEqual(receipt["branch"], "floorplan_source_case")
         self.assertEqual(receipt["skipped"], ["direct"])
 
-    def test_draft_wins(self) -> None:
+    def test_admitted_business_recommendation_wins(self) -> None:
         receipt = tool.run(
-            {
-                "paths": ["direct", "floorplan_source_case"],
-                "default": "direct",
-                "draft": {"recommended_branch": "floorplan_source_case"},
-            }
+            self.request(recommended="floorplan_source_case")
         )
         self.assertEqual(receipt["branch"], "floorplan_source_case")
 
     def test_unknown_branch_not_ok(self) -> None:
-        receipt = tool.run(
-            {
-                "paths": ["direct", "floorplan_source_case"],
-                "recommended_branch": "other",
-            }
-        )
+        receipt = tool.run(self.request(recommended="other"))
         self.assertFalse(receipt["ok"])
 
 

@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "m8m_milestone_judge_receipt_v1.schema.json",
+  "title": "M8M milestone judge receipt v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "milestone_id",
+    "attempt",
+    "decision",
+    "success_rule",
+    "judge_ref",
+    "reasons",
+    "blockers",
+    "max_attempts"
+  ],
+  "properties": {
+    "schema": { "const": "m8m.milestone_judge_receipt.v1" },
+    "milestone_id": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+    "attempt": { "type": "integer", "minimum": 1 },
+    "decision": { "enum": ["PASS", "RETRY", "BLOCKED"] },
+    "success_rule": { "type": "string", "minLength": 1 },
+    "judge_ref": { "type": "string", "minLength": 1 },
+    "reasons": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "blockers": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "max_attempts": { "type": "integer", "minimum": 1 },
+    "details": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "worker_receipt": {
+          "type": "object",
+          "maxProperties": 16,
+          "additionalProperties": true
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "required": ["decision"],
+        "properties": { "decision": { "const": "PASS" } }
+      },
+      "then": { "properties": { "blockers": { "maxItems": 0 } } }
+    },
+    {
+      "if": {
+        "required": ["decision"],
+        "properties": { "decision": { "const": "BLOCKED" } }
+      },
+      "then": { "properties": { "blockers": { "minItems": 1 } } }
+    }
+  ]
+}

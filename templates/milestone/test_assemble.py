@@ -13,20 +13,19 @@ _spec.loader.exec_module(assemble)
 
 
 class AssembleTests(unittest.TestCase):
-    def test_run_returns_object(self) -> None:
-        if assemble.INTELLIGENCE != "none":
-            result = assemble.run({"request": {"text": "x"}})
-            self.assertEqual(result.get("_flowstep"), "NEED_MODEL")
-            return
-        with tempfile.TemporaryDirectory() as temp:
-            path = Path(temp) / "asset.txt"
-            path.write_text("ok\n", encoding="utf-8")
-            result = assemble.run({"request": {"path": str(path)}})
-        self.assertIsInstance(result, dict)
-        if assemble.ASSET_KIND in {"file", "image", "video", "audio"}:
-            self.assertIn("outputs", result)
-            output_id = assemble.OUTPUTS[0]["id"]
-            self.assertTrue(result["outputs"][output_id]["asset"]["path"])
+    def test_generated_handler_is_explicitly_non_runnable(self) -> None:
+        self.assertEqual(assemble.M8M_BUILD_STATUS, "BUILD_REQUIRED")
+        self.assertFalse(assemble.M8M_RUNNABLE)
+        with self.assertRaisesRegex(RuntimeError, "BUILD_REQUIRED/non-runnable"):
+            assemble.run({"request": {"text": "x"}})
+
+    def test_candidate_adapter_requires_named_outputs(self) -> None:
+        with self.assertRaisesRegex(ValueError, "explicit"):
+            assemble._candidate({"result": {"value": "x"}})
+        self.assertEqual(
+            assemble._candidate({"outputs": {"result": {"value": "x"}}}),
+            {"outputs": {"result": {"value": "x"}}},
+        )
 
 
 if __name__ == "__main__":

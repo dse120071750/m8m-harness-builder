@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "m8m_builder_installation_receipt_v2.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["outputs"],
+  "properties": {
+    "outputs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["installation_receipt"],
+      "properties": {
+        "installation_receipt": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "runnable",
+            "non_runnable",
+            "flow_id",
+            "skill_name",
+            "product_skill",
+            "flowchart_path",
+            "flowchart_sha256",
+            "flowchart_jpg",
+            "installed_files",
+            "source_bundle_path",
+            "source_bundle_sha256",
+            "source_bundle_resource_root",
+            "source_bundle_digest",
+            "staged_members_digest",
+            "runtime_release",
+            "workflow_package_path",
+            "workflow_package_sha256",
+            "workflow_package_byte_count",
+            "workflow_package_media_type",
+            "installed_at"
+          ],
+          "properties": {
+            "status": { "const": "PASS" },
+            "runnable": { "const": true },
+            "non_runnable": { "const": false },
+            "flow_id": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+            "skill_name": { "type": "string", "minLength": 1 },
+            "product_skill": { "type": "string", "minLength": 1 },
+            "flowchart_path": { "type": "string", "minLength": 1 },
+            "flowchart_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+            "flowchart_jpg": { "type": "string", "minLength": 1 },
+            "installed_files": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": { "type": "string", "minLength": 1 }
+            },
+            "source_bundle_path": { "type": "string", "minLength": 1 },
+            "source_bundle_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+            "source_bundle_resource_root": { "type": "string", "minLength": 1 },
+            "source_bundle_digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+            "staged_members_digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+            "runtime_release": {
+              "$ref": "m8m_builder_source_bundle_v2.schema.json#/properties/outputs/properties/staged_harness/properties/runtime_release"
+            },
+            "workflow_package_path": { "type": "string", "minLength": 1 },
+            "workflow_package_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+            "workflow_package_byte_count": { "type": "integer", "minimum": 1 },
+            "workflow_package_media_type": { "const": "application/vnd.m8m.workflow-package+zip" },
+            "installed_at": { "type": "string", "minLength": 1 }
+          }
+        }
+      }
+    }
+  }
+}
