@@ -160,7 +160,12 @@ def _python_identity() -> tuple[str, str]:
     python_abi = str(sys.implementation.cache_tag or "")
     if not python_abi:
         raise RuntimeReleaseError("cannot determine the Python runtime ABI")
-    executable = Path(sys.executable).absolute()
+    # Hosted Python installs and virtualenvs commonly expose a symlink. Bind
+    # identity to the actual interpreter bytes, not the installation alias.
+    try:
+        executable = Path(sys.executable).resolve(strict=True)
+    except (OSError, RuntimeError) as exc:
+        raise RuntimeReleaseError("cannot resolve the Python interpreter executable") from exc
     if not executable.is_file() or _is_unsafe_link(executable):
         raise RuntimeReleaseError(
             "cannot determine a safe Python interpreter executable identity"

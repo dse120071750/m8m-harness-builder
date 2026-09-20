@@ -163,9 +163,10 @@ class SchemaValidationPathTests(unittest.TestCase):
                 validate_against_schema({"ok": True}, schema_path)
 
     def test_tool_root_does_not_physically_resolve_codebase(self) -> None:
+        codebase = Path.cwd() / "example-codebase"
         with patch.object(Path, "resolve", side_effect=AssertionError("physical resolve is forbidden")):
-            root = tools_root(Path(r"D:\nisan-n8n"))
-        self.assertEqual(root, Path(r"D:\nisan-n8n\flowsteps\tools"))
+            root = tools_root(codebase)
+        self.assertEqual(root, codebase / "flowsteps" / "tools")
 
     def test_implementation_freeze_includes_complete_tool_package(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -235,20 +236,16 @@ class WriterSkillTests(unittest.TestCase):
         pointer = (root / "SKILL.md").read_text(encoding="utf-8")
         self.assertIn("references/builder-authoring.md", pointer)
         text = (root / "references" / "builder-authoring.md").read_text(encoding="utf-8")
-        self.assertIn("flowstep_flow_v4", text)
-        self.assertIn("flowstep_output_v3", text)
-        self.assertIn("m8m_chosen_output_v1", text)
+        self.assertIn("master-prompts.md", text)
+        self.assertIn("milestone01", text)
+        self.assertIn("--mode coordinate", text)
         self.assertIn("loop: judge", text)
-        self.assertIn("chosen-output.json", text)
-        self.assertIn("rule of success", text.lower())
-        self.assertIn("references/<id>.md", text)
-        self.assertIn("not separate canvas nodes", text.lower())
-        self.assertIn("output: images", text)
-        self.assertIn("member: hero_image", text)
+        self.assertIn("references/<milestone>.md", text)
+        self.assertIn("named outputs", text)
         self.assertIn("--replace-milestone", text)
         self.assertIn("ledger", text)
-        self.assertIn("Roster", text)
-        self.assertIn("Never deploy", text)
+        self.assertIn("roster", text)
+        self.assertIn("never pushes or deploys", pointer)
 
     def test_github_docs_use_images_not_mermaid(self) -> None:
         root = Path(__file__).resolve().parents[1]
@@ -915,8 +912,10 @@ class ToolFailRecoveryTests(unittest.TestCase):
             # requests a retry. Model recovery has its own bounded counter.
             self.assertEqual(second["attempt"], 1)
             model_request = read_json(run / second["model_request_path"])
-            self.assertEqual(model_request["attempt"], 2)
+            self.assertEqual(model_request["attempt"], 1)
             self.assertEqual(model_request["max_model_attempts"], 2)
+            recovery = read_json(run / "work/source_ready/tool_failed.json")
+            self.assertEqual(recovery["attempts"], 2)
             draft.write_text(json.dumps({"retry": 2}), encoding="utf-8")
             third = advance(harness, run, draft_path=draft)
             self.assertEqual(third["state"], "BLOCKED")

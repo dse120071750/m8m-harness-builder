@@ -994,7 +994,7 @@ def _pause_wait_action(
         ),
     }
     request_path = folder / "model_request.json"
-    request = _start_with_master_prompt(skill_dir, step, request)
+    request = _start_with_master_prompt(Path(flow["_skill_dir"]), step, request)
     write_json(request_path, request, overwrite=True)
     task_path = run_dir / "runtime-tasks" / f"{step['id']}.json"
     if not task_path.is_file():

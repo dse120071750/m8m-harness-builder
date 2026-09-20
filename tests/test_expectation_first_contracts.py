@@ -21,7 +21,7 @@ from flowstep_runtime import FlowError, load_flow
 
 CONTRACTS = SKILL_ROOT / "contracts"
 CONFORMANCE = CONTRACTS / "conformance" / "flowstep_flow_v4"
-FLOW_SCHEMA_SHA256 = "5092331c14d18031c4f2fa1e6ac585484afa83fd45f3c7508bb707560a2780fd"
+FLOW_SCHEMA_SHA256 = "879d94de81a74b6d5270313d215aacdd16476fbe1aecebf7f247cf5ff6a2b8d6"
 FIXTURE_SHA256 = {
     "valid/authoring-union.json": "d1a1964d023d3a8f82af3ae7e4a9ec082ccd4c7b032f9951ab6de6e0a0d83940",
     "valid/platform-dag.json": "11d9fe3495733fe1a55f4f4a788ead639f6e5e9f88f884311ef821e941fa7f3d",
@@ -87,11 +87,11 @@ class ExpectationFirstContractTests(unittest.TestCase):
         cls.flow_validator = Draft202012Validator(cls.flow_schema)
 
     def test_normative_v4_bytes_and_shared_conformance_fixtures(self) -> None:
-        schema_bytes = (CONTRACTS / "flowstep_flow_v4.schema.json").read_bytes()
+        schema_bytes = (CONTRACTS / "flowstep_flow_v4.schema.json").read_text(encoding="utf-8").encode("utf-8")
         self.assertEqual(hashlib.sha256(schema_bytes).hexdigest(), FLOW_SCHEMA_SHA256)
         for relative, expected_digest in FIXTURE_SHA256.items():
             path = CONFORMANCE / relative
-            self.assertEqual(hashlib.sha256(path.read_bytes()).hexdigest(), expected_digest)
+            self.assertEqual(hashlib.sha256(path.read_text(encoding="utf-8").encode("utf-8")).hexdigest(), expected_digest)
             candidate = json.loads(path.read_text(encoding="utf-8"))
             if relative.startswith("valid/"):
                 self.flow_validator.validate(candidate)

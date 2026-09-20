@@ -13,6 +13,7 @@ from unittest.mock import patch
 import yaml
 
 import support  # noqa: F401
+import candidate_cache
 
 from candidate_cache import (
     cache_root,
@@ -563,7 +564,13 @@ class CandidateCacheTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             harness, _ = self._harness(root)
-            with patch("candidate_cache.os.open", side_effect=OSError("cache lock denied")):
+            real_open = candidate_cache.os.open
+            def deny_cache_lock(path, flags, *args, **kwargs):
+                if (str(path).endswith(".lock") and Path(path).is_relative_to(root / "cache")
+                        and flags & candidate_cache.os.O_EXCL):
+                    raise OSError("cache lock denied")
+                return real_open(path, flags, *args, **kwargs)
+            with patch("candidate_cache.os.open", side_effect=deny_cache_lock):
                 done = advance(harness, root / "run", request_path=_request(root), cache_mode="read-write")
             self.assertEqual(done["state"], "COMPLETE", done)
             receipt = read_json(

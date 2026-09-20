@@ -239,7 +239,10 @@ def _verify_release(lock: dict[str, object]) -> tuple[dict[str, object], Path]:
     python_abi = str(manifest.get("python_abi") or "")
     if python_abi != str(sys.implementation.cache_tag or ""):
         raise SystemExit("The codebase runtime Python ABI does not match this interpreter")
-    python_executable = Path(sys.executable)
+    try:
+        python_executable = Path(sys.executable).resolve(strict=True)
+    except (OSError, RuntimeError) as exc:
+        raise SystemExit("The codebase runtime Python executable cannot be resolved") from exc
     if not python_executable.is_file() or _is_unsafe_link(python_executable):
         raise SystemExit("The codebase runtime Python executable is unavailable or unsafe")
     python_executable_digest = "sha256:" + _sha256_file(python_executable)

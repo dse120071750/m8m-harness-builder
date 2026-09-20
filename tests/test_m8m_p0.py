@@ -179,7 +179,7 @@ class DefaultV3Tests(unittest.TestCase):
 
 
 class FactoryTests(unittest.TestCase):
-    def test_incomplete_legacy_builder_import_stops_before_validation_and_installation(self) -> None:
+    def test_incomplete_legacy_builder_stages_context_but_never_installs(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             source = Path(__file__).resolve().parents[1]
             target = Path(temp) / "m8m-harness-builder"
@@ -202,23 +202,23 @@ class FactoryTests(unittest.TestCase):
             self.assertEqual(run_context["context_policy"], "isolated")
             self.assertFalse(run_context["chat_history_allowed"])
             self.assertEqual(execution["cache"]["mode"], "off")
-            self.assertEqual(result["action"]["step_id"], "audit_complete")
+            self.assertEqual(result["action"]["step_id"], "harness_validated", result)
             self.assertEqual(result["action"]["state"], "BLOCKED")
-            self.assertIn("import_flow_v4.py", " ".join(result["action"]["blockers"]))
-            self.assertFalse(
+            self.assertIn("BUILD_REQUIRED", " ".join(result["action"]["blockers"]))
+            self.assertTrue(
                 (run_dir / "milestones" / "audit_complete" / "out" / "chosen-output.json").exists()
             )
-            self.assertEqual(result["milestones"]["audit_complete"]["status"], "BLOCKED")
-            self.assertEqual(result["milestones"]["toolbox_ready"]["status"], "PENDING")
-            self.assertEqual(result["milestones"]["flow_generated"]["status"], "PENDING")
-            self.assertEqual(result["milestones"]["harness_validated"]["status"], "PENDING")
+            self.assertEqual(result["milestones"]["audit_complete"]["status"], "PASS")
+            self.assertEqual(result["milestones"]["toolbox_ready"]["status"], "PASS")
+            self.assertEqual(result["milestones"]["flow_generated"]["status"], "PASS")
+            self.assertEqual(result["milestones"]["harness_validated"]["status"], "BLOCKED")
             self.assertEqual(result["milestones"]["skill_shipped"]["status"], "PENDING")
             self.assertFalse((run_dir / "milestones" / "harness_validated" / "out" / "chosen-output.json").exists())
             self.assertFalse((run_dir / "milestones" / "skill_shipped" / "out" / "chosen-output.json").exists())
             self.assertFalse((codebase / "flowsteps" / "cache").exists())
             self.assertIn((runtime / "runs").resolve(), run_dir.resolve().parents)
 
-    def test_run_factory_requires_explicit_import_for_a_bare_legacy_skill(self) -> None:
+    def test_bare_legacy_skill_stages_context_but_requires_implementation(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             skill = Path(temp) / "bare-skill"
             skill.mkdir()
@@ -235,16 +235,16 @@ class FactoryTests(unittest.TestCase):
                 harness_root=Path(temp) / "runtime",
             )
             self.assertEqual(result["status"], "BLOCKED")
-            self.assertEqual(result["action"]["step_id"], "audit_complete")
-            self.assertIn("import_flow_v4.py", " ".join(result["action"]["blockers"]))
-            self.assertEqual(result["milestones"]["flow_generated"]["status"], "PENDING")
-            self.assertEqual(result["milestones"]["harness_validated"]["status"], "PENDING")
+            self.assertEqual(result["action"]["step_id"], "harness_validated", result)
+            self.assertIn("BUILD_REQUIRED", " ".join(result["action"]["blockers"]))
+            self.assertEqual(result["milestones"]["flow_generated"]["status"], "PASS")
+            self.assertEqual(result["milestones"]["harness_validated"]["status"], "BLOCKED")
             self.assertEqual(result["milestones"]["skill_shipped"]["status"], "PENDING")
-            self.assertNotIn("source_bundle_path", result)
+            self.assertTrue(Path(result["source_bundle_path"]).is_file())
             self.assertFalse((codebase / ".claude" / "skills" / "bare-skill" / "SKILL.md").exists())
             self.assertFalse((codebase / ".agents" / "skills" / "bare-skill" / "SKILL.md").exists())
 
-    def test_factory_requires_explicit_import_before_legacy_sketch_generation(self) -> None:
+    def test_legacy_script_sketch_is_not_installed_as_a_working_harness(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             skill = Path(temp) / "crop-skill"
             (skill / "scripts").mkdir(parents=True)
@@ -265,14 +265,14 @@ class FactoryTests(unittest.TestCase):
                 harness_root=Path(temp) / "runtime",
             )
             self.assertEqual(result["status"], "BLOCKED", result)
-            self.assertEqual(result["action"]["step_id"], "audit_complete")
-            self.assertIn("import_flow_v4.py", " ".join(result["action"]["blockers"]))
+            self.assertEqual(result["action"]["step_id"], "harness_validated", result)
+            self.assertIn("BUILD_REQUIRED", " ".join(result["action"]["blockers"]))
             run_dir = Path(result["run_dir"])
-            self.assertFalse(
+            self.assertTrue(
                 (run_dir / "milestones" / "flow_generated" / "out" / "chosen-output.json").exists()
             )
-            self.assertEqual(result["milestones"]["flow_generated"]["status"], "PENDING")
-            self.assertEqual(result["milestones"]["harness_validated"]["status"], "PENDING")
+            self.assertEqual(result["milestones"]["flow_generated"]["status"], "PASS")
+            self.assertEqual(result["milestones"]["harness_validated"]["status"], "BLOCKED")
             self.assertEqual(result["milestones"]["skill_shipped"]["status"], "PENDING")
             self.assertFalse((codebase / ".agents" / "skills" / "crop-skill").exists())
 
