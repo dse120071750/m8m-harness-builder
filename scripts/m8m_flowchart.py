@@ -272,10 +272,10 @@ def render_flowchart(
             "## FlowSteps (guide)",
             "",
             "Sequence inside each milestone. Prefer the named tool. Optional.",
-            "If it fails, recover like a normal agent. The prompt for that step is the",
-            "matching section of the milestone gem. Admission is compulsory; semantic judgment is optional.",
+            "Start from the complete milestone master prompt, including during recovery.",
+            "FlowStep notes are optional. Admission is compulsory; semantic judgment is optional.",
             "",
-            "| Milestone | # | FlowStep | What it means | Preferred tool | Gem section |",
+            "| Milestone | # | FlowStep | What it means | Preferred tool | Milestone master prompt |",
             "| --- | ---: | --- | --- | --- | --- |",
         ]
     )
@@ -288,7 +288,7 @@ def render_flowchart(
             fid = str(fs.get("id") or fs.get("tool") or "")
             lines.append(
                 f"| `{item['id']}` | {index} | `{fid}` | "
-                f"{human_fs['caption']} | `{fs.get('tool') or '—'}` | `{gem}#{fid}` |"
+                f"{human_fs['caption']} | `{fs.get('tool') or '—'}` | `{gem}` |"
             )
     if not guide_rows:
         lines.append("| (none) | | | | | |")

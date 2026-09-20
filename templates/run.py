@@ -1,7 +1,5 @@
 """Point this built skill to its codebase-owned M8M launcher."""
 
-from __future__ import annotations
-
 import sys
 
 
@@ -12,7 +10,24 @@ if not sys.flags.isolated:
     _platform = __import__("nt" if "nt" in sys.builtin_module_names else "posix")
     _arguments = [sys.executable, "-I", "-B", __file__, *sys.argv[1:]]
     if hasattr(_platform, "spawnv"):
-        raise SystemExit(_platform.spawnv(0, sys.executable, _arguments))
+        # Windows spawnv joins tokens without quoting. Preserve each argument
+        # using CRT rules before importing any potentially shadowed module.
+        def _windows_argument(value):
+            quoted, backslashes = '"', 0
+            for character in value:
+                if character == "\\":
+                    backslashes += 1
+                elif character == '"':
+                    quoted += "\\" * (backslashes * 2 + 1) + '"'
+                    backslashes = 0
+                else:
+                    quoted += "\\" * backslashes + character
+                    backslashes = 0
+            return quoted + "\\" * (backslashes * 2) + '"'
+
+        raise SystemExit(_platform.spawnv(
+            0, sys.executable, [_windows_argument(value) for value in _arguments]
+        ))
     _platform.execv(sys.executable, _arguments)
     raise SystemExit("M8M isolated bootstrap exec unexpectedly returned")
 

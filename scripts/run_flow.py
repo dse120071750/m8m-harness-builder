@@ -62,7 +62,7 @@ def _is_admissible_browser_evidence_bootstrap(run_dir: Path, bootstrap: set[str]
             return False
     return True
 
-from gem_text import read_gem_section
+from gem_text import read_master_prompt
 from session_layout import (
     admit_candidate,
     assert_in_run,
@@ -126,6 +126,7 @@ from flowstep_runtime import (
     expected_artifact_path,
     find_flow_path,
     implementation_lock,
+    project_import_context,
     invoke_tool,
     load_flow,
     load_yaml,
@@ -136,6 +137,7 @@ from flowstep_runtime import (
     relative_to,
     runtime_package_name,
     sha256_file,
+    skill_rel,
     run_context_schema_path,
     source_asset_manifest_schema_path,
     utc_now,
@@ -484,6 +486,39 @@ def _task_cycle_row(task: dict[str, Any]) -> str | None:
     return row_id or None
 
 
+def _milestone_prompt(skill_dir: Path, step: dict[str, Any]) -> dict[str, str]:
+    relative = str(step.get("gem") or f"references/{step['id']}.md")
+    path = skill_rel(skill_dir, relative)
+    if not path.is_file() and not step.get("gem"):
+        # Legacy executable flows may predate Gems; authoring validation requires
+        # the master prompt before such a flow can be compiled again.
+        return {}
+    try:
+        prompt = read_master_prompt(path)
+    except (OSError, UnicodeError) as exc:
+        raise FlowError(f"{step['id']}: cannot read milestone master prompt {relative}") from exc
+    if not prompt:
+        raise FlowError(f"{step['id']}: milestone master prompt must not be empty")
+    return {"master_prompt": prompt, "master_prompt_path": relative}
+
+
+def _start_with_master_prompt(
+    skill_dir: Path, step: dict[str, Any], request: dict[str, Any],
+    task: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """The full authored prompt leads both normal and recovery model work."""
+    context = task if task and task.get("master_prompt") else _milestone_prompt(skill_dir, step)
+    prompt = str(context.get("master_prompt") or "")
+    if not prompt:
+        return request
+    request = dict(request)
+    instruction = str(request.get("instruction") or "").strip()
+    if not instruction.startswith(prompt):
+        request["instruction"] = prompt + (f"\n\n## Current operation\n\n{instruction}" if instruction else "")
+    request["gem_path"] = context["master_prompt_path"]
+    return request
+
+
 def _task(
     run_dir: Path,
     flow: dict[str, Any],
@@ -503,14 +538,16 @@ def _task(
         "flow_id": flow["flow_id"],
         "flow_version": flow["version"],
         "step_id": step["id"],
+        **_milestone_prompt(Path(flow["_skill_dir"]), step),
         "handler": step["handler"],
         "model": step["model"],
         "attempt": attempt,
         "max_attempts": (
-            int(step.get("max_attempts") or step.get("max_model_attempts") or 1)
+            int(step.get("max_attempts") or step.get("max_model_attempts") or 8)
             if str(step.get("loop") or "none") in {"judge", "for"}
             or step.get("on_cycle")
             or step.get("cycle")
+            or step.get("on_tool_fail") == "need_model"
             else 1
         ),
         "expectation": derive_milestone_expectation(step),
@@ -577,14 +614,13 @@ def _materialize(run_dir: Path, flow: dict[str, Any], step: dict[str, Any], arti
         "status": artifact["status"],
         "output_contract": step["output_contract"],
         "artifact_path": relative_to(run_dir, path),
-        "artifact_sha256": sha256_file(path),
         "attempt": artifact["evidence"]["attempt"],
         "materialized_at": utc_now(),
     }
     materialized_path = run_dir / "materialized" / f"{step['id']}.runtime_step_result.json"
     if materialized_path.is_file():
         existing = read_json(materialized_path)
-        for field in ("run_id", "flow_id", "step_id", "status", "artifact_path", "artifact_sha256"):
+        for field in ("run_id", "flow_id", "step_id", "status", "artifact_path", "attempt"):
             if existing.get(field) != result.get(field):
                 raise FlowError(
                     f"{step['id']}: materialized execution residue does not match the durable artifact"
@@ -600,7 +636,7 @@ def _materialize(run_dir: Path, flow: dict[str, Any], step: dict[str, Any], arti
     if prior is not None:
         if (
             prior.get("status") != artifact["status"]
-            or prior.get("artifact_sha256") != result["artifact_sha256"]
+            or prior.get("attempt") != result["attempt"]
         ):
             raise FlowError(f"{step['id']}: execution record conflicts with the durable artifact")
     else:
@@ -608,7 +644,7 @@ def _materialize(run_dir: Path, flow: dict[str, Any], step: dict[str, Any], arti
             {
                 "step_id": step["id"],
                 "status": artifact["status"],
-                "artifact_sha256": result["artifact_sha256"],
+                "artifact_path": result["artifact_path"],
                 "attempt": artifact["evidence"]["attempt"],
             }
         )
@@ -878,7 +914,9 @@ def _isolate_action(
         "allowed_files": sorted(allowed),
         "write_file": str(draft_path),
         "instruction": (
-            "Start a fresh no-history model worker. Read only allowed_files, treat them as the complete "
+            "Start a fresh no-history model worker. Begin with the complete milestone master prompt "
+            "in the candidate request, then apply the current operation with its bound inputs. "
+            "Read only allowed_files, treat them as the complete "
             "authority, and write only write_file. Do not use the parent chat, prior runs, or remembered assets."
         ),
         "created_at": utc_now(),
@@ -950,12 +988,13 @@ def _pause_wait_action(
         "slot": slot,
         "instruction": (
             "Pause and exit this session. After the reply lands, find <run>/roster.json, "
-            "resume this milestone. Its FlowSteps use the Gem; any declared judge reads "
+            "resume this milestone from its complete master prompt. Any declared judge reads "
             "only the derived expectation, resolved inputs, and current candidate. Write the reply to "
             f"{slot}."
         ),
     }
     request_path = folder / "model_request.json"
+    request = _start_with_master_prompt(skill_dir, step, request)
     write_json(request_path, request, overwrite=True)
     task_path = run_dir / "runtime-tasks" / f"{step['id']}.json"
     if not task_path.is_file():
@@ -1206,6 +1245,17 @@ def _recover_or_block(
             fingerprint,
             blockers + [f"{step['id']}: max_model_attempts {limit} exhausted"],
         )
+    candidate_attempt = max(1, int(task.get("attempt") or attempts))
+    frozen_capsule = _candidate_task_path(
+        run_dir, step["id"], candidate_attempt, row_id=_task_cycle_row(task)
+    ).parent / "context-capsule.json"
+    if frozen_capsule.is_file():
+        # A model draft can pass its JSON schema but fail product validation.
+        # Preserve the original model request/allowlist during that same attempt;
+        # replacing it with the generic recovery request would shrink the capsule.
+        return _invalid_draft_action(
+            run_dir, step, folder, task, bindings, "\n".join(blockers)
+        )
     flowsteps = step.get("flowsteps") or []
     first_flowstep = flowsteps[0] if flowsteps else ""
     fallback_flowstep = (
@@ -1214,11 +1264,6 @@ def _recover_or_block(
         else str(first_flowstep)
     ).strip()
     flowstep_id = fallback_flowstep
-    gem_path = skill_dir / str(step.get("gem") or f"references/{step['id']}.md")
-    gem_section = read_gem_section(gem_path, flowstep_id) if flowstep_id else ""
-    if not gem_section and flowstep_id != "" and fallback_flowstep and fallback_flowstep != flowstep_id:
-        flowstep_id = fallback_flowstep
-        gem_section = read_gem_section(gem_path, flowstep_id)
     request = {
         "milestone": step["id"],
         "blockers": blockers,
@@ -1228,16 +1273,13 @@ def _recover_or_block(
         "instruction": (
             "The preferred FlowStep tool ran first and failed. Find a way to still produce "
             "the milestone's declared named outputs, like a normal agent. Prefer the listed "
-            "tool. The judge must be able to commit the current result as chosen-output.json."
+            "tool. Return the declared candidate so the runtime can admit its named outputs."
         ),
         "flowsteps": step.get("flowsteps") or [],
     }
     if flowstep_id:
         request["flowstep"] = flowstep_id
-    if gem_path.is_file():
-        request["gem_path"] = relative_to(skill_dir, gem_path)
-    if gem_section:
-        request["instruction"] = f"{request['instruction']}\n\n{gem_section}"
+    request = _start_with_master_prompt(skill_dir, step, request, task)
     candidate_attempt = max(1, int(task.get("attempt") or attempts))
     request_path = (
         folder
@@ -1276,6 +1318,7 @@ def _recover_or_block(
 def _need_model_action(
     skill_dir: Path,
     run_dir: Path,
+    flow: dict[str, Any],
     step: dict[str, Any],
     folder: Path,
     task: dict[str, Any],
@@ -1291,19 +1334,37 @@ def _need_model_action(
         fallback_flowstep = str(first.get("id") or first.get("tool") or "") if isinstance(first, dict) else str(first)
     flowstep_id = str(request.get("flowstep") or fallback_flowstep).strip()
     if flowstep_id:
-        gem_path = skill_dir / str(step.get("gem") or f"references/{step['id']}.md")
-        section = read_gem_section(gem_path, flowstep_id)
-        if not section and fallback_flowstep and fallback_flowstep != flowstep_id:
-            flowstep_id = fallback_flowstep
-            section = read_gem_section(gem_path, flowstep_id)
         request["flowstep"] = flowstep_id
-        instruction = str(request.get("instruction") or "").strip()
-        if section and section not in instruction:
-            request["instruction"] = f"{instruction}\n\n{section}".strip()
-        request.setdefault("gem_path", relative_to(skill_dir, gem_path) if gem_path.is_file() else str(gem_path))
+    request = _start_with_master_prompt(skill_dir, step, request, task)
     attempt = max(1, int(task.get("attempt") or 1))
     request_path = folder / "attempts" / f"attempt-{attempt:03d}" / "model-request.json"
-    write_json(request_path, request)
+    capsule_path = _candidate_task_path(
+        run_dir, step["id"], attempt, row_id=_task_cycle_row(task)
+    ).with_name("context-capsule.json")
+    if (
+        str(step.get("loop") or "none") == "none"
+        and capsule_path.is_file()
+        and request_path.is_file()
+        and read_json(request_path) != request
+    ):
+        # A successful model handoff may request another bounded phase (for
+        # example observe -> edit -> observe). Its evidence set is a NEW
+        # candidate request, never an overwrite of the frozen prior capsule.
+        attempt += 1
+        limit = int(step.get("max_attempts") or step.get("max_model_attempts") or 8)
+        if attempt > limit:
+            raise FlowError(f"{step['id']}: model continuation budget {limit} exhausted")
+        task, _ = _candidate_task(
+            run_dir, flow, step, bindings, task.get("inputs") or {}, attempt,
+            prior_feedback=task.get("prior_feedback"),
+        )
+        request_path = folder / "attempts" / f"attempt-{attempt:03d}" / "model-request.json"
+        write_json(request_path, request)
+        write_json(folder / "model-stage.json", {
+            "attempt": attempt, "row_id": _task_cycle_row(task) or "",
+        })
+    else:
+        write_json(request_path, request)
     draft_path = folder / "draft.json"
     return {
         "schema": ACTION_SCHEMA,
@@ -1410,7 +1471,8 @@ def _run_handler(
 ) -> dict[str, Any]:
     """Return {'result': dict} or {'action': action}."""
     try:
-        result = invoke_tool(skill_dir, step, input_data, draft, task, run_dir)
+        with project_import_context(skill_dir, flow):
+            result = invoke_tool(skill_dir, step, input_data, draft, task, run_dir)
     except Exception as exc:
         return {
             "action": _recover_or_block(
@@ -1483,7 +1545,13 @@ def _run_handler(
                     run_dir, flow, step, bindings, fingerprint, ["NEED_MODEL requires model_request"]
                 )
             }
-        return {"action": _need_model_action(skill_dir, run_dir, step, folder, task, result, bindings)}
+        try:
+            return {"action": _need_model_action(skill_dir, run_dir, flow, step, folder, task, result, bindings)}
+        except FlowError as exc:
+            return {"action": _write_blocked(
+                run_dir, flow, step, bindings, fingerprint, [str(exc)],
+                attempt=max(1, int(task.get("attempt") or 1)),
+            )}
     return {"result": result}
 
 
@@ -1827,6 +1895,17 @@ def _apply_cycle(
     rounds = int(record.get("cycle_round") or 1)
     max_rounds = int(spec.get("max_rounds") or step.get("max_attempts") or 8)
     if chosen == "fail":
+        # A wrapped tool can consume extra model phases before cycle review
+        # (for example an invalid provider raster followed by a replacement).
+        # Preserve that high-water mark BEFORE purge removes model-stage.json;
+        # otherwise the next round reuses an immutable candidate request slot.
+        row_attempt = int(record.get("cycle_row_attempt") or 1)
+        for wrapped_step in wrapped:
+            stage_path = work_dir(run_dir, wrapped_step["id"]) / "model-stage.json"
+            if stage_path.is_file():
+                stage = read_json(stage_path)
+                if str(stage.get("row_id") or "") == row_id:
+                    row_attempt = max(row_attempt, int(stage.get("attempt") or 1))
         if rounds >= max_rounds:
             # _pass_artifact materializes the current cycle candidate before
             # applying its receipt. Remove that live candidate before writing
@@ -1852,7 +1931,7 @@ def _apply_cycle(
         record["cycle_id"] = cid
         record["cycle_row"] = row_id
         record["cycle_round"] = rounds + 1
-        record["cycle_row_attempt"] = int(record.get("cycle_row_attempt") or 1) + 1
+        record["cycle_row_attempt"] = row_attempt + 1
         record["cycle_restart"] = True
         write_json(_execution_path(run_dir), record, overwrite=True)
         return None
@@ -1880,6 +1959,13 @@ def _apply_cycle(
     return None
 
 
+def _cycle_finished(run_dir: Path, step: dict[str, Any]) -> bool:
+    """Completion is scoped to the current cycle's ledger, not the last cycle."""
+    cid = str(step.get("on_cycle") or cycle_id_of(step))
+    ledger = load_ledger(run_dir, cid)
+    return bool(ledger and ledger.get("rows") and first_unfinished(ledger) is None)
+
+
 def _prepare_cycle_start(
     run_dir: Path,
     flow: dict[str, Any],
@@ -1903,12 +1989,15 @@ def _prepare_cycle_start(
     if unfinished is None:
         return None
     record = read_json(_execution_path(run_dir))
-    if not record.get("cycle_row"):
+    changed_cycle = record.get("cycle_id") != cycle_id_of(owner)
+    if changed_cycle or not record.get("cycle_row"):
         purge_cycle_live(run_dir, _cycle_wrap(flow, cycle_id_of(owner)))
         record["cycle_id"] = cycle_id_of(owner)
         record["cycle_row"] = str(unfinished.get("id") or "")
-        record["cycle_round"] = int(record.get("cycle_round") or 1)
+        record["cycle_round"] = 1 if changed_cycle else int(record.get("cycle_round") or 1)
         record["cycle_row_attempt"] = 1
+        record["cycle_done"] = False
+        record["cycle_restart"] = False
         write_json(_execution_path(run_dir), record, overwrite=True)
     return None
 
@@ -1937,10 +2026,17 @@ def _execute_step(
     folder = work_dir(run_dir, step["id"])
     folder.mkdir(parents=True, exist_ok=True)
     record = read_json(_execution_path(run_dir))
-    row_id = str(record.get("cycle_row") or "")
+    # A completed cycle keeps its cursor as historical state. Only its own
+    # wrapper steps may inherit row inputs and the row's retry budget.
+    row_id = str(record.get("cycle_row") or "") if (step.get("on_cycle") or step.get("cycle")) else ""
     cycle_attempt = (
         max(1, int(record.get("cycle_row_attempt") or 1)) if row_id else 1
     )
+    stage_path = folder / "model-stage.json"
+    if str(step.get("loop") or "none") == "none" and stage_path.is_file():
+        stage = read_json(stage_path)
+        if str(stage.get("row_id") or "") == row_id:
+            cycle_attempt = max(cycle_attempt, int(stage.get("attempt") or 1))
     if row_id:
         input_data = dict(input_data)
         input_data["ledger_row"] = row_id
@@ -2049,6 +2145,7 @@ def _execute_step(
                 input_data,
                 cached_candidate,
                 attempt=1,
+                flow=flow,
             )
             if (
                 isinstance(judged, dict)
@@ -2234,8 +2331,10 @@ def _execute_step(
             path: done,
             "receipt": {"ok": True, "remaining": 0, "done": len(done)},
         }
-        if len(done) == 1 and isinstance(done[0], dict) and "path" in done[0] and "sha256" in done[0]:
-            final["asset"] = {"path": done[0]["path"], "sha256": done[0]["sha256"]}
+        if len(done) == 1 and isinstance(done[0], dict) and "path" in done[0]:
+            final["asset"] = {"path": done[0]["path"]}
+            if done[0].get("sha256"):
+                final["asset"]["sha256"] = done[0]["sha256"]
         return _pass_artifact(
             skill_dir, run_dir, flow, step, final, bindings, fingerprint, attempts, cache_info
         )
@@ -2339,6 +2438,7 @@ def _execute_step(
                 input_data,
                 result,
                 attempt=attempts,
+                flow=flow,
             )
             if not isinstance(judged_result, dict):
                 return _write_blocked(
@@ -2457,6 +2557,7 @@ def _execute_step(
         input_data,
         candidate,
         attempt=cycle_attempt,
+        flow=flow,
     )
     if not isinstance(result, dict):
         return _write_blocked(
@@ -2502,6 +2603,7 @@ def _judge_current_candidate(
     candidate: dict[str, Any],
     *,
     attempt: int,
+    flow: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any] | None, str]:
     """Admit one candidate, then optionally apply the semantic judge.
 
@@ -2527,6 +2629,7 @@ def _judge_current_candidate(
                 step,
                 input_data,
                 current_candidate,
+                flow=flow,
             )
         except FlowError as exc:
             return None, str(exc)
@@ -2566,7 +2669,8 @@ def _judge_current_candidate(
     )
     try:
         validate_against_schema(judge_input, _judge_request_schema_path())
-        judge_result = run_library_tool(codebase, worker, judge_input)
+        with project_import_context(skill_dir, flow):
+            judge_result = run_library_tool(codebase, worker, judge_input)
     except Exception as exc:
         return None, f"{type(exc).__name__}: {exc}"
     try:
@@ -2716,6 +2820,8 @@ def _invoke_topology_control_worker(
     step: dict[str, Any],
     input_data: dict[str, Any],
     candidate: dict[str, Any],
+    *,
+    flow: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """Run branch/cycle control after admission, never inside the candidate handler."""
 
@@ -2739,7 +2845,8 @@ def _invoke_topology_control_worker(
         candidate,
     )
     try:
-        raw = run_library_tool(codebase, package, request)
+        with project_import_context(skill_dir, flow):
+            raw = run_library_tool(codebase, package, request)
         receipt = read_receipt(
             {"receipt": raw},
             skill_dir=skill_dir,
@@ -3481,7 +3588,7 @@ def advance(
             chosen_path = chosen_output_path(run_dir, step["id"])
             if step["id"] in skipped:
                 continue
-            if record.get("cycle_done") and step.get("on_cycle") and not step.get("cycle"):
+            if step.get("on_cycle") and not step.get("cycle") and _cycle_finished(run_dir, step):
                 continue
             on_path = str(step.get("on_path") or "")
             active = str(record.get("active_branch") or "")
@@ -3532,9 +3639,7 @@ def advance(
                     not str(record.get("active_branch") or "")
                     or branch_from == str(step["id"])
                 )
-                needs_cycle_reconcile = bool(step.get("cycle")) and not bool(
-                    record.get("cycle_done")
-                )
+                needs_cycle_reconcile = bool(step.get("cycle")) and not _cycle_finished(run_dir, step)
                 if needs_branch_reconcile or needs_cycle_reconcile:
                     action = _resume_chosen_step(
                         skill_dir,
@@ -3646,6 +3751,8 @@ def advance(
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     add_harness_location_args(parser)
+    parser.add_argument("--execution-mode", choices=["coordination", "packaged"],
+                        default="packaged", help="Use coordination for an unpackaged local workflow.")
     parser.add_argument(
         "--harness-root",
         type=Path,
@@ -3711,8 +3818,8 @@ def main(argv: list[str] | None = None) -> int:
         )
         codebase = infer_codebase(skill_dir)
         source_code_root = Path(args.codebase) if args.codebase else (codebase or skill_dir)
+        flow = load_flow(skill_dir, find_flow_path(skill_dir, args.flow) if args.flow else None)
         if run_dir is None:
-            flow = load_flow(skill_dir, find_flow_path(skill_dir, args.flow) if args.flow else None)
             if run_mode == "resume":
                 harness_root = validate_fresh_harness_root(harness_root)
                 found = find_paused_run(harness_root, str(flow.get("flow_id") or ""))
@@ -3748,6 +3855,8 @@ def main(argv: list[str] | None = None) -> int:
                 run_dir,
                 run_mode=run_mode,
                 executing_entrypoint=Path(__file__),
+                product_distributions=flow.get("runtime_distributions"),
+                execution_mode=args.execution_mode,
             )
         except RuntimeReleaseError as exc:
             raise FlowError(str(exc)) from exc

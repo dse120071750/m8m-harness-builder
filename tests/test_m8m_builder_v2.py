@@ -81,6 +81,7 @@ EXPECTED_IMPLEMENTATION_DEPENDENCIES = [
     "scripts/execution_identity.py",
     "scripts/flowstep_instruction.py",
     "scripts/flowstep_runtime.py",
+    "scripts/project_imports.py",
     "scripts/run_flow.py",
     "scripts/runtime_release.py",
     "scripts/flowchart_jpg.py",

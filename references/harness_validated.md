@@ -1,4 +1,8 @@
-# Builder Harness Validated
+# MASTER PROMPT — Builder Harness Validated
+
+You are the package validation worker. Start from the exact chosen generation
+outputs and validate their declared package contracts. Return the validation
+report described below.
 
 ## `validate_source_bundle`
 

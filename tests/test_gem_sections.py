@@ -131,7 +131,7 @@ class GemWriteTests(unittest.TestCase):
             harness = Path(result["harness_dir"])
             gem = (harness / "references" / "card_aligned.md").read_text(encoding="utf-8")
             self.assertNotIn("Rule of success", gem)
-            self.assertIn("sole expectation", gem)
+            self.assertIn("machine completion", gem)
             self.assertIn("## Tool versus intelligence", gem)
             self.assertIn("deterministic tool work", gem)
             self.assertIn("not shell-heavy", gem)
@@ -141,8 +141,23 @@ class GemWriteTests(unittest.TestCase):
             self.assertIn("## `align_edit`", gem)
             self.assertIn("## `hash_bind`", gem)
             chart = (harness / "planning" / "m8m-flowchart.md").read_text(encoding="utf-8")
-            self.assertIn("Gem section", chart)
-            self.assertIn("references/card_aligned.md#align_compare", chart)
+            self.assertIn("Milestone master prompt", chart)
+            self.assertIn("references/card_aligned.md", chart)
+            self.assertNotIn("references/card_aligned.md#", chart)
+
+            # Supplying the authored master prompt keeps it intact without adding
+            # it as a second public workflow field or rewriting its sections.
+            from test_v3_milestones import _closed_milestone_spec
+            prompt = "MASTER PROMPT — SOURCE\n\nUse the supplied file and return its exact path.\n"
+            spec = _closed_milestone_spec("master_prompt_v1", "source_ready")
+            spec["master_prompt"] = prompt
+            authored = generate_v3_flow(
+                codebase, "master_prompt_v1", ["source_ready"],
+                tools=["hash_bind"], milestone_specs=[spec],
+            )
+            source_root = Path(authored["harness_dir"])
+            self.assertEqual((source_root / "references/source_ready.md").read_text(encoding="utf-8"), prompt)
+            self.assertNotIn("master_prompt:", (source_root / "flow.yaml").read_text(encoding="utf-8"))
 
     def test_need_model_loads_gem_section(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import ast
+from contextlib import nullcontext
 from copy import deepcopy
 import hashlib
+from functools import wraps
 import importlib.util
 import json
 import os
@@ -527,6 +529,18 @@ def _load_flow_v4(
     allow_unbound_import: bool = False,
 ) -> dict[str, Any]:
     validate_against_schema(raw, flow_schema_path())
+    if "runtime_distributions" in raw:
+        from runtime_release import validate_product_distributions, RuntimeReleaseError
+        try:
+            validate_product_distributions(raw["runtime_distributions"])
+        except RuntimeReleaseError as exc:
+            raise FlowError(str(exc)) from exc
+    if "codebase_import_roots" in raw:
+        from project_imports import validate_roots, ProjectImportError
+        try:
+            validate_roots(raw["codebase_import_roots"])
+        except ProjectImportError as exc:
+            raise FlowError(str(exc)) from exc
     if raw.get("graph") is not None:
         raise FlowError(
             "flowstep_flow_v4 graph is contract-valid, but the Builder local runtime "
@@ -1099,7 +1113,7 @@ _DYNAMIC_FILE_IMPORT_ARGUMENT = {
     "importlib.machinery.SourcelessFileLoader": 1,
     "runpy.run_path": 0,
 }
-_TRUSTED_RUNTIME_DYNAMIC_LOADERS = {"flowstep_runtime.py", "flowstep_tools.py"}
+_TRUSTED_RUNTIME_DYNAMIC_LOADERS = {"flowstep_runtime.py", "flowstep_tools.py", "project_imports.py"}
 
 
 def _implementation_project(skill_dir: Path) -> tuple[Path, Path]:
@@ -1752,6 +1766,13 @@ def implementation_files(skill_dir: Path, flow: dict[str, Any]) -> list[Path]:
         {Path(os.path.abspath(str(path))) for path in files},
         key=lambda item: item.as_posix().lower(),
     )
+    if flow.get("codebase_import_roots"):
+        from project_imports import module_map, ProjectImportError
+        try:
+            module_map(project, flow["codebase_import_roots"], implementation_paths)
+        except ProjectImportError as exc:
+            raise FlowError(str(exc)) from exc
+        repository_import_roots.update(project / value for value in flow["codebase_import_roots"])
     _assert_closed_repository_imports(
         project,
         implementation_paths,
@@ -2004,7 +2025,24 @@ def work_dir(run_dir: Path, step_id: str) -> Path:
     return run_dir / "work" / step_id
 
 
-def load_tool(skill_dir: Path, step: dict[str, Any]) -> Any:
+def _project_import_binding(skill_dir: Path, flow: dict[str, Any] | None = None):
+    """Use only explicitly authored roots and the frozen implementation closure."""
+    if flow is None or not flow.get("codebase_import_roots"):
+        return None
+    from project_imports import import_context, ProjectImportError
+    _, project = _implementation_project(skill_dir)
+    try:
+        return import_context(project, flow["codebase_import_roots"], implementation_files(skill_dir, flow))
+    except ProjectImportError as exc:
+        raise FlowError(str(exc)) from exc
+
+
+def project_import_context(skill_dir: Path, flow: dict[str, Any] | None = None):
+    binding = _project_import_binding(skill_dir, flow)
+    return binding.activate() if binding is not None else nullcontext()
+
+
+def load_tool(skill_dir: Path, step: dict[str, Any], *, flow: dict[str, Any] | None = None) -> Any:
     path = skill_rel(skill_dir, step["handler"])
     if not path.is_file():
         raise FlowError(f"missing tool: {path}")
@@ -2018,8 +2056,12 @@ def load_tool(skill_dir: Path, step: dict[str, Any]) -> Any:
     # execute the implementation that the run has just superseded.
     source = path.read_bytes()
     original_sys_path = list(sys.path)
+    import_binding = _project_import_binding(skill_dir, flow)
+    def import_scope():
+        return import_binding.activate() if import_binding is not None else nullcontext()
     try:
-        exec(compile(source, str(path), "exec"), module.__dict__)
+        with import_scope():
+            exec(compile(source, str(path), "exec"), module.__dict__)
     finally:
         # Product handlers may add their repo root temporarily for imports.
         # Imported modules stay bound in sys.modules/module globals; retaining
@@ -2027,6 +2069,12 @@ def load_tool(skill_dir: Path, step: dict[str, Any]) -> Any:
         sys.path[:] = original_sys_path
     if not callable(getattr(module, "run", None)):
         raise FlowError(f"{path} must define run(input_data, draft=None, **kwargs)")
+    implementation = module.run
+    @wraps(implementation)
+    def run_with_project_imports(*args, **kwargs):
+        with import_scope():
+            return implementation(*args, **kwargs)
+    module.run = run_with_project_imports
     return module
 
 
@@ -2549,42 +2597,18 @@ def inspect_step_test(source: str, *, step_id: str) -> list[str]:
     return issues
 
 
-def lint_file_payload_schema(schema: dict[str, Any], *, label: str) -> list[str]:
-    issues: list[str] = []
+def lint_file_payload_schema(
+    schema: dict[str, Any], *, label: str,
+    named_media_inputs: dict[str, str] | None = None,
+    image_path_draft: bool = False,
+) -> list[str]:
+    """Compatibility hook: file paths do not imply checksum requirements.
 
-    def walk(node: Any, path: str) -> None:
-        if not isinstance(node, dict):
-            return
-        properties = node.get("properties")
-        if isinstance(properties, dict):
-            keys = set(properties)
-            for key in keys:
-                if key == "path" or key.endswith("_path"):
-                    hash_key = "sha256" if key == "path" else f"{key[:-5]}_sha256"
-                    semantic_digest = (
-                        "files_digest"
-                        if key == "vendor_path"
-                        else None
-                    )
-                    if (
-                        "sha256" not in keys
-                        and hash_key not in keys
-                        and (semantic_digest is None or semantic_digest not in keys)
-                    ):
-                        issues.append(f"{label}{path}.{key} needs a sibling sha256 or {hash_key}")
-            for key, child in properties.items():
-                walk(child, f"{path}.{key}")
-        for key in ("items", "additionalProperties"):
-            if isinstance(node.get(key), dict):
-                walk(node[key], f"{path}.{key}")
-        for key in ("allOf", "anyOf", "oneOf"):
-            for index, child in enumerate(node.get(key) or []):
-                walk(child, f"{path}.{key}[{index}]")
-        if "$ref" in node and isinstance(node["$ref"], str) and node["$ref"].endswith("file_ref_v2.schema.json"):
-            return
-
-    walk(schema, "")
-    return issues
+    Authored JSON Schemas validate payloads; runtime admission checks declared
+    file/media outputs. Keep the old call signature for existing tool callers.
+    Checksums are required only by an explicitly authored domain contract.
+    """
+    return []
 
 
 def file_ref(path: str, digest: str, *, content_schema: str | None = None) -> dict[str, str]:

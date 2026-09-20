@@ -184,6 +184,7 @@ def advance_goal(
             goal_dir,
             run_mode="resume" if existing_goal else "fresh",
             executing_entrypoint=Path(__file__),
+            product_distributions=flow.get("runtime_distributions"),
         )
     except RuntimeReleaseError as exc:
         raise FlowError(str(exc)) from exc
@@ -262,6 +263,7 @@ def advance_goal(
                     else "fresh"
                 ),
                 executing_entrypoint=Path(__file__),
+                product_distributions=flow.get("runtime_distributions"),
             )
         except RuntimeReleaseError as exc:
             raise FlowError(str(exc)) from exc
@@ -288,11 +290,15 @@ def advance_goal(
         row["last_state"] = str(action["state"])
         if action["state"] == "COMPLETE":
             row["status"] = "done"
+            row.pop("blockers", None)
+            ledger["status"] = "in_progress"
             row["chosen_output"] = str(chosen_output_path(child, flow["steps"][-1]["id"]).resolve())
             _save_ledger(goal_dir, ledger)
             continue
         if action["state"] == "ACTION_REQUIRED":
             row["status"] = "running"
+            row.pop("blockers", None)
+            ledger["status"] = "in_progress"
             _save_ledger(goal_dir, ledger)
             return {
                 "schema": "m8m_goal_action_v1",

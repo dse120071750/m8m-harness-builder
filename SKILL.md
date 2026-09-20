@@ -1,14 +1,10 @@
 ---
 name: m8m-harness-builder
 description: >
-  M8M 3.2 workflow compiler, validator, and codebase-runtime packager. Author a Codex-native skill
-  as milestone canvas nodes, FlowSteps, reusable tools, declared output ports,
-  optional semantic judges, and chosen-output contracts; compile canonical flowstep_flow_v4 JSON
-  and a base-independent source bundle plus deterministic `.m8mpkg`, then install an immutable runtime
-  release in the owning codebase. The product skill points only to that
-  codebase launcher and never executes through this Builder installation.
-  Use to design, import, scaffold, validate, or locally install an M8M workflow.
-  It does not push or deploy.
+  Build and edit M8M harnesses that coordinate existing tools and FlowSteps,
+  validate milestone outputs, and track progress and resume. Reuse working
+  implementations in place. Compile workflow changes without runtime packaging;
+  build portable packages and immutable releases only when explicitly requested.
 license: MIT
 metadata:
   author: dse120071750
@@ -17,30 +13,33 @@ metadata:
 
 # M8M harness builder 3.2
 
-Invoke `$m8m-harness-builder` through `agents/openai.yaml`. Read the declared
-authoring guide at `references/builder-authoring.md`; the canvas owns the closed
-workflow boundary and each node owns its exact `references/<milestone>.md` Gem.
-Before designing or implementing FlowSteps, read
-`references/flowstep-development.md` and classify deterministic tool work
-separately from bounded intelligence. Product FlowSteps use declared in-process
-codebase tools; subprocess workflow steps and hand-built runtime evidence are
-build blockers.
+Invoke `$m8m-harness-builder` using `references/builder-authoring.md` to coordinate
+existing tools and FlowSteps.
+Inventory the workflow first; preserve working implementations and make only
+needed changes. Read `references/flowstep-development.md` for tool reuse.
 
-Use the authoring guide to compile, validate, or locally install the workflow.
-Making an existing skill into an M8M workflow is the same work as a new
-workflow: understand the task, split milestones, build or move FlowSteps, and
-place Gems, tools, and runtime in the owning codebase. Audit only supplies
-that existing context. Mixed leftovers are normal. Generated `flow.yaml` is review-only. A successful local install places the
-launcher and digest-addressed runtime releases—including their closed vendored
-dependency files—under the target codebase's
-`flowsteps/flows/<flow_id>/`; the built skill contains only
-`scripts/m8m_run.py`, a pointer to that launcher. This skill never pushes or
-deploys. Declare every repository-local runtime import in
-`implementation_dependencies`; undeclared or dynamically unprovable local code
-imports are build blockers.
+Name new milestones `milestone01`, `milestone02`, etc.; keep IDs stable on edits.
+Bind later inputs to earlier named outputs. See `references/master-prompts.md`.
+Every milestone starts with its own complete master prompt at
+`references/<milestone>.md` (the Gem). Author it first: role, goal, bound inputs
+and reference roles, domain instructions, constraints, and exact deliverable.
+Read the entire prompt before execution or recovery. FlowSteps support it;
+a short success sentence or isolated section cannot replace it. Preserve supplied
+prompts in full, adapted to explicit user requirements.
 
-Builder validation also emits advisory observer metadata:
-`platform_common_profile: compatible|unsupported` and an exact sorted
-`platform_unsupported_features` list. This never changes local validity and is
-not platform admission. Verify cross-repository contract bytes with
-`scripts/verify_platform_contract_parity.py --platform-schema-root <schemas>`.
+Native `agents/openai.yaml` owns the graph; `flow.yaml` is generated. Existing
+v4 flows may keep their format. Keep named outputs, structural validation,
+runtime-owned progress, bounded retries, explicit resume, and one current chosen
+output per milestone. Default to `loop: none`. Do not add hashes, revisions,
+proof graphs, or automatic image reviews as milestone work or completion gates.
+A checksum or review needs an explicit request or an existing external API
+requirement. Internal runtime/package integrity stays internal.
+
+Use `scripts/run_m8m.py --mode coordinate` by default. It validates and refreshes
+the workflow without archives or runtime releases. Existing packaged flows keep
+their launcher and pins; local flows use the returned coordination runner.
+
+Only explicit packaging or isolated distribution uses `--mode package` and
+`references/runtime-packaging.md`. The five-stage Builder canvas belongs to
+that path; its closure, vendoring, installation, and platform-parity rules do
+not apply to ordinary workflow edits. This skill never pushes or deploys.

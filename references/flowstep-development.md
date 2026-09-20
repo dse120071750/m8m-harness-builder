@@ -1,62 +1,68 @@
 # FlowStep development boundary
 
-Read this Gem before designing or implementing a product FlowStep. Classify
-the work before choosing an implementation.
+Classify the work before choosing an implementation. A FlowStep coordinates an
+existing capability whenever it already performs the required work.
 
-## Dissect the work
+Every milestone starts from its complete master prompt in
+`references/<milestone>.md`, including milestones implemented entirely by tools.
+The master prompt defines the whole task; FlowSteps are the internal means of
+performing it. Read the full prompt before execution or recovery. Do not replace
+it with an isolated FlowStep section or add a model call just to recite it.
 
-A deterministic operation is a **tool** when a closed schema and fixture can
-prove its behavior: the same typed input selects the same action, a model key
-is unnecessary, and the reply is evidence rather than an opinion. Implement it
-as one declared, versioned, in-process function in the product codebase.
+## Reuse tools
 
-Work is **intelligence** only when meaning, invention, comparison, or judgment
-cannot be reduced to a fixture rule. Give it one bounded model profile. The
-model may call only declared tools and may return only the candidate draft or
-named candidate outputs. It never owns milestone order, structural admission,
-judge decisions, chosen manifests, or runtime receipts.
+Deterministic work belongs in a tool: a Python function, existing script or CLI,
+API client, or other declared capability. Keep its implementation in place.
+Use a small typed adapter only to bridge its calling convention and the
+milestone's named outputs. Do not rewrite working CLIs as in-process libraries
+merely to satisfy the harness.
 
-For every FlowStep, record:
+The current v4 runner resolves versioned tool refs through
+`<repo>/flowsteps/tools/<id>/tool.py`. This can be a thin adapter; it does not
+have to own or copy the underlying implementation. Retain its input/output
+schemas and a meaningful adapter check. Declare local code dependencies for
+resume identity; remote tools retain their own service boundary.
 
-- the classification and the failed or satisfied fixture test;
-- its exact typed input and named output;
-- the product-codebase tool that owns deterministic work;
-- the bounded model profile and justification, when intelligence is required;
-- the runtime-owned evidence it must not construct; and
-- the approval boundary, when present.
+A CLI adapter uses a fixed executable or explicit configured path, an argument
+array with `shell=False`, an explicit working directory, and a bounded timeout.
+Pass structured input through stdin or a declared file; check exit status and
+validate the actual reply. Do not build shell strings from model output.
+An API adapter uses the existing client's authentication, timeout, error, and
+idempotency behavior. A child workflow adapter records the exact child run and
+resumes it instead of starting another child on each retry.
 
-## Closed tool execution
+## Bound intelligence
 
-Tool-heavy means typed-function-heavy, not shell-heavy. A product FlowStep may
-not launch a subprocess, shell, CLI, secondary workflow, or mutable Builder
-runner. The codebase launcher may bootstrap the verified pinned runtime in a
-separate process; that launcher is not a FlowStep.
+Use intelligence when meaning, invention, comparison, or judgment cannot be
+reduced to deterministic rules. Give it the needed inputs, declared tools, and
+one bounded model profile. It returns a candidate draft or named outputs.
+It does not own ordering, structural admission, or progress state.
+Default to `loop: none`; a separate judge requires an explicit review request.
+Do not infer a judge from image output, model type, or milestone name. Do not add
+hashes, revision chains, proof graphs, or automatic image reviews to active
+milestone paths. Named outputs and their schema are the completion contract.
 
-The closed FlowStep execution closure must not:
+For each FlowStep, identify its capability, input, output, and failure behavior.
+Add a model justification or approval boundary when relevant. Avoid mandatory
+analysis tables and new fixtures for unchanged working tools.
 
-- run `rg` or perform recursive filesystem discovery over `C:\NisanRuntime`;
-- use `Get-ChildItem -Recurse`, `os.walk`, `Path.rglob`, globstar traversal, or
-  an equivalent broad search;
-- use `subprocess`, `Popen`, `os.system`, `os.popen`, PowerShell, batch, or shell
-  scripts as workflow steps;
-- write M8M control artifacts such as `chosen-output.json`, judge receipts,
-  cache receipts, progress, roster, or ledger state;
-- split stability fetching or receipt generation into a second command when
-  the declared tool can return the typed evidence directly; or
-- perform any post-approval FlowStep other than one declared `finalize`.
+## Keep orchestration state in the engine
 
-`finalize` is a declared, versioned, in-process tool. It consumes an already
-approved candidate and returns the final named output or external-operation
-receipt. It is not permission to launch an arbitrary command. If further
-searching, fetching, transformation, manifest construction, or receipt repair
-is needed, approval was premature and candidate work must continue.
+The runtime alone writes `chosen-output.json`, judge receipts, progress, roster,
+and ledger. Tools may return business manifests and provider receipts as named
+outputs. These must not impersonate runtime control artifacts. Pass exact
+run-local paths; do not discover runs by searching execution storage.
 
-The runtime is the sole writer of M8M control state. A business manifest or
-provider receipt may be a declared named milestone output, but it must be
-validated as business data and must not impersonate a runtime control file.
+Preserve the user's approval scope and existing side-effect safeguards.
+Post-approval operations consume approved inputs and respect the operator's
+idempotency contract. Fetching receipts or verifying readback may remain separate
+FlowSteps when the existing tool requires them. Step names do not define
+permission boundaries.
 
-## Admission consequence
+## Packaging-specific restrictions
 
-The Builder treats a violation as `BUILD_REQUIRED`. A violating package may be
-kept only as a non-runnable implementation sketch; it cannot pass harness
-validation or authorize local installation.
+Explicit `--mode package` currently admits the existing closed in-process tool
+model. Its subprocess, dependency closure, and finalize restrictions remain for
+compatibility; see `runtime-packaging.md`. A CLI adapter can be valid for local
+coordination while unsupported by that packaging profile. Report that distinction
+instead of rewriting the tool without a packaging requirement.

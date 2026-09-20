@@ -748,8 +748,35 @@ class GoalIsolationTests(unittest.TestCase):
             row = read_json(goal_dir / "goal-ledger.json")["rows"][0]
             self.assertEqual(row["child_run_dir"], child_before)
             self.assertEqual(row["attempt"], 1)
+            self.assertNotIn("blockers", row)
+            self.assertEqual(read_json(goal_dir / "goal-ledger.json")["status"], "complete")
             result = resolve_chosen_output(Path(child_before), "source_ready", output_id="result")
             self.assertEqual(result["version"], "fixed")
+
+    def test_recovered_goal_waiting_for_model_clears_stale_blockers(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            codebase, harness = _scaffold(root, invalid=True)
+            goal = root / "goal.json"
+            _write_json(goal, {"goal_id": "recover_model", "rows": [
+                {"id": "case_001", "request": {"message": "one"}}
+            ]})
+            runtime = root / "runtime"
+            goal_dir = runtime / "runs" / "goal_repair"
+            blocked = advance_goal(harness, goal_dir, goal_path=goal,
+                                   harness_root=runtime, source_code_root=codebase)
+            self.assertEqual(blocked["state"], "BLOCKED")
+            before = read_json(goal_dir / "goal-ledger.json")["rows"][0]
+            self.assertTrue(before["blockers"])
+            with patch.object(run_goal, "advance", return_value={"state": "ACTION_REQUIRED"}):
+                pending = advance_goal(harness, goal_dir, continue_after_edit="source_ready",
+                                       harness_root=runtime, source_code_root=codebase)
+            self.assertEqual(pending["state"], "ACTION_REQUIRED")
+            ledger = read_json(goal_dir / "goal-ledger.json")
+            self.assertEqual(ledger["status"], "in_progress")
+            self.assertEqual(ledger["rows"][0]["status"], "running")
+            self.assertNotIn("blockers", ledger["rows"][0])
+            self.assertEqual(ledger["rows"][0]["child_run_dir"], before["child_run_dir"])
 
 
 if __name__ == "__main__":

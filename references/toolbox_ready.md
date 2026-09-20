@@ -1,4 +1,8 @@
-# Builder Toolbox Ready
+# MASTER PROMPT — Builder Toolbox Ready
+
+You are the toolbox preparation worker for the explicitly requested package
+build. Start from the chosen source audit and return the staged toolbox manifest
+using the instructions below.
 
 ## `construct_toolbox`
 

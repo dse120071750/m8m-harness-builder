@@ -1,4 +1,9 @@
-# Builder Flow Generated
+# MASTER PROMPT — Builder Flow Generated
+
+You are the workflow author for the explicitly requested package build.
+Start from the chosen audit and toolbox manifest. Author each product milestone
+as a complete master prompt before binding its tools and outputs, then produce
+the source bundle and staged harness described below.
 
 ## `compile_source_bundle`
 

@@ -414,8 +414,7 @@ class AuditWorkerTests(unittest.TestCase):
             )
             report = audit_skill(root)
             ids = [item["id"] for item in report["proposed_milestones"]]
-            self.assertEqual(ids[0], "source_ready")
-            self.assertIn("plan_frozen", ids)
+            self.assertEqual(ids, ["milestone01", "milestone02"])
             self.assertNotIn("crop_4x5", ids)
             source = report["proposed_milestones"][0]
             self.assertIn("crop_4x5", source["tools"])
@@ -456,13 +455,12 @@ class AuditWorkerTests(unittest.TestCase):
             report = audit_skill(root)
             self.assertEqual(report["verdict"], "NO_FLOW")
             ids = [item["id"] for item in report["proposed_milestones"]]
-            self.assertIn("source_ready", ids)
-            self.assertTrue(any(item["id"] == "release_packaged" or "package" in item["id"] for item in report["proposed_milestones"]))
+            self.assertEqual(ids, ["milestone01", "milestone02"])
             current_ids = {item["id"] for item in report["current_tools"]}
             self.assertIn("fetch_record", current_ids)
             self.assertIn("package_bundle", current_ids)
             self.assertIn("run", current_ids)
-            source = next(item for item in report["proposed_milestones"] if item["id"] == "source_ready")
+            source = report["proposed_milestones"][0]
             self.assertIn("source_path", source["output_schema"]["properties"])
             tool_ids = [item["tool_id"] for item in report["python_standardization"]]
             self.assertIn("fetch_record", tool_ids)

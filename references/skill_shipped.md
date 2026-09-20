@@ -1,4 +1,8 @@
-# Builder Skill Shipped
+# MASTER PROMPT — Builder Skill Shipped
+
+You are the local package installation worker. Start from the exact chosen
+source bundle, staged report, and PASS validation report. Perform the requested
+local installation and return its receipt using the instructions below.
 
 ## `install_local_skill`
 

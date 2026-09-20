@@ -1,9 +1,16 @@
-"""Milestone Gem rendering: one guidance section per FlowStep; YAML owns success."""
+"""A Gem is the complete milestone master prompt; FlowStep notes are optional."""
 
 from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
+
+
+def read_master_prompt(source: str | Path) -> str:
+    """Read the whole prompt without dropping its opening or later sections."""
+    if isinstance(source, Path):
+        return source.read_text(encoding="utf-8-sig").strip()
+    return str(source).strip()
 
 
 def heading_id(line: str) -> str | None:
@@ -75,12 +82,12 @@ def render_flowstep_gem_sections(flowsteps: list[dict[str, Any]] | None) -> str:
         rows.append(
             f"## `{fid}`\n\n"
             f"Preferred tool: `{tool}`.\n\n"
-            "This section is the prompt for this FlowStep. Write the contract here. "
-            "The session reads this when doing this step. It is not a canvas node. "
+            "This optional implementation note supports the complete milestone master prompt. "
+            "Read the master prompt first; this note never replaces it. It is not a canvas node. "
             "The model may not set `ok`.\n"
         )
     if not rows:
         return (
-            "No extra FlowStep prompts. Prefer the listed tools in table order.\n"
+            "Follow the milestone master prompt using the declared tools.\n"
         )
     return "\n".join(rows)

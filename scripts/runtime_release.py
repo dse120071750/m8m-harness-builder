@@ -13,10 +13,15 @@ import hashlib
 import importlib.metadata
 import json
 import os
+import re
 import secrets
 import shutil
 import sys
 import zipfile
+from copy import deepcopy
+from contextlib import contextmanager
+import platform
+import threading
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterable, Mapping, Sequence
 
@@ -29,6 +34,10 @@ RUNTIME_CLI_ABI = "m8m_runtime_cli_v1"
 RUNTIME_ENTRYPOINT = "scripts/run_flow.py"
 RUNTIME_LOCK_FILENAME = "m8m-runtime-lock.json"
 RUNTIME_MANIFEST_ENV = "M8M_RUNTIME_MANIFEST"
+# A one-use result created only by full verification inside the isolated
+# bootstrap. Never persisted, inherited from an environment flag or reused by
+# another process/resume.
+_startup_verification = None
 RUNTIME_DEPENDENCIES = (
     "attrs",
     "jsonschema",
@@ -48,6 +57,7 @@ RUNTIME_SCRIPT_FILES = (
     "gem_text.py",
     "m8m_cache.py",
     "milestone_expectation.py",
+    "project_imports.py",
     "run_flow.py",
     "run_goal.py",
     "runtime_release.py",
@@ -158,7 +168,74 @@ def _python_identity() -> tuple[str, str]:
     return python_abi, f"sha256:{_sha256_file(executable)}"
 
 
-def _resolved_runtime_distributions() -> list[tuple[str, Any]]:
+def validate_product_distributions(value: Any) -> list[dict[str, str]]:
+    """Validate exact authored roots without consulting host packages."""
+    if value is None:
+        return []
+    if not isinstance(value, list) or not 1 <= len(value) <= 32:
+        raise RuntimeReleaseError("runtime_distributions must contain 1–32 exact distribution pins")
+    result: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for row in value:
+        if not isinstance(row, dict) or set(row) != {"name", "version"}:
+            raise RuntimeReleaseError("runtime_distributions rows require only name and version")
+        name, version = row["name"], row["version"]
+        if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?", name):
+            raise RuntimeReleaseError("runtime_distributions has an invalid distribution name")
+        if not isinstance(version, str) or not re.fullmatch(r"[0-9][A-Za-z0-9.!+_-]*", version):
+            raise RuntimeReleaseError("runtime_distributions requires exact versions, without ranges, extras or URLs")
+        canonical = re.sub(r"[-_.]+", "-", name).lower()
+        if canonical in seen:
+            raise RuntimeReleaseError(f"duplicate canonical runtime distribution: {canonical}")
+        seen.add(canonical)
+        result.append({"name": name, "version": version})
+    return result
+
+
+def assert_product_distribution_lock(value: Any, dependencies: Sequence[Mapping[str, Any]]) -> None:
+    """Compare authored roots only with the already verified runtime lock."""
+    locked = {re.sub(r"[-_.]+", "-", str(row["name"])).lower(): str(row["version"])
+              for row in dependencies}
+    for row in validate_product_distributions(value):
+        canonical = re.sub(r"[-_.]+", "-", row["name"]).lower()
+        if locked.get(canonical) != row["version"]:
+            raise RuntimeReleaseError(
+                f"declared runtime distribution is absent or differs from the verified runtime lock: "
+                f"{row['name']}=={row['version']} (locked {locked.get(canonical)!r})"
+            )
+
+
+_marker_environment_lock = threading.RLock()
+
+
+@contextmanager
+def _local_windows_marker_queries():
+    """Use CPython's local OS fallback, not a potentially stuck WMI service.
+
+Packaging re-queries the default environment even when evaluate() receives an
+explicit environment. Keep the fallback scoped over the entire closure pass;
+restore the process hook on both success and error. No OS service is modified.
+"""
+    if sys.platform != 'win32' or not hasattr(platform, '_wmi_query'):
+        yield
+        return
+    with _marker_environment_lock:
+        original = platform._wmi_query
+        def unavailable(*args, **kwargs):
+            raise OSError('Builder uses local Windows marker information')
+        platform._wmi_query = unavailable
+        try:
+            yield
+        finally:
+            platform._wmi_query = original
+
+
+def _resolved_runtime_distributions(product_distributions: Any = None) -> list[tuple[str, Any]]:
+    with _local_windows_marker_queries():
+        return _resolve_runtime_distributions_local(product_distributions)
+
+
+def _resolve_runtime_distributions_local(product_distributions: Any = None) -> list[tuple[str, Any]]:
     """Resolve the marker-aware transitive dependency closure for this host."""
 
     try:
@@ -172,13 +249,20 @@ def _resolved_runtime_distributions() -> list[tuple[str, Any]]:
 
     environment = default_environment()
     environment["extra"] = ""
-    pending = [Requirement(name) for name in RUNTIME_DEPENDENCIES]
+    roots = validate_product_distributions(product_distributions)
+    try:
+        pending = [Requirement(name) for name in RUNTIME_DEPENDENCIES]
+        pending.extend(Requirement(f"{row['name']}=={row['version']}") for row in roots)
+    except Exception as exc:
+        raise RuntimeReleaseError(f"invalid exact runtime distribution pin: {exc}") from exc
     resolved: dict[str, tuple[str, Any]] = {}
     while pending:
         pending.sort(key=lambda item: canonicalize_name(item.name))
         requirement = pending.pop(0)
         if requirement.marker is not None and not requirement.marker.evaluate(environment):
             continue
+        if requirement.extras or requirement.url:
+            raise RuntimeReleaseError(f"runtime dependency extras/direct URLs are unsupported: {requirement}")
         canonical = canonicalize_name(requirement.name)
         try:
             distribution = importlib.metadata.distribution(requirement.name)
@@ -208,10 +292,15 @@ def _resolved_runtime_distributions() -> list[tuple[str, Any]]:
             if child.marker is None or child.marker.evaluate(environment):
                 child_requirements.append(child)
         pending.extend(child_requirements)
-    return [resolved[key] for key in sorted(resolved)]
+    rows = [resolved[key] for key in sorted(resolved)]
+    # Exact strings also reject a host's local-version substitution for an
+    # authored public version, even where PEP 440 equality would allow it.
+    assert_product_distribution_lock(product_distributions,
+        [{"name": name, "version": str(dist.version)} for name, dist in rows])
+    return rows
 
 
-def _dependency_sources() -> tuple[list[dict[str, Any]], list[tuple[str, Path]]]:
+def _dependency_sources(product_distributions: Any = None, *, member_rows=None) -> tuple[list[dict[str, Any]], list[tuple[str, Path]]]:
     """Freeze every installed distribution into its own import root.
 
     Distribution paths that deliberately escape site-packages (for example a
@@ -224,7 +313,7 @@ def _dependency_sources() -> tuple[list[dict[str, Any]], list[tuple[str, Path]]]
     dependencies: list[dict[str, Any]] = []
     sources: list[tuple[str, Path]] = []
     vendor_roots: set[str] = set()
-    for name, distribution in _resolved_runtime_distributions():
+    for name, distribution in _resolved_runtime_distributions(product_distributions):
         raw_files = distribution.files
         if not raw_files:
             raise RuntimeReleaseError(
@@ -276,6 +365,8 @@ def _dependency_sources() -> tuple[list[dict[str, Any]], list[tuple[str, Path]]]
                 "digest": f"sha256:{_sha256_file(source)}",
             }
             file_rows.append(row)
+            if member_rows is not None:
+                member_rows[member_path] = row
             sources.append((member_path, source))
         if not file_rows:
             raise RuntimeReleaseError(
@@ -309,12 +400,13 @@ def _runtime_identity(manifest: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def _manifest_from_sources(builder_root: Path) -> tuple[dict[str, Any], list[tuple[str, Path]]]:
+def _manifest_from_sources(builder_root: Path, product_distributions: Any = None) -> tuple[dict[str, Any], list[tuple[str, Path]]]:
     sources = _source_members(builder_root)
-    dependencies, dependency_sources = _dependency_sources()
+    dependency_rows = {}
+    dependencies, dependency_sources = _dependency_sources(product_distributions, member_rows=dependency_rows)
     sources.extend(dependency_sources)
     members = [
-        {
+        dependency_rows[relative] if relative in dependency_rows else {
             "path": relative,
             "byte_count": source.stat().st_size,
             "digest": f"sha256:{_sha256_file(source)}",
@@ -493,6 +585,7 @@ def stage_runtime_release(
     product_roots: Sequence[Path],
     flow_id: str,
     codebase: Path,
+    product_distributions: Any = None,
 ) -> dict[str, Any]:
     """Stage one immutable runtime owned by the compiled codebase harness.
 
@@ -500,7 +593,7 @@ def stage_runtime_release(
     never receive or import runtime implementation modules.
     """
 
-    manifest, sources = _manifest_from_sources(builder_root)
+    manifest, sources = _manifest_from_sources(builder_root, product_distributions)
     runtime_id = str(manifest["runtime_id"])
     lock = _runtime_lock(manifest)
     harness = harness.absolute()
@@ -843,18 +936,54 @@ def _runtime_lock_keys() -> tuple[str, ...]:
     )
 
 
+def verify_runtime_for_startup(manifest_path: Path) -> dict[str, Any]:
+    """Verify before loading vendor/product code, then allow one same-process bind."""
+    global _startup_verification
+    _startup_verification = None
+    if not (sys.flags.isolated and sys.flags.no_site and sys.dont_write_bytecode):
+        raise RuntimeReleaseError("runtime bootstrap requires isolated, no-site, no-bytecode Python")
+    manifest = verify_runtime_release(manifest_path)
+    _startup_verification = (os.getpid(), str(manifest_path.absolute()), deepcopy(manifest))
+    return manifest
+
+
+def _runtime_for_binding(manifest_path: Path) -> dict[str, Any]:
+    global _startup_verification
+    verified, _startup_verification = _startup_verification, None
+    if verified is not None:
+        pid, path, manifest = verified
+        if pid == os.getpid() and path == str(manifest_path.absolute()):
+            # Detect changed manifest identity between bootstrap and bind.
+            current = json.loads(manifest_path.read_text(encoding="utf-8"))
+            if current != manifest:
+                raise RuntimeReleaseError("runtime manifest changed after bootstrap verification")
+            return manifest
+    return verify_runtime_release(manifest_path)
+
+
 def bind_runtime_to_run(
     harness: Path,
     run_dir: Path,
     *,
     run_mode: str,
     executing_entrypoint: Path | None = None,
+    product_distributions: Any = None,
+    execution_mode: str = "packaged",
 ) -> dict[str, Any] | None:
     """Pin/verify the executing runtime before any milestone work starts."""
 
     harness_lock_path = harness.resolve() / RUNTIME_LOCK_FILENAME
     run_lock_path = run_dir.resolve() / RUNTIME_LOCK_FILENAME
     manifest_value = os.environ.get(RUNTIME_MANIFEST_ENV, "").strip()
+    if execution_mode not in {"coordination", "packaged"}:
+        raise RuntimeReleaseError("execution mode must be coordination or packaged")
+    if execution_mode == "coordination":
+        if manifest_value or harness_lock_path.exists() or run_lock_path.exists():
+            raise RuntimeReleaseError(
+                "a packaged workflow or run must use its existing codebase launcher; "
+                "coordination cannot bypass a runtime pin"
+            )
+        return None
     if not manifest_value:
         if harness.resolve() == Path(__file__).resolve().parents[1]:
             return None
@@ -869,7 +998,7 @@ def bind_runtime_to_run(
             "skill's scripts/m8m_run.py"
         )
     manifest_path = Path(manifest_value).resolve()
-    manifest = verify_runtime_release(manifest_path)
+    manifest = _runtime_for_binding(manifest_path)
     release_root = manifest_path.parent.resolve()
     expected_runtime_module = release_root / "scripts" / "runtime_release.py"
     if Path(__file__).resolve() != expected_runtime_module.resolve():
@@ -897,6 +1026,7 @@ def bind_runtime_to_run(
                 "the executing M8M entrypoint is not declared by the pinned runtime release"
             )
     executing_lock = _runtime_lock(manifest)
+    assert_product_distribution_lock(product_distributions, manifest["dependencies"])
     if run_mode == "resume":
         if not run_lock_path.is_file():
             raise RuntimeReleaseError("resume is missing its pinned M8M runtime lock")

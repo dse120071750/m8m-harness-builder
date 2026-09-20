@@ -6,6 +6,7 @@ max_run_seconds: 3600
 artifact_root: artifacts
 milestones:
   - id: ingest
+    gem: references/ingest.md
     success: Normalized text is available as the chosen JSON result.
     output_contract: ingest_v1
     output_schema: steps/ingest/output.schema.json
@@ -27,6 +28,7 @@ milestones:
     intelligence: none
     on_tool_fail: BLOCKED
   - id: segment
+    gem: references/segment.md
     success: The sentence array is available as the chosen JSON result.
     output_contract: segment_v1
     output_schema: steps/segment/output.schema.json
@@ -50,6 +52,7 @@ milestones:
     intelligence: none
     on_tool_fail: BLOCKED
   - id: label
+    gem: references/label.md
     success: The first sentence has one accepted label.
     output_contract: label_v1
     output_schema: steps/label/output.schema.json

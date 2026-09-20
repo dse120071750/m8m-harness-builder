@@ -1,14 +1,16 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
 
 import support  # noqa: F401
 
-from m8m_build_steps import _audit, _generate, _toolbox
+from m8m_build_steps import _audit, _generate, _tool_ids, _toolbox
 from migrate_skill_source import (
     classify_skill,
+    runtime_ownership_audit,
     write_candidate_bind_tool,
     write_migrated_skill_source,
 )
@@ -22,6 +24,26 @@ def _write(path: Path, text: str) -> None:
 
 
 class MigrateSkillSourceTests(unittest.TestCase):
+    def test_tool_ids_skip_proposal_only_unversioned_judge(self) -> None:
+        audit = {
+            "proposed_milestones": [
+                {
+                    "id": "assets_bound",
+                    "tools": ["hash_bind"],
+                    "worker": "assets_bound_judge",
+                    "judge_abi": "m8m_milestone_judge_v1",
+                },
+                {
+                    "id": "release_packaged",
+                    "tools": [],
+                    "worker": "release_judge@2.1.0",
+                    "judge_abi": "m8m_milestone_judge_v1",
+                },
+            ]
+        }
+
+        self.assertEqual(_tool_ids(audit), ["hash_bind", "release_judge"])
+
     def test_audit_context_reuses_scripts_and_lists_repo_gaps(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp) / "old-caption"
@@ -68,6 +90,56 @@ class MigrateSkillSourceTests(unittest.TestCase):
             self.assertTrue(form["builder_runtime_hits"])
             self.assertGreaterEqual(len(form["source_context"]["gaps"]), 2)
 
+    def test_runtime_ownership_ignores_unrelated_codebase_trees(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            codebase = Path(temp) / "repo"
+            root = Path(temp) / "product-skill"
+            harness = codebase / "flowsteps" / "flows" / "product_flow"
+            _write(root / "SKILL.md", "---\nname: product-skill\n---\n")
+            _write(harness / "launch.py", "print('product runtime')\n")
+            _write(
+                harness / "runtime" / "releases" / "release-1" / "runtime-manifest.json",
+                "{}\n",
+            )
+            _write(
+                codebase / "unrelated" / "SKILL.md",
+                "C:/Users/x/.codex/skills/m8m-harness-builder/scripts/run_flow.py\n",
+            )
+
+            ownership = runtime_ownership_audit(
+                root,
+                codebase=codebase,
+                flow_id="product_flow",
+            )
+
+            self.assertEqual(ownership["runtime_ownership"], "codebase")
+            self.assertEqual(ownership["builder_runtime_hits"], [])
+
+    def test_runtime_ownership_scans_matching_installed_skill(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            codebase = Path(temp) / "repo"
+            root = Path(temp) / "product-skill"
+            harness = codebase / "flowsteps" / "flows" / "product_flow"
+            _write(root / "SKILL.md", "---\nname: product-skill\n---\n")
+            _write(harness / "launch.py", "print('product runtime')\n")
+            _write(
+                harness / "runtime" / "releases" / "release-1" / "runtime-manifest.json",
+                "{}\n",
+            )
+            _write(
+                codebase / ".agents" / "skills" / root.name / "SKILL.md",
+                "C:/Users/x/.codex/skills/m8m-harness-builder/scripts/run_flow.py\n",
+            )
+
+            ownership = runtime_ownership_audit(
+                root,
+                codebase=codebase,
+                flow_id="product_flow",
+            )
+
+            self.assertEqual(ownership["runtime_ownership"], "mixed")
+            self.assertEqual(len(ownership["builder_runtime_hits"]), 1)
+
     def test_migrated_non_m8m_source_compiles(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -78,6 +150,11 @@ class MigrateSkillSourceTests(unittest.TestCase):
                 "---\nname: case-caption\ndescription: Caption a frozen case.\n---\n\n"
                 "# case-caption\n\nCaption one case.\n",
             )
+            master_prompt = (
+                "MASTER PROMPT — SOURCE\n\nYou prepare the source record from the bound request.\n"
+                "Preserve its case identity and return the complete source record.\n"
+            )
+            _write(skill / "references/source_ready.md", master_prompt)
             audit = {
                 "audited_skill": {"name": "case-caption", "description": "Caption a frozen case."},
                 "proposed_milestones": [
@@ -130,6 +207,7 @@ class MigrateSkillSourceTests(unittest.TestCase):
             self.assertEqual(source["canvas"]["flow_id"], "case_caption_v1")
             self.assertEqual([item["id"] for item in compiled["milestones"]], result["milestones"])
             self.assertTrue((dest / "references" / "source_ready.md").is_file())
+            self.assertEqual((dest / "references/source_ready.md").read_text(encoding="utf-8"), master_prompt)
             self.assertTrue((dest / "agents" / "openai.yaml").is_file())
 
     def test_candidate_bind_tool_is_not_a_passthrough(self) -> None:
@@ -180,6 +258,10 @@ class MigrateSkillSourceTests(unittest.TestCase):
                 },
                 run_dir,
             )["outputs"]["result"]
+            self.assertTrue(toolbox["tools"])
+            for tool in toolbox["tools"]:
+                self.assertIs(tool["seeded"], False)
+                self.assertEqual(tool["origin"], "local-implementation")
             generated = _generate(
                 {
                     "request": {
@@ -200,6 +282,18 @@ class MigrateSkillSourceTests(unittest.TestCase):
             self.assertTrue((harness / "agents" / "openai.yaml").is_file())
             self.assertTrue((harness / "launch.py").is_file())
             self.assertFalse(staged.get("equivalence_claimed", True))
+            source_bundle_contract = json.loads(
+                (
+                    Path(__file__).resolve().parents[1]
+                    / "contracts"
+                    / "m8m_builder_source_bundle_v2.schema.json"
+                ).read_text(encoding="utf-8")
+            )
+            staged_properties = source_bundle_contract["properties"]["outputs"][
+                "properties"
+            ]["staged_harness"]["properties"]
+            self.assertIn("authoring_mode", staged_properties)
+            self.assertIn("equivalence_claimed", staged_properties)
 
 
 if __name__ == "__main__":

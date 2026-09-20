@@ -552,5 +552,154 @@ class BuilderInstallIntegrityTests(unittest.TestCase):
             self.assertFalse(any((root / "run").rglob("install-journal.json")))
 
 
+class DeclaredDependencyInstallTests(unittest.TestCase):
+    def fixture(self, root):
+        stage, codebase, target, _ = _transaction_fixture(root)
+        dependencies = {
+            "flowsteps/sources/sample_source/__init__.py",
+            "flowsteps/sources/sample_source/nested/helper.py",
+            "business/operations/contracts/__init__.py",
+            "business/operations/contracts/rules.json",
+        }
+        for relative in dependencies:
+            path = stage / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("{}\n" if path.suffix == ".json" else "VERSION = 'new'\n")
+        members = _staged_install_members(stage, "sample_v1", "sample-skill")
+        return dict(run_dir=root / "run", stage=stage, members=members,
+                    codebase=codebase, target=target, overwrite=True,
+                    implementation_dependencies=dependencies)
+
+    def snapshot(self, root):
+        return {path.relative_to(root).as_posix(): path.read_bytes()
+                for path in root.rglob("*") if path.is_file()}
+
+    def test_declared_packages_preserve_unlisted_siblings_and_replay(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            args = self.fixture(root)
+            codebase = args["codebase"]
+            sibling = codebase / "flowsteps/sources/sample_source/unrelated.txt"
+            sibling.parent.mkdir(parents=True, exist_ok=True)
+            sibling.write_bytes(b"untouched")
+            outside = codebase / "business/operations/other_module/keep.txt"
+            outside.parent.mkdir(parents=True, exist_ok=True)
+            outside.write_bytes(b"outside managed roots")
+            result = _install_declared_members(**args)
+            self.assertEqual(result["status"], "COMMITTED")
+            for relative in args["implementation_dependencies"]:
+                self.assertEqual((codebase / relative).read_bytes(), (args["stage"] / relative).read_bytes())
+            self.assertEqual(sibling.read_bytes(), b"untouched")
+            self.assertEqual(outside.read_bytes(), b"outside managed roots")
+            roots = {Path(row["destination"]).relative_to(codebase).as_posix()
+                     for row in result["roots"] if Path(row["destination"]).is_relative_to(codebase)}
+            self.assertIn("flowsteps/sources/sample_source", roots)
+            self.assertNotIn("flowsteps/sources/sample_source/nested", roots)
+            self.assertNotIn("business", roots)
+            before = self.snapshot(codebase)
+            self.assertEqual(_install_declared_members(**args)["status"], "COMMITTED")
+            self.assertEqual(self.snapshot(codebase), before)
+
+    def test_unknown_redirected_top_level_and_overlapping_paths_reject_before_writes(self):
+        for scenario in ("undeclared", "redirect", "top_level", "overlap", "missing"):
+            with self.subTest(scenario=scenario), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                args = self.fixture(root)
+                dependencies = args["implementation_dependencies"]
+                if scenario == "undeclared":
+                    dependencies.remove("flowsteps/sources/sample_source/__init__.py")
+                elif scenario == "redirect":
+                    member = next(row for row in args["members"] if row["source"] == "business/operations/contracts/__init__.py")
+                    member["destinations"] = ["codebase/business/operations/contracts/rules.json"]
+                elif scenario in ("top_level", "overlap"):
+                    relative = "root.py" if scenario == "top_level" else "flowsteps/__init__.py"
+                    (args["stage"] / relative).write_text("VALUE = 1\n")
+                    dependencies.add(relative)
+                    args["members"] = _staged_install_members(args["stage"], "sample_v1", "sample-skill")
+                else:
+                    dependencies.add("missing/package.py")
+                with self.assertRaises(FlowError):
+                    _install_declared_members(**args)
+                self.assertFalse(args["codebase"].exists())
+                self.assertFalse(args["target"].exists())
+                self.assertFalse(args["run_dir"].exists())
+
+    def test_declared_dependency_isolation_and_stage_drift_reject_before_preparation(self):
+        for poison in (False, True):
+            with self.subTest(poison=poison), tempfile.TemporaryDirectory() as temp:
+                args = self.fixture(Path(temp))
+                source = args["stage"] / "flowsteps/sources/sample_source/__init__.py"
+                source.write_text("from pathlib import Path\nBUILDER = Path.home() / '.codex' / 'skills' / 'm8m-harness-builder'\n")
+                if poison:
+                    args["members"] = _staged_install_members(args["stage"], "sample_v1", "sample-skill")
+                expected = "mutable M8M Builder" if poison else "no longer matches"
+                with self.assertRaisesRegex(FlowError, expected):
+                    _install_declared_members(**args)
+                self.assertFalse(args["codebase"].exists())
+                self.assertFalse(args["run_dir"].exists())
+
+    def test_fallback_failure_rolls_back_existing_and_fallback_roots(self):
+        with tempfile.TemporaryDirectory() as temp:
+            args = self.fixture(Path(temp))
+            _seed_old_install(args["codebase"], args["target"])
+            old = args["codebase"] / "business/operations/contracts/__init__.py"
+            old.parent.mkdir(parents=True)
+            old.write_bytes(b"OLD DEPENDENCY\n")
+            before = self.snapshot(args["codebase"])
+            target_before = self.snapshot(args["target"])
+            real_replace = m8m_build_steps.os.replace
+
+            def fail_after_fallback(source, destination):
+                if str(source).endswith(".prepared") and Path(destination).name == "sample_source":
+                    raise OSError("failed after earlier fallback promotion")
+                return real_replace(source, destination)
+
+            with patch.object(m8m_build_steps.os, "replace", side_effect=fail_after_fallback):
+                with self.assertRaisesRegex(FlowError, "rolled back"):
+                    _install_declared_members(**args)
+            self.assertEqual(self.snapshot(args["codebase"]), before)
+            self.assertEqual(self.snapshot(args["target"]), target_before)
+            self.assertFalse(any(args["run_dir"].rglob("install-journal.json")))
+
+    def test_interrupted_fallback_promotion_resumes_same_journal(self):
+        with tempfile.TemporaryDirectory() as temp:
+            args = self.fixture(Path(temp))
+            real_replace = m8m_build_steps.os.replace
+
+            def interrupt_fallback(source, destination):
+                if str(source).endswith(".prepared") and Path(destination).name == "sample_source":
+                    raise KeyboardInterrupt("fallback interruption")
+                return real_replace(source, destination)
+
+            with patch.object(m8m_build_steps.os, "replace", side_effect=interrupt_fallback):
+                with self.assertRaisesRegex(KeyboardInterrupt, "fallback interruption"):
+                    _install_declared_members(**args)
+            journal = next(args["run_dir"].rglob("install-journal.json"))
+            self.assertEqual(read_json(journal)["status"], "PREPARED")
+            result = _install_declared_members(**args)
+            self.assertEqual(result["status"], "COMMITTED")
+            self.assertEqual(result["install_key"], read_json(journal)["install_key"])
+
+    def test_fallback_destination_drift_and_link_ambiguity_reject(self):
+        for scenario in ("drift", "link"):
+            with self.subTest(scenario=scenario), tempfile.TemporaryDirectory() as temp:
+                args = self.fixture(Path(temp))
+                dependency = args["codebase"] / "business/operations/contracts/__init__.py"
+                if scenario == "link":
+                    real_check = m8m_build_steps._is_unsafe_link
+                    def link_check(path):
+                        return path == dependency.parent or real_check(path)
+                    with patch.object(m8m_build_steps, "_is_unsafe_link", side_effect=link_check):
+                        with self.assertRaisesRegex(FlowError, "unsafe link"):
+                            _install_declared_members(**args)
+                    self.assertFalse(args["run_dir"].exists())
+                else:
+                    _install_declared_members(**args)
+                    dependency.write_bytes(b"changed after commit")
+                    with self.assertRaisesRegex(FlowError, "read-back verification"):
+                        _install_declared_members(**args)
+                    self.assertEqual(dependency.read_bytes(), b"changed after commit")
+
+
 if __name__ == "__main__":
     unittest.main()

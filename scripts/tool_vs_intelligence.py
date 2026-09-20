@@ -21,7 +21,7 @@ EXAMPLE_ROWS: list[dict[str, str]] = [
     {
         "id": "crop_4x5",
         "class": "tool",
-        "test": "fixture PNG in, PNG+hash out",
+        "test": "fixture PNG in, transformed PNG out",
         "why": "pixel math; not a milestone",
         "destination": "flowsteps/tools/crop_4x5/",
     },
@@ -29,7 +29,7 @@ EXAMPLE_ROWS: list[dict[str, str]] = [
         "id": "hash_bind",
         "class": "tool",
         "test": "same bytes → same sha256",
-        "why": "pure bind; file_ref_v2 receipt",
+        "why": "optional checksum for an explicit request or external API contract",
         "destination": "flowsteps/tools/hash_bind/",
     },
     {
@@ -42,7 +42,7 @@ EXAMPLE_ROWS: list[dict[str, str]] = [
     {
         "id": "render_html_shell",
         "class": "tool",
-        "test": "fixture HTML → screenshot hash",
+        "test": "fixture HTML → screenshot file",
         "why": "fixed viewport generator",
         "destination": "flowsteps/tools/render_html_shell/",
     },
@@ -71,7 +71,7 @@ EXAMPLE_ROWS: list[dict[str, str]] = [
         "id": "image_generate",
         "class": "intelligence",
         "test": "model produces bytes",
-        "why": "invention; hash_bind still sizes and binds",
+        "why": "invention; runtime admits the declared image output",
         "milestone": "assets_bound",
     },
     {
@@ -184,11 +184,11 @@ def from_audit(audit: dict[str, Any]) -> dict[str, Any]:
         table = make_table(
             [
                 {
-                    "id": "hash_bind",
+                    "id": "schema_validate",
                     "class": "tool",
                     "test": TOOL_TEST,
-                    "why": "default seed; last milestone emits asset",
-                    "destination": "flowsteps/tools/hash_bind/",
+                    "why": "structural validation of declared outputs",
+                    "destination": "flowsteps/tools/schema_validate/",
                 }
             ],
             flow_id=str(flow_id) if flow_id else None,

@@ -1,7 +1,5 @@
 """Launch this workflow through the runtime release owned by its codebase."""
 
-from __future__ import annotations
-
 import sys
 
 
@@ -11,7 +9,24 @@ if not sys.flags.isolated:
     _platform = __import__("nt" if "nt" in sys.builtin_module_names else "posix")
     _arguments = [sys.executable, "-I", "-B", __file__, *sys.argv[1:]]
     if hasattr(_platform, "spawnv"):
-        raise SystemExit(_platform.spawnv(0, sys.executable, _arguments))
+        # Windows spawnv joins tokens without quoting. Preserve each argument
+        # using CRT rules before importing any potentially shadowed module.
+        def _windows_argument(value):
+            quoted, backslashes = '"', 0
+            for character in value:
+                if character == "\\":
+                    backslashes += 1
+                elif character == '"':
+                    quoted += "\\" * (backslashes * 2 + 1) + '"'
+                    backslashes = 0
+                else:
+                    quoted += "\\" * backslashes + character
+                    backslashes = 0
+            return quoted + "\\" * (backslashes * 2) + '"'
+
+        raise SystemExit(_platform.spawnv(
+            0, sys.executable, [_windows_argument(value) for value in _arguments]
+        ))
     _platform.execv(sys.executable, _arguments)
     raise SystemExit("M8M isolated bootstrap exec unexpectedly returned")
 
@@ -242,10 +257,16 @@ def _verify_release(lock: dict[str, object]) -> tuple[dict[str, object], Path]:
             raise SystemExit(f"Duplicate codebase runtime member: {relative}")
         seen.add(relative)
         member = release_root.joinpath(*PurePosixPath(relative).parts)
-        if _is_unsafe_link(member) or not member.is_file():
-            raise SystemExit(f"Missing codebase runtime member: {relative}")
-        digest = "sha256:" + _sha256_file(member)
-        byte_count = member.stat().st_size
+        # Verify the stdlib-only bootstrap module here. It verifies every
+        # member in the isolated child before any vendor/entrypoint import.
+        # Other member digests below bind the manifest identity, not a claim
+        # that those bytes have already been checked.
+        digest, byte_count = item.get("digest"), item.get("byte_count")
+        if relative == "scripts/runtime_release.py":
+            if _is_unsafe_link(member) or not member.is_file():
+                raise SystemExit(f"Missing codebase runtime member: {relative}")
+            digest = "sha256:" + _sha256_file(member)
+            byte_count = member.stat().st_size
         if digest != item.get("digest") or byte_count != item.get("byte_count"):
             raise SystemExit(f"Codebase runtime member digest mismatch: {relative}")
         normalized.append(
@@ -273,17 +294,7 @@ def _verify_release(lock: dict[str, object]) -> tuple[dict[str, object], Path]:
     }
     if all_vendor_members != covered_vendor_members:
         raise SystemExit("The codebase runtime has unowned vendor files")
-    expected_files = {"runtime-manifest.json", *seen}
-    actual_files: set[str] = set()
-    for member in release_root.rglob("*"):
-        if _is_unsafe_link(member):
-            raise SystemExit(
-                f"The codebase runtime contains an undeclared link: {member.relative_to(release_root)}"
-            )
-        if member.is_file():
-            actual_files.add(member.relative_to(release_root).as_posix())
-    if actual_files != expected_files:
-        raise SystemExit("The codebase runtime release directory is not closed")
+    # Closed inventory and all file/link checks run once in the child verifier.
     payload_digest = _digest_bytes(
         _canonical_bytes(
             {
@@ -371,12 +382,38 @@ vendor_roots = [
     for item in manifest["dependencies"]
     if isinstance(item, dict)
 ]
+
+
+def _native_import_path(path: Path) -> str:
+    """Preserve verified vendor paths for Win32 extension loaders beyond MAX_PATH."""
+    value = str(path)
+    if os.name != "nt" or value.startswith("\\\\?\\"):
+        return value
+    if value.startswith("\\\\"):
+        return "\\\\?\\UNC\\" + value[2:]
+    return "\\\\?\\" + value
+
+
 isolated_runtime_bootstrap = (
-    "import pathlib,runpy,sys;"
+    "import hashlib,importlib.util,pathlib,runpy,sys;"
     "entrypoint=sys.argv[1];"
     "vendor_count=int(sys.argv[2]);"
     "vendor_roots=sys.argv[3:3+vendor_count];"
     "sys.argv=[entrypoint,*sys.argv[3+vendor_count:]];"
+    "release=pathlib.Path(entrypoint).parent.parent;"
+    "verifier=release/'scripts'/'runtime_release.py';"
+    # Recheck exactly the module loaded across the process boundary. The
+    # expected hash is an argument from the pin-checked launcher, not an env flag.
+    "expected=sys.argv.pop(1);"
+    "expected_manifest=sys.argv.pop(1);"
+    "actual=hashlib.sha256(verifier.read_bytes()).hexdigest();"
+    "None if actual == expected else sys.exit('runtime verifier changed before isolated import');"
+    "spec=importlib.util.spec_from_file_location('runtime_release',verifier);"
+    "module=importlib.util.module_from_spec(spec);"
+    "spec.loader.exec_module(module);"
+    "verified=module.verify_runtime_for_startup(release/'runtime-manifest.json');"
+    "None if module._digest_bytes(module._canonical_bytes(verified)) == expected_manifest else sys.exit('runtime manifest changed across bootstrap');"
+    "sys.modules['runtime_release']=module;"
     "sys.path[:0]=[str(pathlib.Path(entrypoint).parent),*vendor_roots];"
     "runpy.run_path(entrypoint,run_name='__main__')"
 )
@@ -390,7 +427,9 @@ completed = subprocess.run(
         isolated_runtime_bootstrap,
         str(entrypoint),
         str(len(vendor_roots)),
-        *(str(path) for path in vendor_roots),
+        *(_native_import_path(path) for path in vendor_roots),
+        next(str(item['digest'])[7:] for item in manifest['members'] if item['path'] == 'scripts/runtime_release.py'),
+        "sha256:" + hashlib.sha256(_canonical_bytes(manifest)).hexdigest(),
         *forwarded,
     ],
     env=environment,

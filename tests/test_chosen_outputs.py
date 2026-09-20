@@ -4,6 +4,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import yaml
 
@@ -170,6 +171,23 @@ class ChosenOutputTests(unittest.TestCase):
             self.assertEqual(second["state"], "COMPLETE")
             self.assertEqual((run_dir / "diagnostic-counts" / "producer.txt").read_text(), "1")
             self.assertEqual((run_dir / "diagnostic-counts" / "consumer.txt").read_text(), "1")
+
+    def test_media_admission_and_resume_need_no_output_hashes_or_image_judge(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            harness = self._harness(root)
+            run_dir = root / "run"
+            with mock.patch("session_layout._sha256", side_effect=AssertionError("unrequested output hash")), \
+                 mock.patch("run_flow.run_library_tool", side_effect=AssertionError("unrequested image review")):
+                first = advance(harness, run_dir, request_path=_request(root))
+                self.assertEqual(first["state"], "COMPLETE", first)
+                second = advance(harness, run_dir)
+                self.assertEqual(second["state"], "COMPLETE", second)
+                manifest = load_chosen_output(run_dir, "producer")
+            self.assertTrue(all("sha256" not in item for item in manifest["members"]))
+            self.assertEqual((run_dir / "diagnostic-counts" / "producer.txt").read_text(), "1")
+            for path in (run_dir / "materialized").glob("*.json"):
+                self.assertNotIn("artifact_sha256", read_json(path))
 
     def test_resume_rejects_corrupt_chosen_json_without_rerunning_work(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

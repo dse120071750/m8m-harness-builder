@@ -379,20 +379,21 @@ class InferLoopTests(unittest.TestCase):
         self.assertEqual(milestones[1]["worker"], "cycle_receipt")
         self.assertNotIn("next", milestones[0])
 
-    def test_infer_judge_for_image_milestone(self) -> None:
+    def test_image_milestone_does_not_infer_review_or_hash_worker(self) -> None:
         milestones = [
             {"id": "source_ready", "intelligence": "none", "tools": ["hash_bind"], "output_schema": {}},
             {"id": "card_aligned", "intelligence": "image", "tools": ["hash_bind"], "output_schema": {}},
         ]
         infer_schema_control(milestones)
-        self.assertEqual(milestones[1]["loop"], "judge")
-        self.assertEqual(milestones[1]["worker"], "card_aligned_judge")
-        self.assertNotEqual(milestones[1]["worker"], "ok_receipt")
-        self.assertEqual(milestones[0].get("worker"), "hash_bind")
-        self.assertNotEqual(milestones[0].get("loop"), "judge")
+        for item in milestones:
+            self.assertEqual(item.get("loop", "none"), "none")
+            self.assertNotIn("worker", item)
+            self.assertNotIn("judge_abi", item)
+            self.assertNotIn("receipt_schema", item)
+            self.assertNotIn("_judge_inferred", item)
         self.assertTrue(milestones[0].get("success"))
         self.assertTrue(milestones[0].get("gem", "").endswith("source_ready.md"))
-        self.assertIn("Retry until the semantic judge returns PASS", milestones[1]["success"])
+        self.assertNotIn("judge", milestones[1]["success"])
 
     def test_does_not_judge_every_asset_milestone(self) -> None:
         milestones = [
@@ -403,16 +404,18 @@ class InferLoopTests(unittest.TestCase):
         infer_schema_control(milestones)
         self.assertTrue(all(str(item.get("loop") or "none") != "judge" for item in milestones))
         self.assertTrue(all(item.get("success") for item in milestones))
-        self.assertEqual(milestones[0]["worker"], "hash_bind")
-        self.assertNotEqual(milestones[1].get("worker"), "ok_receipt")
-        self.assertEqual(milestones[2]["worker"], "hash_bind")
+        self.assertTrue(all("worker" not in item for item in milestones))
 
-    def test_needs_judge_is_quality_not_every_checkpoint(self) -> None:
-        self.assertFalse(needs_judge({"id": "source_ready"}))
-        self.assertFalse(needs_judge({"id": "plan_frozen"}))
-        self.assertTrue(needs_judge({"id": "card_aligned"}))
-        self.assertTrue(needs_judge({"id": "slot_generated"}))
-        self.assertTrue(needs_judge({"id": "design_frozen", "intelligence": "image"}))
+    def test_needs_judge_only_for_explicit_loop(self) -> None:
+        for name in ("source_ready", "card_aligned", "slot_generated", "response_ready", "spatial_judge"):
+            for intelligence in ("none", "completion", "image", "judge"):
+                with self.subTest(name=name, intelligence=intelligence):
+                    item = {"id": name, "intelligence": intelligence, "asset": {"kind": "image"}}
+                    self.assertFalse(needs_judge(item))
+                    pair_milestone(item)
+                    self.assertEqual(item.get("loop", "none"), "none")
+                    self.assertNotIn("worker", item)
+        self.assertTrue(needs_judge({"id": "explicit_review", "loop": "judge"}))
 
     def test_candidate_gate_is_not_reused_as_semantic_judge(self) -> None:
         item = {
@@ -420,6 +423,7 @@ class InferLoopTests(unittest.TestCase):
             "intelligence": "judge",
             "tools": ["restyle_alignment_gate", "ok_receipt"],
             "worker": "ok_receipt",
+            "loop": "judge",
         }
         pair_milestone(item)
         self.assertEqual(item["loop"], "judge")
@@ -427,8 +431,8 @@ class InferLoopTests(unittest.TestCase):
         self.assertEqual(item["judge_abi"], "m8m_milestone_judge_v1")
         self.assertEqual(pick_gate_tool(["hash_bind", "ok_receipt"]), None)
 
-    def test_response_ready_is_wait_judge(self) -> None:
-        item = {"id": "response_ready", "asset": {"kind": "json"}, "tools": []}
+    def test_explicit_wait_judge_is_preserved(self) -> None:
+        item = {"id": "response_ready", "asset": {"kind": "json"}, "tools": [], "loop": "judge"}
         self.assertTrue(is_wait_milestone(item))
         self.assertTrue(needs_judge(item))
         pair_milestone(item)

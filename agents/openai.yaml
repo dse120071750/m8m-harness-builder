@@ -1,7 +1,7 @@
 interface:
   display_name: "M8M Harness Builder"
-  short_description: "Compile and validate an M8M 3.1 workflow source bundle."
-  default_prompt: "Use $m8m-harness-builder to make a current M8M workflow. Understand the task, split milestones, build or move FlowSteps, and place Gems, tools, and runtime in the owning codebase. Audit existing files only as context. Keep unfinished product tools BUILD_REQUIRED. Do not push, publish, or deploy."
+  short_description: "Coordinate tools, FlowSteps, and workflow progress."
+  default_prompt: "Use $m8m-harness-builder to coordinate existing tools and FlowSteps, validate milestone outputs, and track progress. Author each milestone as a complete master prompt before binding tools and outputs. Preserve existing implementations. Active milestones use named outputs and schema checks without mandatory hashes, revisions, proof graphs, or automatic image reviews; package a runtime only when explicitly requested."
 policy:
   allow_implicit_invocation: true
 canvas:
@@ -19,6 +19,7 @@ canvas:
     - scripts/execution_identity.py
     - scripts/flowstep_instruction.py
     - scripts/flowstep_runtime.py
+    - scripts/project_imports.py
     - scripts/run_flow.py
     - scripts/runtime_release.py
     - scripts/flowchart_jpg.py

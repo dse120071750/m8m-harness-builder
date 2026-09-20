@@ -229,11 +229,21 @@ def _tool_ids(audit: dict[str, Any]) -> list[str]:
         ids.extend(str(item) for item in milestone.get("tools") or [] if item)
         if milestone.get("worker"):
             worker = str(milestone["worker"])
-            ids.append(
-                runtime_package_name(worker, label=f"{milestone.get('id')}.worker")
-                if milestone.get("judge_abi")
-                else worker
-            )
+            if milestone.get("judge_abi"):
+                # Audit inference emits human-readable, proposal-only judge
+                # names.  From-context migration authors those milestones as
+                # deterministic loop:none steps, so an unversioned proposal
+                # is not a runtime package and must not enter the toolbox.
+                # Exact authored refs remain eligible for package reuse.
+                if "@" in worker:
+                    ids.append(
+                        runtime_package_name(
+                            worker,
+                            label=f"{milestone.get('id')}.worker",
+                        )
+                    )
+            else:
+                ids.append(worker)
     unique: list[str] = []
     for tool_id in ids:
         if tool_id and tool_id not in unique:
@@ -426,7 +436,8 @@ def _toolbox(input_data: dict[str, Any], run_dir: Path) -> dict[str, Any]:
                     "status": "PASS" if not blockers else "BUILD_REQUIRED",
                     "tool_id": tool_id,
                     "tool_dir": str(dest),
-                    "origin": "from_context",
+                    "seeded": False,
+                    "origin": "local-implementation",
                     "runnable": not blockers,
                     "non_runnable": bool(blockers),
                     "blockers": blockers,
@@ -1444,6 +1455,7 @@ def _implementation_requirements(
     codebase = infer_codebase(harness)
     requirements: list[dict[str, Any]] = []
     seen_tool_refs: set[str] = set()
+    seen_judge_refs: dict[str, tuple[str, str]] = {}
     seen_dependencies: set[str] = set()
     flow_id = str(definition.get("flow_id") or "workflow")
     source_agents = {
@@ -1583,12 +1595,22 @@ def _implementation_requirements(
             judge_binding = execution.get("judge")
             judge_binding = judge_binding if isinstance(judge_binding, dict) else {}
             judge_ref = str(judge_binding.get("ref") or "")
+            if judge_ref:
+                judge_identity = (judge_worker, judge_abi)
+                previous_identity = seen_judge_refs.get(judge_ref)
+                if previous_identity is not None:
+                    if previous_identity != judge_identity:
+                        raise FlowError(
+                            "shared judge ref maps to conflicting runtime packages or ABIs: "
+                            f"ref={judge_ref}"
+                        )
+                    continue
+                seen_judge_refs[judge_ref] = judge_identity
             judge_built = bool(judge_ref and not blockers)
             judge_requirement = {
                 "ref": judge_ref or f"judge.{flow_id}.{milestone_id}@source",
                 "kind": "milestone_judge",
                 "role": "milestone_judge",
-                "milestone_id": milestone_id,
                 "runtime_abi": judge_abi,
                 "entrypoint": "run",
                 "build_state": "built" if judge_built else "BUILD_REQUIRED",
@@ -2063,7 +2085,9 @@ def _assert_staged_install_manifest(
     return stage, current, digest
 
 
-def _skill_native_source_paths(source: dict[str, Any]) -> list[str]:
+def _skill_native_source_paths(
+    source: dict[str, Any], *, include_project_dependencies: bool = True
+) -> list[str]:
     paths: list[str] = []
 
     def add(value: Any) -> None:
@@ -2075,8 +2099,9 @@ def _skill_native_source_paths(source: dict[str, Any]) -> list[str]:
         if isinstance(resource, dict):
             add(resource.get("path"))
     canvas = source.get("canvas") if isinstance(source.get("canvas"), dict) else {}
-    for value in canvas.get("implementation_dependencies") or []:
-        add(value)
+    if include_project_dependencies:
+        for value in canvas.get("implementation_dependencies") or []:
+            add(value)
     for agent in source.get("milestones") or []:
         if not isinstance(agent, dict):
             continue
@@ -2091,6 +2116,8 @@ def _skill_native_source_paths(source: dict[str, Any]) -> list[str]:
         ):
             add(agent.get(key))
         for key in ("implementation_dependencies", "read_paths"):
+            if key == "implementation_dependencies" and not include_project_dependencies:
+                continue
             for value in agent.get(key) or []:
                 add(value)
     return paths
@@ -2144,13 +2171,19 @@ def _copy_skill_native_source(
         stage / ".agents" / "skills" / skill_name,
         stage / ".claude" / "skills" / skill_name,
     ]
+    skill_members = set(_skill_native_source_paths(source, include_project_dependencies=False))
     for relative in _skill_native_source_paths(source):
         source_file = _bounded_source_file(source_root, relative)
         if not source_file.is_file():
             blockers.append(f"missing skill-native source member: {relative}")
             continue
         destinations = [harness.joinpath(*PurePosixPath(relative).parts)]
-        destinations.extend(root.joinpath(*PurePosixPath(relative).parts) for root in product_roots)
+        # Project-relative dependencies belong to the codebase. Mirroring them
+        # beneath a skill creates a second importable package under skill roots.
+        # Keep their source bytes in the harness; copy to product skills only
+        # when that path also has an explicit authored-resource role.
+        if relative in skill_members:
+            destinations.extend(root.joinpath(*PurePosixPath(relative).parts) for root in product_roots)
         if relative in project_dependencies:
             destinations.append(stage.joinpath(*PurePosixPath(relative).parts))
         for destination in destinations:
@@ -2466,6 +2499,7 @@ def _generate(input_data: dict[str, Any], run_dir: Path) -> dict[str, Any]:
             product_roots=product_roots,
             flow_id=str(generated.get("flow_id") or ""),
             codebase=_path(request, "codebase"),
+            product_distributions=authored_definition.get("runtime_distributions"),
         )
     except RuntimeReleaseError as exc:
         raise FlowError(f"cannot package the codebase-owned M8M runtime: {exc}") from exc
@@ -2697,6 +2731,7 @@ def _install_destination(
     codebase: Path,
     target: Path,
     value: str,
+    dependency_roots: dict[str, str] | None = None,
 ) -> tuple[Path, Path, str]:
     """Resolve one declared file and its independently swappable managed root."""
     if value.startswith("codebase/"):
@@ -2739,6 +2774,12 @@ def _install_destination(
         root_parts = parts[:3]
     elif len(parts) >= 4 and parts[:2] == (".claude", "skills"):
         root_parts = parts[:3]
+    elif prefix == "codebase" and value in (dependency_roots or {}):
+        root_value = dependency_roots[value]
+        root = _safe_destination(codebase, f"codebase/{root_value}", prefix="codebase")
+        if destination == root or root not in destination.parents:
+            raise FlowError(f"install dependency escapes its managed root: {value}")
+        return destination, root, destination.relative_to(root).as_posix()
     else:
         raise FlowError(
             f"install destination has no atomic managed root: {value}"
@@ -2747,6 +2788,34 @@ def _install_destination(
     if destination == root or root not in destination.parents:
         raise FlowError(f"install destination escapes its managed root: {value}")
     return destination, root, destination.relative_to(root).as_posix()
+
+
+def _dependency_install_roots(
+    *, codebase: Path, target: Path, dependencies: set[str],
+) -> dict[str, str]:
+    """Use only declared containing directories as preserving overlay roots.
+
+    Conventional roots retain their existing policy. Nested fallback roots may
+    share an explicitly present parent candidate; no common ancestor is invented.
+    Repository-root files remain unsupported by directory-swap transactions.
+    """
+    fallback: dict[str, PurePosixPath] = {}
+    for relative in sorted(dependencies):
+        value = f"codebase/{relative}"
+        try:
+            _install_destination(codebase=codebase, target=target, value=value)
+        except FlowError as exc:
+            if not str(exc).startswith("install destination has no atomic managed root:"):
+                raise
+            parent = PurePosixPath(relative).parent
+            if not parent.parts:
+                raise FlowError("top-level implementation dependency has no directory-swap root: " + relative) from exc
+            fallback[value] = parent
+    candidates = sorted(set(fallback.values()), key=lambda item: (len(item.parts), str(item)))
+    return {
+        value: next(str(root) for root in candidates if parent == root or root in parent.parents)
+        for value, parent in fallback.items()
+    }
 
 
 def _install_member_requires_runtime_isolation(
@@ -2983,7 +3052,20 @@ def _install_declared_members(
     codebase: Path,
     target: Path,
     overwrite: bool,
+    implementation_dependencies: set[str] | None = None,
 ) -> dict[str, Any]:
+    dependencies = set(implementation_dependencies or ())
+    # This allow-set comes from the revalidated staged flow, not annotations
+    # attached to individual install members.
+    for relative in dependencies:
+        if (not isinstance(relative, str) or not relative
+                or str(PurePosixPath(relative)) != relative):
+            raise FlowError("implementation dependency install path must be canonical")
+        _bounded_source_file(stage, relative)
+        _bounded_source_file(codebase, relative)
+    dependency_roots = _dependency_install_roots(
+        codebase=codebase, target=target, dependencies=dependencies,
+    )
     complete_roots = {
         (target.resolve() / "scripts").resolve(),
     }
@@ -2998,12 +3080,16 @@ def _install_declared_members(
             raise FlowError(f"staged member no longer matches its manifest: {source_rel}")
         for raw_destination in member.get("destinations") or []:
             raw_destination = str(raw_destination)
+            if (raw_destination in dependency_roots
+                    or (source_rel in dependencies and raw_destination.startswith("codebase/"))) and raw_destination != f"codebase/{source_rel}":
+                raise FlowError("declared implementation dependency cannot be redirected from another staged source")
             destination, managed_root, managed_relative = _install_destination(
                 codebase=codebase,
                 target=target,
                 value=raw_destination,
+                dependency_roots=dependency_roots,
             )
-            if _install_member_requires_runtime_isolation(
+            if source_rel in dependencies or _install_member_requires_runtime_isolation(
                 destination,
                 codebase=codebase,
                 target=target,
@@ -3027,6 +3113,8 @@ def _install_declared_members(
                 )
             seen_destinations[destination] = expected_digest
 
+    if dependencies - {str(member.get("source") or "") for member in members}:
+        raise FlowError("declared implementation dependencies are missing from staged install members")
     pairs.sort(key=lambda item: str(item["destination"]).casefold())
     destinations = [
         {"path": str(item["destination"]), "digest": str(item["digest"])}
@@ -3297,6 +3385,10 @@ def _ship(input_data: dict[str, Any], run_dir: Path) -> dict[str, Any]:
         codebase=codebase,
         target=target,
         overwrite=overwrite,
+        implementation_dependencies={
+            path.relative_to(stage).as_posix()
+            for path in _runtime_implementation_dependency_paths(flow, stage)
+        },
     )
     copied = list(installation.get("installed_files") or [])
     product_skill = codebase / ".agents" / "skills" / skill_name / "SKILL.md"

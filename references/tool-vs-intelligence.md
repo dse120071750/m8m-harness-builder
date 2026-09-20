@@ -36,6 +36,11 @@ secondary workflow, or runtime-folder discovery routine. Read
 
 Read this file once per new flow. Do not restate the catalog in `SKILL.md`.
 
+The catalog describes possible capabilities, not required FlowSteps. Default
+milestones to `loop: none`. Hashes, revision chains, proof graphs, and automatic
+image reviews are not milestone prerequisites. Add a checksum or review only
+for an explicit user request or an existing external API contract.
+
 ## The test (use this, not vibes)
 
 A step is a **tool** if **all** of these are true:
@@ -77,7 +82,7 @@ find a way (like a normal skill). Prefer fixing or adding
 | Family | Examples | Why it is a tool |
 | --- | --- | --- |
 | Fetch / IO | MCP `get_case`, SQL by primary key, HTTP GET of a known URL, read a UTF-8 file | Structured read; same id → same record |
-| Transform | crop 4:3→4:5, letterbox, resize to 1080×1350, EXIF strip | Pixel math; fixture PNG in, PNG+hash out |
+| Transform | crop 4:3→4:5, letterbox, resize to 1080×1350, EXIF strip | Pixel math; fixture PNG in, transformed PNG out |
 | Bind | sha256, `file_ref_v2`, locale normalize, whitespace collapse | Pure function |
 | Render | HTML shell → Chromium screenshot, DXF emit, contact sheet | Generator + fixed viewport |
 | Validate | JSON Schema, language/mojibake gate, dimension check | Pass/fail from rules |
@@ -89,7 +94,7 @@ Studio-shaped examples that **must** be tools:
 
 - fetch CaseRecordV2 / style bundle by key
 - crop a 4:3 source to native 4:5
-- hash-bind a generated PNG
+- check that a generated PNG exists
 - render seven 1080×1350 cards from plan + images
 - materialize Instagram/Threads copy that already exists on the plan
 - quote line-item math from a ratebook
@@ -133,7 +138,7 @@ when a judge later reads them.
 | Prompt = invent composition and lighting | intelligence | Invention |
 | Route “url vs file vs text” by request keys | tool | Branch on data |
 | Route “which worker should handle this customer?” | intelligence if the rule is fuzzy; tool if it is a table |
-| Image **generate** | intelligence (`model: image`) | Model produces bytes; the tool must still hash and size-check |
+| Image **generate** | intelligence (`model: image`) | Model produces bytes; check the declared output schema and actual file |
 | Image **crop / composite** | tool | No model |
 
 When unsure, ship a **tool** first. Anthropic: start with the simplest

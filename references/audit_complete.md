@@ -1,4 +1,8 @@
-# Builder Source Audit
+# MASTER PROMPT — Builder Source Audit
+
+You are the source-audit worker for the explicitly requested package build.
+Start from the target and request, inventory what can be reused, and return the
+source audit using the instructions below.
 
 ## `audit_source`
 

@@ -1,4 +1,4 @@
-"""Launch the Builder 3 canonical v4 M8M workflow."""
+"""Coordinate local workflows by default; package a runtime only when requested."""
 
 from __future__ import annotations
 
@@ -31,8 +31,10 @@ def _assert_builder3_run(run_dir: Path | None) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--target", type=Path, required=True, help="Skill directory to turn into a milestone flow.")
-    parser.add_argument("--codebase", type=Path, required=True, help="Project repo. Tools and flow are written here.")
+    parser.add_argument("--mode", choices=["coordinate", "package"], default="coordinate",
+                        help="Compile and validate existing workflow source, or explicitly package and install it.")
+    parser.add_argument("--target", type=Path, required=True, help="Existing harness for coordination; source skill for package mode.")
+    parser.add_argument("--codebase", type=Path, required=True, help="Repository owning the workflow and existing tool bindings.")
     parser.add_argument(
         "--harness-root",
         type=Path,
@@ -53,6 +55,15 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
+        if args.mode == "coordinate":
+            if args.force or args.skill_name:
+                raise FlowError("--force and --skill-name are package options; coordinate updates the existing workflow")
+            if args.run_dir or args.replace_milestone or args.continue_after_edit:
+                raise FlowError("builder session options require --mode package; resume product progress with its runner")
+            from coordinate_workflow import prepare_workflow
+            result = prepare_workflow(args.target, args.codebase, flow_id=args.flow_id)
+            print(json.dumps(result, indent=2, ensure_ascii=False))
+            return 0
         _assert_builder3_run(args.run_dir)
         result = run_factory(
             args.target,

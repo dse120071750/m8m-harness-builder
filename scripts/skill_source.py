@@ -901,6 +901,8 @@ def _validate_agent_resources(root: Path, agent: Mapping[str, Any]) -> list[dict
         )
     gem_path = _source_path(root, gem_ref, label=f"milestone {milestone_id} gem", suffix=".md")
     gem_text = _read_text_path(gem_path, label=f"milestone {milestone_id} gem")
+    if not gem_text.strip():
+        raise SkillSourceError(f"milestone {milestone_id}: master prompt must not be empty")
     headings = _heading_ids(gem_text)
     if "Rule of success" in headings:
         gem_rule = gem_success_rule(gem_text)
@@ -913,12 +915,6 @@ def _validate_agent_resources(root: Path, agent: Mapping[str, Any]) -> list[dict
                 f"milestone {milestone_id}: Gem Rule of success differs from the authored success; "
                 "keep one expectation authority"
             )
-    for flowstep in agent["flowsteps"]:
-        if flowstep["id"] not in headings:
-            raise SkillSourceError(
-                f"milestone {milestone_id}: gem lacks ## `{flowstep['id']}`"
-            )
-
     read_paths = list(agent["read_paths"])
     if gem_ref not in read_paths:
         raise SkillSourceError(f"milestone {milestone_id}: read_paths must include its exact gem")
@@ -1311,7 +1307,7 @@ def _agent_file_names(root: Path, milestones: Iterable[str]) -> None:
             raise SkillSourceError(f"agents/{path.name}: undeclared agent file")
 
 
-def load_skill_source(skill_root: str | Path) -> dict[str, Any]:
+def load_skill_source(skill_root: str | Path, *, check_snapshot: bool = True) -> dict[str, Any]:
     """Load and validate one skill-native M8M source tree.
 
     The returned dictionary is base-independent: it contains no absolute root
@@ -1333,7 +1329,19 @@ def load_skill_source(skill_root: str | Path) -> dict[str, Any]:
         _safe_relative_path(canvas["artifact_root"], label="canvas artifact_root")
     for index, ref in enumerate(canvas.get("implementation_dependencies", [])):
         _safe_relative_path(ref, label=f"canvas implementation_dependencies[{index}]")
+    if "codebase_import_roots" in canvas:
+        from project_imports import validate_roots, ProjectImportError
+        try:
+            validate_roots(canvas["codebase_import_roots"])
+        except ProjectImportError as exc:
+            raise SkillSourceError(str(exc)) from exc
     adjacency = _validate_graph(canvas)
+    if "runtime_distributions" in canvas:
+        from runtime_release import validate_product_distributions, RuntimeReleaseError
+        try:
+            validate_product_distributions(canvas["runtime_distributions"])
+        except RuntimeReleaseError as exc:
+            raise SkillSourceError(str(exc)) from exc
     _agent_file_names(root, canvas["milestones"])
 
     agents: list[dict[str, Any]] = []
@@ -1374,7 +1382,8 @@ def load_skill_source(skill_root: str | Path) -> dict[str, Any]:
         "milestones": agents,
         "resources": resources,
     }
-    _validate_generated_flow_snapshot(root, _compile_loaded_source(source))
+    if check_snapshot:
+        _validate_generated_flow_snapshot(root, _compile_loaded_source(source))
     return source
 
 
@@ -1423,7 +1432,7 @@ def _compile_loaded_source(source: Mapping[str, Any]) -> dict[str, Any]:
         "version": canvas["version"],
         "context_policy": "isolated",
     }
-    for field in ("max_run_seconds", "artifact_root", "implementation_dependencies"):
+    for field in ("max_run_seconds", "artifact_root", "implementation_dependencies", "codebase_import_roots", "runtime_distributions"):
         if field in canvas:
             flow[field] = copy.deepcopy(canvas[field])
     milestones: list[dict[str, Any]] = []
@@ -1473,10 +1482,10 @@ def _validate_generated_flow_snapshot(root: Path, expected: Mapping[str, Any]) -
         )
 
 
-def compile_skill_source(skill_root: str | Path) -> dict[str, Any]:
+def compile_skill_source(skill_root: str | Path, *, check_snapshot: bool = True) -> dict[str, Any]:
     """Compile valid authored source to a canonical-schema-compatible flow dict."""
 
-    return _compile_loaded_source(load_skill_source(skill_root))
+    return _compile_loaded_source(load_skill_source(skill_root, check_snapshot=check_snapshot))
 
 
 def canonical_json_bytes(value: Any) -> bytes:

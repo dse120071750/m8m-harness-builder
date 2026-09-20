@@ -91,7 +91,8 @@ def _need_model(flowstep: str, tool_id: str, error: str) -> dict[str, Any]:
     section = _gem_section(flowstep)
     instruction = (
         f"Preferred tool `{tool_id}` failed FlowStep `{flowstep}`. "
-        "Do this FlowStep as its gem section says. Still produce the milestone's declared named outputs. "
+        "Start with the complete milestone master prompt and its bound upstream outputs. "
+        "Use any FlowStep notes to produce the milestone's declared named outputs. "
         "Prefer fixing or using the tool. Return the milestone's explicit named outputs for admission."
     )
     if section:
@@ -207,7 +208,7 @@ def run(input_data: dict[str, Any], draft: dict[str, Any] | None = None, **kwarg
             continue
         if isinstance(result, dict):
             payload[flowstep_id] = result
-            if "path" in result and "sha256" in result:
+            if "path" in result:
                 payload["asset"] = result
     if ASSET_KIND in {"file", "image", "video", "audio"}:
         address = payload.get("address") if isinstance(payload.get("address"), dict) else {}

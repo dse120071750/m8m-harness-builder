@@ -11,7 +11,7 @@ The tool is optional. If it fails, recover like a normal agent. Do not skip requ
 - harness: `C:\Users\gasil\.codex\skills\m8m-harness-builder\examples\text_pipeline`
 - flow_id: `text_pipeline_v1`
 - final_payload: `label_v1` from `label`
-- updated_at: 2026-09-02T12:54:59Z
+- updated_at: 2026-09-20T14:04:28Z
 
 ## Run
 
@@ -49,7 +49,9 @@ The JPEG is rewritten on generate and on every step edit. It is the portable aud
 
 Same rule as tools. These live on the flow, not in `~/.codex/skills` or `~/.claude/skills`.
 
-None. Promote skill `references/*.md` into this flow.
+- `references/ingest.md`
+- `references/label.md`
+- `references/segment.md`
 
 ## Milestone index
 

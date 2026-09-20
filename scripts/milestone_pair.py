@@ -7,7 +7,6 @@ from typing import Any
 GENERIC_JUDGE = {"ok_receipt", ""}
 GATE_TOKENS = ("gate", "judge", "evaluate", "alignment")
 WAIT_TOKENS = ("response", "reply", "confirm", "wait")
-QUALITY_TOKENS = {"align", "aligned", "generate", "generated", "spatial", "judge"} | set(WAIT_TOKENS)
 
 
 def gem_path(milestone_id: str) -> str:
@@ -39,22 +38,9 @@ def pick_gate_tool(tools: Any) -> str | None:
     return None
 
 
-def exist_worker(kind: str) -> str:
-    """File/image: hash_bind. JSON/data: the closed output schema is the exist check."""
-    if kind in {"file", "image"}:
-        return "hash_bind"
-    return ""
-
-
 def needs_judge(item: dict[str, Any]) -> bool:
-    if str(item.get("loop") or "none") == "judge":
-        return True
-    intel = str(item.get("intelligence") or "none")
-    if intel in {"image", "judge"}:
-        return True
-    name = str(item.get("id") or "").lower().replace("-", "_")
-    parts = set(name.split("_"))
-    return bool(parts & QUALITY_TOKENS)
+    """Only an authored judge loop requests a separate review."""
+    return str(item.get("loop") or "none") == "judge"
 
 
 def is_wait_milestone(item: dict[str, Any]) -> bool:
@@ -68,7 +54,6 @@ def pair_milestone(item: dict[str, Any]) -> dict[str, Any]:
     if not mid:
         return item
     item["gem"] = str(item.get("gem") or "").strip() or gem_path(mid)
-    kind = asset_kind(item)
 
     if item.get("branch") and isinstance(item.get("branch"), dict):
         br = item["branch"]
@@ -98,12 +83,5 @@ def pair_milestone(item: dict[str, Any]) -> dict[str, Any]:
         return item
 
     if not current or current in GENERIC_JUDGE:
-        named = exist_worker(kind)
-        tools = [str(t) for t in (item.get("tools") or []) if t]
-        if not named and "hash_bind" in tools:
-            named = "hash_bind"
-        if named:
-            item["worker"] = named
-        elif current in GENERIC_JUDGE:
-            item.pop("worker", None)
+        item.pop("worker", None)
     return item

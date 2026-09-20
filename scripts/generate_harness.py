@@ -600,8 +600,6 @@ def generate_v4_flow(
             milestone_id=mid,
             outputs=output_declarations,
         )
-        if asset_kind in {"file", "image"} and "hash_bind" not in step_tools:
-            notes.append(f"{mid}: file/image output; table may list hash_bind as a preferred FlowStep")
         intel_value = spec.get("intelligence") or ("completion" if mid in intel else "none")
         on_tool_fail = spec.get("on_tool_fail") or "need_model"
         item: dict[str, Any] = {
@@ -725,6 +723,7 @@ def generate_v4_flow(
         elif worker in {"hash_bind", "schema_validate"} and not item["tools"]:
             item.pop("worker", None)
         items.append(item)
+        previous = item
     for item in items:
         worker = str(item.get("worker") or "")
         if worker:
@@ -737,7 +736,6 @@ def generate_v4_flow(
             tool_generation[package_name] = tool_result
             if tool_result.get("status") != "PASS":
                 notes.append(f"{worker}: BUILD_REQUIRED non-runnable scaffold")
-        previous = item
     flow = {
         "schema": "flowstep_flow_v4",
         "flow_id": flow_id,
@@ -773,24 +771,16 @@ def generate_v4_flow(
         schema_path = harness / "schemas" / f"{mid}_v1.json"
         if _write_json(schema_path, output_obj, overwrite=overwrite):
             created.append(str(schema_path))
-        if previous_id is None:
-            input_obj = item.get("_input_schema_object") or {
-                "$schema": "https://json-schema.org/draft/2020-12/schema",
-                "$id": f"{mid}.input.schema.json",
-                "type": "object",
-                "additionalProperties": True,
-                "required": ["request"],
-                "properties": {"request": {"type": "object"}},
-            }
-        else:
-            input_obj = item.get("_input_schema_object") or {
-                "$schema": "https://json-schema.org/draft/2020-12/schema",
-                "$id": f"{mid}.input.schema.json",
-                "type": "object",
-                "additionalProperties": True,
-                "required": [previous_id],
-                "properties": {previous_id: {"type": "object"}},
-            }
+        # Bindings may name any upstream output, not just the preceding node.
+        # Leave value types to an authored schema; a port can be a scalar or array.
+        input_obj = item.get("_input_schema_object") or {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "$id": f"{mid}.input.schema.json",
+            "type": "object",
+            "additionalProperties": True,
+            "required": list(item["inputs"]),
+            "properties": {name: {} for name in item["inputs"]},
+        }
         input_path = harness / "milestones" / mid / "input.schema.json"
         if _write_json(input_path, input_obj, overwrite=overwrite):
             created.append(str(input_path))
@@ -919,7 +909,11 @@ def generate_v4_flow(
             if _write_json(receipt_path, receipt_obj, overwrite=overwrite):
                 created.append(str(receipt_path))
         previous_id = mid
-    gems = write_milestone_gems(harness, public_items, overwrite=overwrite)
+    gem_items = [
+        {**item, "master_prompt": spec_by_id.get(item["id"], {}).get("master_prompt")}
+        for item in public_items
+    ]
+    gems = write_milestone_gems(harness, gem_items, overwrite=overwrite)
     created.extend(gems)
     loaded = load_flow(harness, flow_path)
     plan = toolbox_plan or build_toolbox_plan(
@@ -1152,6 +1146,7 @@ def generate_from_audit(
             "_expectation_authored": (audit.get("grade") or {}).get("flow_schema") == "flowstep_flow_v4",
             "_judge_inferred": bool(item.get("_judge_inferred")),
             "gem": item.get("gem"),
+            "master_prompt": item.get("master_prompt"),
             "max_model_attempts": item.get("max_model_attempts"),
             "cache": item.get("cache") if isinstance(item.get("cache"), dict) else None,
             "execution": item.get("execution") if isinstance(item.get("execution"), dict) else None,
@@ -1247,6 +1242,8 @@ def yaml_dump_v4(flow: dict[str, Any]) -> str:
         lines.append(f"  - id: {item['id']}")
         lines.append(f"    output_contract: {item['output_contract']}")
         lines.append(f"    output_schema: {item['output_schema']}")
+        if item.get("input_schema"):
+            lines.append(f"    input_schema: {item['input_schema']}")
         lines.append("    outputs:")
         for output in item.get("outputs") or []:
             lines.append(f"      - id: {output['id']}")

@@ -255,6 +255,113 @@ class BuilderRequirementTests(unittest.TestCase):
             self.assertEqual(judge["entrypoint"], "run")
             self.assertNotIn("local_name", judge)
 
+    def test_shared_judge_requirement_is_emitted_once(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            project = Path(temp) / "project"
+            harness = project / "flowsteps" / "flows" / "shared_judge_v1"
+            judge_tool = project / "flowsteps" / "tools" / "shared_judge"
+            judge_tool.mkdir(parents=True)
+            (judge_tool / "tool.py").write_text(
+                "def run(input_data, **kwargs):\n    return {}\n",
+                encoding="utf-8",
+            )
+            milestones = []
+            source_milestones = []
+            for milestone_id in ("first", "second", "third"):
+                handler = harness / "handlers" / f"{milestone_id}.py"
+                handler.parent.mkdir(parents=True, exist_ok=True)
+                handler.write_text("VALUE = 1\n", encoding="utf-8")
+                milestones.append(
+                    {
+                        "id": milestone_id,
+                        "handler": f"handlers/{milestone_id}.py",
+                        "tools": [],
+                        "loop": "judge",
+                        "worker": "shared_judge@1.0.0",
+                        "judge_abi": "m8m_milestone_judge_v1",
+                    }
+                )
+                source_milestones.append(
+                    {
+                        "agent_id": milestone_id,
+                        "execution": {
+                            "candidate_executor": {
+                                "ref": f"handler.{milestone_id}@1.0.0"
+                            },
+                            "judge": {"ref": "shared_judge@1.0.0"},
+                            "tool_bindings": [],
+                        },
+                    }
+                )
+
+            with patch("m8m_build_steps.validate_library_tool", return_value=[]):
+                requirements = _implementation_requirements(
+                    harness,
+                    {"flow_id": "shared_judge_v1", "milestones": milestones},
+                    {"milestones": source_milestones},
+                )
+
+            judges = [
+                item for item in requirements if item["kind"] == "milestone_judge"
+            ]
+            self.assertEqual(len(judges), 1)
+            self.assertEqual(judges[0]["ref"], "shared_judge@1.0.0")
+            self.assertNotIn("milestone_id", judges[0])
+
+    def test_shared_judge_ref_rejects_conflicting_runtime_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            project = Path(temp) / "project"
+            harness = project / "flowsteps" / "flows" / "conflict_v1"
+            for name in ("first_judge", "second_judge"):
+                tool = project / "flowsteps" / "tools" / name
+                tool.mkdir(parents=True)
+                (tool / "tool.py").write_text(
+                    "def run(input_data, **kwargs):\n    return {}\n",
+                    encoding="utf-8",
+                )
+            milestones = []
+            source_milestones = []
+            for milestone_id, worker in (
+                ("first", "first_judge@1.0.0"),
+                ("second", "second_judge@1.0.0"),
+            ):
+                handler = harness / "handlers" / f"{milestone_id}.py"
+                handler.parent.mkdir(parents=True, exist_ok=True)
+                handler.write_text("VALUE = 1\n", encoding="utf-8")
+                milestones.append(
+                    {
+                        "id": milestone_id,
+                        "handler": f"handlers/{milestone_id}.py",
+                        "tools": [],
+                        "loop": "judge",
+                        "worker": worker,
+                        "judge_abi": "m8m_milestone_judge_v1",
+                    }
+                )
+                source_milestones.append(
+                    {
+                        "agent_id": milestone_id,
+                        "execution": {
+                            "candidate_executor": {
+                                "ref": f"handler.{milestone_id}@1.0.0"
+                            },
+                            "judge": {"ref": "shared_judge@1.0.0"},
+                            "tool_bindings": [],
+                        },
+                    }
+                )
+
+            with patch("m8m_build_steps.validate_library_tool", return_value=[]):
+                with self.assertRaisesRegex(
+                    FlowError,
+                    "shared judge ref maps to conflicting runtime packages or ABIs",
+                ):
+                    _implementation_requirements(
+                        harness,
+                        {"flow_id": "conflict_v1", "milestones": milestones},
+                        {"milestones": source_milestones},
+                    )
+
     def test_missing_authored_ai_requirements_are_never_inferred_as_built(self) -> None:
         definition = {
             "milestones": [

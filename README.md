@@ -1,5 +1,11 @@
 # M8M harness builder
 
+Default: coordinate existing tools and FlowSteps, validate milestone outputs,
+and track progress. `run_m8m.py --mode coordinate` compiles and validates local
+workflow edits without a runtime release, archive, or installer.
+Use `--mode package` explicitly for the packaged distribution workflow described
+below. See [authoring](references/builder-authoring.md) for current commands.
+
 [![tests](https://github.com/dse120071750/m8m-harness-builder/actions/workflows/tests.yml/badge.svg)](https://github.com/dse120071750/m8m-harness-builder/actions/workflows/tests.yml)
 
 [中文](#中文) · [English](#english)
@@ -10,6 +16,9 @@ M8M 是 milestone to milestone，里程碑到里程碑。3.1 版把 Codex skill 
 `flowstep_flow_v4`：FlowStep 生成候选结果，runtime 先做结构 admission；只有声明
 `loop: judge` 的语义关卡才调用独立 judge。通过后才写成唯一的
 `chosen-output.json` 给下游读取。选择锁是 session 目录里的逻辑状态，不是 hash、lock ID 或 revision。
+所有 active milestone 默认 `loop: none`，以实际命名输出和 schema 检查完成；
+不自动增加 hashes、revisions、proof graphs 或图片审核。文件路径无须附带 hash。
+下文出现的 hash/judge 工具只用于用户明确要求或既有外部 API 合约。
 
 Builder 3.1 是 compiler/packager，不是产品运行时。它产出确定性的
 `m8m.workflow_source_bundle.v1`，并把不可变、digest-addressed 的 runtime release
@@ -71,7 +80,7 @@ M8M:   节点 = 一个里程碑（护栏）
 
 画布上只有里程碑，静态 workflow JSON 显示命名 output ports。FlowSteps 生成／改善当前候选，runtime admission 通过后，`loop:none` 直接提交；`loop:judge` 再由独立 judge 作语义决定。下一关只能查询 `chosen-output.json`。没有 manifest → BLOCK。
 
-一关**里面**是 N 个 FlowStep，以及按需声明的独立 **judge**。runtime 从 YAML 的 `success + output_contract + output_schema + outputs` 派生 expectation。所有候选先经过结构 admission；`loop:none` 不调用 judge，`loop:judge` 才发送封闭 typed request。Gem 只保留每个 FlowStep 的 prompt，不是 judge 合约，也不是画布节点。
+一关**里面**是 N 个 FlowStep，以及按需声明的独立 **judge**。runtime 从 YAML 的 `success + output_contract + output_schema + outputs` 派生 expectation。所有候选先经过结构 admission；`loop:none` 不调用 judge，`loop:judge` 才发送封闭 typed request。Gem 是整個 milestone 的完整 master prompt，執行時先讀全文；FlowStep 段落只是可選實作備註。
 
 ![M8M 演示：上面是里程碑画布；下面打开 source_ready，里面是 N 个 FlowStep，然后 judge 按派生 expectation 发出 pass 收据或 keep working](docs/m8m-chart.jpg)
 
@@ -247,7 +256,7 @@ n8n 的画布是动作。M8M 的画布是关卡。人话来自 humanizer（`sour
 Codex（`$m8m-harness-builder`）和 Claude Code 都能用。不传 `--run-dir` 时，Windows driver 默认在 `%SystemDrive%\NisanRuntime\runs\<run-id>` 开 session（本机是 `C:\NisanRuntime`）。repo 只放 code/spec；run、goal、retry、checkpoint、milestone media 和 cache 都不能写进 repo。生成的图必须写进该树的 `address.write_to`，不要另开文件夹。
 
 ```powershell
-python scripts/run_m8m.py --target <skill-or-flow-dir> --codebase <repo> --harness-root C:\NisanRuntime
+python scripts/run_m8m.py --mode package --target <skill-or-flow-dir> --codebase <repo> --harness-root C:\NisanRuntime
 ```
 
 ```powershell
@@ -419,6 +428,11 @@ M8M means milestone to milestone. Builder 3.1 compiles `flowstep_flow_v4`:
 FlowSteps generate/refine a candidate, and only a judge PASS commits the
 current result as the milestone's single `chosen-output.json`. This is
 logical session state—not a hash lock, lock ID, or revision system.
+Every active milestone defaults to `loop: none` and completes from actual named
+outputs and schema checks. Hashes, revisions, proof graphs, and automatic image
+reviews are not prerequisites; ordinary file paths need no checksum. Hash/judge
+tools shown below apply only to an explicit request or an existing external API
+contract.
 
 Builder 3.1 is a local, deterministic compiler and packager, not a product
 runtime. A skill-native canvas
@@ -483,7 +497,7 @@ identify milestones
 
 The canvas is only milestones. Workflow JSON displays declared output ports. FlowSteps produce a current candidate; structural admission always runs, and an authored semantic judge runs only for `loop: judge`. PASS commits `chosen-output.json`, and only that manifest is visible downstream. No manifest → BLOCK.
 
-**Inside** a milestone are N FlowSteps plus an **optional judge**. The runtime derives a typed expectation from `success + output_contract + output_schema + outputs` and admits the candidate first. `loop:none` commits with zero judge calls. `loop:judge` sends the separate judge a closed request; `RETRY` keeps work inside the node and `PASS` commits. The Gem contains FlowStep prompts only—not the judge contract and not canvas nodes.
+**Inside** a milestone are N FlowSteps plus an **optional judge**. The runtime derives a typed expectation from `success + output_contract + output_schema + outputs` and admits the candidate first. `loop:none` commits with zero judge calls. `loop:judge` sends the separate judge a closed request; `RETRY` keeps work inside the node and `PASS` commits. The Gem is the complete milestone master prompt, read in full before execution. Optional FlowStep notes support it.
 
 ![M8M demo: top is the milestone canvas; bottom opens source_ready with N FlowSteps, then a judge that evaluates the derived expectation and either issues a pass receipt or tells the session to keep working](docs/m8m-chart.jpg)
 
@@ -542,7 +556,7 @@ This repository implements local, auditable M8M authoring, compilation, and work
 | IF / Switch node | **branch**: pick a path **after this milestone**. AI drafts; the tool writes `{ok, branch}`. The other path is skipped |
 | Loop Over Items / Split in Batches | **cycle**: freeze a ledger, then **wrap a stretch of milestones**. Each round AI drafts pass/fail; the tool updates the ledger. Pass preserves; fail purges residue so you can resume |
 
-Every milestone has a FlowStep-guidance Gem. The Gem is not a canvas node. The judge is not a second box, and Builder never infers one from a name or intelligence mode. Deterministic boxes use admission only; explicitly semantic boxes use `loop: judge` plus a named `<id>_judge`. Cycle and branch keep their own control receipts.
+Every milestone starts with a complete master-prompt Gem: role, goal, bound inputs and reference roles, instructions, constraints, and exact output. The Gem is not a canvas node. The judge is not a second box, and Builder never infers one from a name or intelligence mode. Deterministic boxes use admission only; explicitly semantic boxes use `loop: judge` plus a named `<id>_judge`. Cycle and branch keep their own control receipts.
 
 Every milestone has at least one required business output. Its local candidate binding is exactly `handler.<flow_id>.<milestone_id>@3.1.0`; the implementation fingerprint separately freezes the handler path and bytes, so an arbitrary ref cannot relabel the same behavior. Authored AI milestones also close the exact executor profile, Gem, schemas, tools, capabilities, token budgets, and timeouts; semantic judge milestones additionally close an independent judge profile. Missing execution terms are `BUILD_REQUIRED`; Builder 3.1 never infers a runnable server profile from chat or `intelligence`. Strict judges declare `judge_abi: m8m_milestone_judge_v1`, so the worker evaluates the current candidate separately from its producer. Audit heuristics remain review proposals only: inferred expectation or judge authority cannot emit canonical `flow.yaml`, install a skill, or execute.
 
@@ -663,7 +677,7 @@ Tools belong in `<repo>/flowsteps/tools/`, not in `~/.codex/skills` or `~/.claud
 Works in Codex (`$m8m-harness-builder`) and Claude Code. If you omit `--run-dir`, the Windows driver opens `%SystemDrive%\NisanRuntime\runs\<run-id>` (`C:\NisanRuntime` on this host). The repo stores code/specifications only; runs, goals, retries, checkpoints, milestone media, and cache must stay outside it. Generated images must be written to `address.write_to` in the execution tree.
 
 ```powershell
-python scripts/run_m8m.py --target <skill-or-flow-dir> --codebase <repo> --harness-root C:\NisanRuntime
+python scripts/run_m8m.py --mode package --target <skill-or-flow-dir> --codebase <repo> --harness-root C:\NisanRuntime
 ```
 
 ```powershell

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import ast
 import json
+import os
 import re
 import shutil
 from pathlib import Path
@@ -26,7 +27,6 @@ from flowstep_runtime import (
     load_yaml,
     normalize_flowsteps,
 )
-from gem_text import split_gem_sections
 from teaching_contracts import write_milestone_gems
 
 
@@ -120,15 +120,56 @@ def _walk_files(root: Path) -> list[Path]:
     files: list[Path] = []
     if not root.is_dir():
         return files
-    for path in root.rglob("*"):
-        if not path.is_file():
-            continue
-        if any(part in _SKIP_SNAPSHOT_PARTS for part in path.parts):
-            continue
-        if path.suffix.lower() in {".pyc", ".pyo"}:
-            continue
-        files.append(path)
+    for current, directory_names, file_names in os.walk(root):
+        directory_names[:] = [
+            name for name in directory_names if name not in _SKIP_SNAPSHOT_PARTS
+        ]
+        parent = Path(current)
+        for name in file_names:
+            path = parent / name
+            if path.suffix.lower() in {".pyc", ".pyo"}:
+                continue
+            files.append(path)
     return files
+
+
+def _ownership_scan_roots(
+    root: Path,
+    *,
+    codebase: Path | None,
+    flow_id: str | None,
+) -> list[Path]:
+    """Return only product-owned roots relevant to runtime classification.
+
+    Runtime ownership is a property of one product, not of every file in its
+    repository.  Walking the whole codebase both made audit time proportional
+    to unrelated workspace contents and allowed another skill's legacy Builder
+    reference to contaminate this product's classification.
+    """
+
+    candidates = [Path(root)]
+    if codebase is not None:
+        repo = Path(codebase)
+        if flow_id:
+            candidates.append(repo / "flowsteps" / "flows" / flow_id)
+        candidates.extend(
+            [
+                repo / ".agents" / "skills" / Path(root).name,
+                repo / ".claude" / "skills" / Path(root).name,
+            ]
+        )
+    roots: list[Path] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        try:
+            key = str(candidate.resolve()).casefold()
+        except OSError:
+            key = str(candidate.absolute()).casefold()
+        if key in seen or not candidate.is_dir():
+            continue
+        seen.add(key)
+        roots.append(candidate)
+    return roots
 
 
 def _skill_task(root: Path) -> str:
@@ -207,9 +248,11 @@ def runtime_ownership_audit(
     codebase = Path(codebase) if codebase is not None else None
     gaps: list[str] = []
     builder_hits: list[str] = []
-    scan_roots = [root]
-    if codebase is not None and codebase.resolve() != root.resolve():
-        scan_roots.append(codebase)
+    scan_roots = _ownership_scan_roots(
+        root,
+        codebase=codebase,
+        flow_id=flow_id,
+    )
     named = [
         root / "scripts" / "m8m_run.py",
         root / "scripts" / "run.py",
@@ -374,10 +417,9 @@ def _candidate_bind_output_schema() -> dict[str, Any]:
         "$id": "candidate_bind.output.schema.json",
         "type": "object",
         "additionalProperties": False,
-        "required": ["bound", "sha256", "byte_count", "keys"],
+        "required": ["bound", "byte_count", "keys"],
         "properties": {
             "bound": {"type": "boolean", "const": True},
-            "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
             "byte_count": {"type": "integer", "minimum": 0},
             "keys": {"type": "array", "items": {"type": "string"}},
         },
@@ -399,11 +441,10 @@ def write_candidate_bind_tool(dest: Path) -> None:
     dest = Path(dest)
     _write_text(
         dest / "tool.py",
-        '''"""Bind a candidate payload to a digest without returning the input object."""
+        '''"""Describe a candidate payload without returning the input object."""
 
 from __future__ import annotations
 
-import hashlib
 import json
 from typing import Any
 
@@ -421,7 +462,6 @@ def run(input_data: dict[str, Any], **_: Any) -> dict[str, Any]:
     encoded = canonical.encode("utf-8")
     return {
         "bound": True,
-        "sha256": hashlib.sha256(encoded).hexdigest(),
         "byte_count": len(encoded),
         "keys": sorted(str(key) for key in input_data),
     }
@@ -445,11 +485,11 @@ spec.loader.exec_module(tool)
 
 
 class CandidateBindTests(unittest.TestCase):
-    def test_run_binds_a_digest_and_does_not_return_the_input(self) -> None:
+    def test_run_describes_payload_without_returning_the_input(self) -> None:
         payload = {"request": {"id": "case-1"}}
         result = tool.run(payload)
         self.assertTrue(result["bound"])
-        self.assertEqual(len(result["sha256"]), 64)
+        self.assertNotIn("sha256", result)
         self.assertGreater(result["byte_count"], 0)
         self.assertEqual(result["keys"], ["request"])
         self.assertIsNot(result, payload)
@@ -885,11 +925,10 @@ def write_migrated_skill_source(
             source_root / "references" / f"{milestone_id}.md",
             source_root / str(item.get("gem") or ""),
         )
-        if existing_gem is not None:
-            needed = {str(step["id"]) for step in flowsteps}
-            headings = set(split_gem_sections(_read_text(existing_gem)))
-            if needed <= headings:
-                shutil.copy2(existing_gem, dest / "references" / f"{milestone_id}.md")
+        if existing_gem is not None and _read_text(existing_gem).strip():
+            destination_gem = dest / "references" / f"{milestone_id}.md"
+            destination_gem.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(existing_gem, destination_gem)
     write_milestone_gems(dest, gem_specs, overwrite=False)
     return {
         "skill_root": str(dest),

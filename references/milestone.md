@@ -1,7 +1,11 @@
 # Milestone nodes (M8M — milestone to milestone)
 
 The builder writes the split. Milestones are the compulsory harness;
-FlowSteps and tools live inside them.
+FlowSteps and tools live inside them. Every active path defaults to `loop: none`.
+Complete from the actual named outputs and their schema. Do not add hashes,
+revision chains, proof graphs, or automatic image reviews. Ordinary file paths
+need no checksum companion. A separate judge is used only for an explicitly
+requested review; image generation and milestone names do not imply one.
 
 | Word | Meaning | Runtime role |
 | --- | --- | --- |
@@ -18,18 +22,31 @@ M8M: node = one milestone
      chosen-output.json = accepted run-time port values
 ```
 
+## Master prompt first
+
+Every milestone starts with one complete master prompt at
+`references/<milestone>.md`, selected by `gem`. Author the role, objective,
+inputs and reference roles, domain instructions, constraints, and exact output
+before choosing its FlowSteps. The whole document is the execution prompt;
+FlowStep headings are optional. See `master-prompts.md`.
+
+Use stable IDs `milestone01`, `milestone02`, etc. for new milestones. Later
+master prompts name their upstream producers and outputs; matching `inputs`
+bindings resolve the actual values. See `master-prompts.md` for YAML examples.
+
 ## Milestone contract
 
 A valid `flowstep_flow_v4` milestone declares all of:
 
 ```yaml
-- id: cards_rendered
-  success: Seven approved cards satisfy the layout and source-grounding rules.
+- id: milestone01
+  gem: references/milestone01.md
+  success: Seven rendered cards exist with the declared names and file paths.
   output_contract: cards_rendered_v1
-  output_schema: milestones/cards_rendered/output.schema.json
+  output_schema: milestones/milestone01/output.schema.json
   outputs:
     - id: cards
-      name: Approved cards
+      name: Rendered cards
       kind: image
       cardinality: many
       required: true
@@ -38,22 +55,15 @@ A valid `flowstep_flow_v4` milestone declares all of:
       kind: json
       cardinality: one
       required: true
-  loop: judge
-  worker: cards_rendered_judge@3.1.0
+  loop: none
   flowsteps:
     - { id: render_cards, tool: render_cards }
-    - { id: compare_layout, tool: compare_layout }
-    - { id: refine_cards, tool: image_edit }
-  tools: [render_cards, compare_layout, refine_cards]
+  tools: [render_cards]
   execution:
     candidate_executor:
-      ref: handler.article_cards.cards_rendered@3.1.0
-    judge:
-      ref: cards_rendered_judge@3.1.0
+      ref: handler.article_cards.milestone01@3.1.0
     tool_bindings:
       - { tool: render_cards, ref: render_cards@3.1.0 }
-      - { tool: compare_layout, ref: compare_layout@3.1.0 }
-      - { tool: refine_cards, ref: image_edit@3.1.0 }
 ```
 
 This is authored-agent syntax: each FlowStep names its local package. The
@@ -83,13 +93,13 @@ later milestone may select.
 ## Success authority and candidate loop
 
 Authored `success` and the output declarations are the sole expectation
-authority. Every milestone has a FlowStep-guidance Gem; a legacy
+authority for machine completion. Every milestone has a complete master-prompt Gem; a legacy
 `## Rule of success` section is accepted only when it exactly matches authored
 `success`. Only `loop: judge` has a dedicated semantic judge, and that judge is
 attached metadata rather than a second canvas node.
 
 ```text
-derive expectation → FlowStep candidate work
+read complete milestone master prompt + bind inputs → FlowStep candidate work
   → admit and freeze named outputs
   → loop:none: commit
   → loop:judge: typed judge request
@@ -106,7 +116,7 @@ immediately followed by materialization, so there is no separate “candidate
 lock” entity. Missing outputs, duplicate IDs, invalid paths, missing bytes,
 schema errors, exhausted attempts, or a missing chosen manifest BLOCK.
 
-For a strict judge milestone, author:
+Only when a separate review was explicitly requested, author:
 
 ```yaml
 loop: judge

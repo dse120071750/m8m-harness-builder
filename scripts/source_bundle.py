@@ -1712,10 +1712,32 @@ def _validate_requirement_closure(
             raise SourceBundleError(
                 f"agent profile {profile.get('ref')} executor_ref does not bind a {expected_kind}"
             )
-        if executor.get("milestone_id") != milestone_id:
-            raise SourceBundleError(
-                f"agent profile {profile.get('ref')} executor belongs to another milestone"
+        if expected_kind == "milestone_handler":
+            if executor.get("milestone_id") != milestone_id:
+                raise SourceBundleError(
+                    f"agent profile {profile.get('ref')} executor belongs to another milestone"
+                )
+        else:
+            execution = (
+                milestone.get("execution")
+                if isinstance(milestone.get("execution"), Mapping)
+                else {}
             )
+            judge_binding = (
+                execution.get("judge")
+                if isinstance(execution.get("judge"), Mapping)
+                else {}
+            )
+            if str(judge_binding.get("ref") or "") != executor_ref:
+                raise SourceBundleError(
+                    f"agent profile {profile.get('ref')} executor_ref does not bind "
+                    "the milestone's exact execution.judge ref"
+                )
+            if executor.get("runtime_abi") != milestone.get("judge_abi"):
+                raise SourceBundleError(
+                    f"agent profile {profile.get('ref')} executor_ref does not bind "
+                    "the milestone's exact judge ABI"
+                )
         if executor.get("build_state") != "built":
             raise SourceBundleError(
                 f"agent profile {profile.get('ref')} executor_ref is BUILD_REQUIRED"
@@ -1809,13 +1831,23 @@ def _validate_requirement_closure(
                 f"milestone {milestone_id} requires a separate ai_judge profile requirement"
             )
         if str(milestone.get("loop") or "none") == "judge":
-            judges = [
-                item
-                for item in implementations
-                if item.get("kind") == "milestone_judge"
-                and item.get("milestone_id") == milestone_id
-            ]
-            if len(judges) != 1:
+            execution = (
+                milestone.get("execution")
+                if isinstance(milestone.get("execution"), Mapping)
+                else {}
+            )
+            judge_binding = (
+                execution.get("judge")
+                if isinstance(execution.get("judge"), Mapping)
+                else {}
+            )
+            judge_ref = str(judge_binding.get("ref") or "")
+            judge = implementation_by_ref.get(judge_ref)
+            if (
+                judge is None
+                or judge.get("kind") != "milestone_judge"
+                or judge.get("runtime_abi") != milestone.get("judge_abi")
+            ):
                 raise SourceBundleError(
                     f"milestone {milestone_id} requires one exact milestone_judge requirement"
                 )

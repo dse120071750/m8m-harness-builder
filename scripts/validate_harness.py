@@ -38,6 +38,14 @@ from flowstep_runtime import (
 )
 
 
+def _lint_step_file_payload_schema(
+    schema: dict[str, Any], *, flow: dict[str, Any], step: dict[str, Any],
+    index: int, schema_key: str,
+) -> list[str]:
+    """Retained for callers of the former file-payload lint entry point."""
+    return lint_file_payload_schema(schema, label=f"{step['id']}.{schema_key}")
+
+
 def _previous_output_schema(skill_dir: Path, flow: dict[str, Any], step: dict[str, Any]) -> dict[str, Any] | None:
     by_id = {item["id"]: item for item in flow["steps"]}
     refs: list[str] = []
@@ -275,17 +283,20 @@ def validate_harness(
     codebase: Path | None = None,
     flow_id: str | None = None,
     update_instruction: bool = True,
+    scope: str = "package",
 ) -> dict[str, Any]:
+    if scope not in {"workflow", "package"}:
+        raise FlowError("validation scope must be workflow or package")
     skill_dir = resolve_harness_dir(codebase=codebase, flow_id=flow_id, skill_dir=skill_dir)
     flow = load_flow(skill_dir, find_flow_path(skill_dir, flow_arg) if flow_arg else None)
     errors: list[str] = []
-    if (skill_dir / "BUILD_REQUIRED_RUNTIME").is_file():
+    if scope == "package" and (skill_dir / "BUILD_REQUIRED_RUNTIME").is_file():
         errors.append(
             "harness has no codebase-owned runtime release; run the complete "
             "m8m-harness-builder workflow before validation or execution"
         )
     product_codebase = infer_codebase(skill_dir)
-    if product_codebase is not None and not is_builder_fixture(skill_dir):
+    if scope == "package" and product_codebase is not None and not is_builder_fixture(skill_dir):
         try:
             verify_harness_runtime(skill_dir)
         except RuntimeReleaseError as exc:
@@ -301,6 +312,14 @@ def validate_harness(
     declared = {step["id"] for step in flow["steps"]}
     for index, step in enumerate(flow["steps"]):
         step_id = step["id"]
+        if flow.get("_v4"):
+            prompt_ref = str(step.get("gem") or f"references/{step_id}.md")
+            try:
+                prompt_path = skill_rel(skill_dir, prompt_ref)
+                if not prompt_path.read_text(encoding="utf-8-sig").strip():
+                    errors.append(f"{step_id}: milestone master prompt must not be empty")
+            except (FlowError, OSError, UnicodeError):
+                errors.append(f"{step_id}: missing or unreadable milestone master prompt at {prompt_ref}")
         required_files = ["handler", "input_schema", "output_schema", "test"]
         if step["model"] != "none" or step.get("on_tool_fail") == "need_model":
             if (skill_dir / step.get("draft_schema", "")).is_file() or step.get("draft_schema"):
@@ -315,7 +334,7 @@ def validate_harness(
                 errors.append(f"{step_id}: missing {key} at {path}")
         if implementation_closed:
             try:
-                handler_module = load_tool(skill_dir, step)
+                handler_module = load_tool(skill_dir, step, flow=flow)
             except FlowError as exc:
                 errors.append(f"{step_id}: {exc}")
             else:
@@ -398,7 +417,9 @@ def validate_harness(
                 errors.append(f"{step_id}: output schema is still the generated {{ok: boolean}} stub")
             if schema_key == "output_schema" and flow.get("_v4") and is_passthrough_schema(schema):
                 errors.append(f"{step_id}: candidate output schema must be closed and require the declared outputs object")
-            errors.extend(lint_file_payload_schema(schema, label=f"{step_id}.{schema_key}"))
+            errors.extend(_lint_step_file_payload_schema(
+                schema, flow=flow, step=step, index=index, schema_key=schema_key,
+            ))
         if is_control_name(step_id) and not flow.get("_v4"):
             errors.append(f"{step_id}: if/loop/switch names are notes; for/judge are milestones")
         _validate_control(skill_dir, flow, step, index, declared, errors)
@@ -455,6 +476,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     add_harness_location_args(parser)
     parser.add_argument("--flow")
+    parser.add_argument("--scope", choices=["workflow", "package"], default="workflow",
+                        help="Validate workflow wiring by default; package also verifies the installed runtime.")
     return parser
 
 
@@ -464,6 +487,7 @@ def main(argv: list[str] | None = None) -> int:
         result = validate_harness(
             harness_dir_from_args(args),
             args.flow,
+            scope=args.scope,
         )
     except FlowError as exc:
         print(json.dumps({"status": "BLOCKED", "blockers": [str(exc)]}, indent=2), file=sys.stderr)

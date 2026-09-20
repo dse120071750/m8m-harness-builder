@@ -1104,16 +1104,21 @@ class SkillSourceTests(unittest.TestCase):
         with self.assertRaisesRegex(SkillSourceError, "not upstream"):
             load_skill_source(self.root)
 
-    def test_gem_must_match_milestone_and_cover_all_flowsteps(self) -> None:
+    def test_master_prompt_needs_no_flowstep_headings_but_keeps_milestone_path(self) -> None:
         (self.root / "references" / "source.md").write_text(
-            "# Source\n\n## Rule of success\n\nsource output is contract-valid.\n", encoding="utf-8"
+            "MASTER PROMPT — SOURCE\n\nYou prepare the source from the bound request.\n"
+            "Return the complete source result in its declared format.\n", encoding="utf-8"
         )
-        with self.assertRaisesRegex(SkillSourceError, "gem lacks"):
-            load_skill_source(self.root)
+        load_skill_source(self.root)
         self.fixture.agents["source"]["gem"] = "references/finish.md"
         self.fixture.agents["source"]["read_paths"] = ["references/finish.md"]
         self.fixture.write()
         with self.assertRaisesRegex(SkillSourceError, "exact path"):
+            load_skill_source(self.root)
+
+    def test_master_prompt_cannot_be_empty(self) -> None:
+        (self.root / "references" / "source.md").write_text("\n  \n", encoding="utf-8")
+        with self.assertRaisesRegex(SkillSourceError, "master prompt must not be empty"):
             load_skill_source(self.root)
 
     def test_gem_success_is_an_exact_projection_of_authored_success(self) -> None:

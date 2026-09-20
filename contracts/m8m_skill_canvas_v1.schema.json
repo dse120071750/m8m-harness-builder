@@ -29,6 +29,20 @@
       "uniqueItems": true,
       "items": { "type": "string", "minLength": 1 }
     },
+    "codebase_import_roots": {
+      "type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true,
+      "items": { "type": "string", "pattern": "^(?:\\.|[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*)$" }
+    },
+    "runtime_distributions": {
+      "type": "array", "minItems": 1, "maxItems": 32, "uniqueItems": true,
+      "items": {
+        "type": "object", "additionalProperties": false, "required": ["name", "version"],
+        "properties": {
+          "name": {"type": "string", "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$"},
+          "version": {"type": "string", "pattern": "^[0-9][A-Za-z0-9.!+_-]*$"}
+        }
+      }
+    },
     "workflow_contracts": {
       "type": "object",
       "additionalProperties": false,

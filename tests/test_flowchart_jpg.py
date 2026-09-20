@@ -132,7 +132,7 @@ class JpegWriteTests(unittest.TestCase):
             self.assertTrue(gem.is_file())
             gem_text = gem.read_text(encoding="utf-8")
             self.assertNotIn("Rule of success", gem_text)
-            self.assertIn("sole expectation", gem_text)
+            self.assertIn("machine completion", gem_text)
             self.assertNotIn('{"ok": True', (harness / "milestones" / "source_ready" / "assemble.py").read_text(encoding="utf-8"))
             self.assertIn("hash_bind", yaml_text)
 

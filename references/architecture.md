@@ -1,5 +1,10 @@
 # M8M architecture
 
+For default local coordination, use `builder-authoring.md`: compile the graph,
+bind existing tools, and use the current progress engine. The runtime ownership
+and release closure requirements below describe explicit `--mode package`
+builds and existing packaged workflows, not prerequisites for ordinary edits.
+
 M8M is a milestone workflow engine. A milestone is the canvas node;
 FlowSteps and their preferred tools execute inside it.
 
@@ -76,7 +81,7 @@ binding. This deterministic lint prevents architectural dependency regressions;
 it is not presented as a hostile-code operating-system sandbox.
 
 ```text
-named inputs + derived milestone expectation
+complete milestone master prompt + named inputs + derived milestone expectation
   → FlowSteps generate/refine the current candidate
   → structural admission validates and freezes named outputs
   → loop:none: commit without a semantic-judge call
@@ -147,8 +152,8 @@ Provider-neutral member kinds are `json`, `data`, `file`, `image`,
 
 Those four existing fields are one logical Milestone Expectation. The runtime
 derives `m8m.milestone_expectation.v1` from them; authors do not add an
-`expectation:` object, a new node, or a flow v5. New Gems contain FlowStep
-guidance only. A legacy Gem may retain `## Rule of success` during migration,
+`expectation:` object, a new node, or a flow v5. Each Gem is the complete
+milestone master prompt; FlowStep notes are optional. A legacy Gem may retain `## Rule of success` during migration,
 but the compiler accepts it only when it exactly matches `success`.
 
 ## Execution closure in authored source
@@ -625,7 +630,7 @@ not an equivalence claim.
 ## Commands
 
 ```powershell
-python scripts/run_m8m.py --target <skill-or-flow-dir> --codebase <repo> --harness-root C:\NisanRuntime
+python scripts/run_m8m.py --mode package --target <skill-or-flow-dir> --codebase <repo> --harness-root C:\NisanRuntime
 python scripts/audit_harness.py --target <skill-or-flow-dir>
 python scripts/generate_harness.py --codebase <repo> --from-audit <skill>/planning/flowstep-audit.json
 python scripts/validate_harness.py --codebase <repo> --flow-id <id>

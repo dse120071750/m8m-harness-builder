@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from flowstep_runtime import FlowError, read_json, sha256_file
+from flowstep_runtime import FlowError, read_json
 
 
 CONTROL_PREFIXES = ("if_", "loop_", "switch_", "when_", "else_")
@@ -86,7 +86,6 @@ def resolve_next(
             return str(edge["then"]), {
                 "gate_id": Path(str(edge["when"])).stem,
                 "gate_schema": str(edge["when"]).replace("\\", "/"),
-                "gate_sha256": sha256_file(when),
                 "then": edge["then"],
             }
     else_to = step.get("else") or ELSE_BLOCKED

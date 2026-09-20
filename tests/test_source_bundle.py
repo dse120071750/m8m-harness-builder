@@ -15,6 +15,7 @@ from jsonschema.exceptions import ValidationError
 
 from source_bundle import (
     SourceBundleError,
+    _validate_requirement_closure,
     canonical_json,
     compile_source_bundle as _compile_source_bundle,
     digest_json,
@@ -330,6 +331,41 @@ def _compile(
 
 
 class DeterministicSourceBundleTests(unittest.TestCase):
+    def test_one_exact_judge_implementation_can_serve_multiple_milestones(self) -> None:
+        milestones = []
+        for milestone_id in ("first", "second", "third"):
+            milestones.append(
+                {
+                    "id": milestone_id,
+                    "loop": "judge",
+                    "worker": "shared_judge@1.0.0",
+                    "judge_abi": "m8m_milestone_judge_v1",
+                    "intelligence": "none",
+                    "execution": {
+                        "judge": {"ref": "shared_judge@1.0.0"},
+                        "tool_bindings": [],
+                    },
+                }
+            )
+        shared_judge = {
+            "ref": "shared_judge@1.0.0",
+            "kind": "milestone_judge",
+            "role": "milestone_judge",
+            "runtime_abi": "m8m_milestone_judge_v1",
+            "entrypoint": "run",
+            "build_state": "built",
+            "digest": "sha256:" + "2" * 64,
+            "byte_count": 96,
+        }
+
+        _validate_requirement_closure(
+            {"milestones": milestones},
+            resources=[],
+            implementations=[shared_judge],
+            profiles=[],
+            capabilities=[],
+        )
+
     def test_validated_bundle_builds_one_deterministic_transport_archive(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp) / "source"

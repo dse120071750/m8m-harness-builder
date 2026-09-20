@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import copy
 import json
 import re
 import sys
@@ -199,6 +200,8 @@ def _tokens(name: str) -> set[str]:
 
 def _has_milestone_suffix(step_id: str) -> bool:
     lowered = step_id.lower()
+    if re.fullmatch(r"milestone[0-9]{2,}", lowered) and int(lowered[9:]) > 0:
+        return True
     return any(lowered.endswith(suffix) for suffix in MILESTONE_SUFFIXES)
 
 
@@ -359,9 +362,9 @@ def proposed_schema_object(
         "$id": f"{step_id}.output.schema.json",
         "type": "object",
         "additionalProperties": False,
-        "required": [f"{step_id}_sha256"],
+        "required": ["path"],
         "properties": {
-            f"{step_id}_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+            "path": {"type": "string", "minLength": 1},
         },
     }
 
@@ -682,7 +685,7 @@ def audit_harness(root: Path) -> dict[str, Any]:
                 findings.append({"severity": "P1", "id": step_id, "note": row["issues"][-1]})
         if flow_schema == FLOW_SCHEMA:
             if not tools:
-                row["issues"].append("no toolbox listed; writer will add hash_bind or generate-new")
+                row["issues"].append("no toolbox listed; bind an existing capability needed by this milestone")
             for tool_id in _bound_tool_packages(item):
                 tool_key = str(tool_id)
                 tool_errors = tool_validation_cache.get(tool_key) or []
@@ -933,7 +936,7 @@ def _python_tool_row(
     }
 
 
-DEFAULT_INTEL_TOOLS = ("hash_bind", "schema_validate")
+DEFAULT_INTEL_TOOLS = ("schema_validate",)
 
 
 def _inputs_point_at_milestones(inputs: dict[str, str], known: set[str]) -> bool:
@@ -1041,14 +1044,6 @@ def infer_schema_control(milestones: list[dict[str, Any]]) -> list[dict[str, Any
                 item["worker"] = item.get("worker") or "cycle_receipt"
                 item["receipt_schema"] = item["cycle"]["receipt_schema"]
                 continue
-        if (
-            needs_judge(item)
-            and not item.get("cycle")
-            and str(item.get("loop") or "none") != "judge"
-        ):
-            item["_judge_inferred"] = True
-            item["loop"] = "judge"
-            item["receipt_schema"] = item.get("receipt_schema") or f"schemas/{item['id']}_receipt_v1.json"
         if not item.get("success"):
             item["success"] = success_line(item)
         item.pop("next", None)
@@ -1056,12 +1051,7 @@ def infer_schema_control(milestones: list[dict[str, Any]]) -> list[dict[str, Any
         item.pop("join", None)
     _infer_branch(milestones)
     for item in milestones:
-        had_authored_judge = str(item.get("loop") or "none") == "judge" and not item.get(
-            "_judge_inferred"
-        )
         pair_milestone(item)
-        if str(item.get("loop") or "none") == "judge" and not had_authored_judge:
-            item["_judge_inferred"] = True
         if not item.get("success"):
             item["success"] = success_line(item)
     return milestones
@@ -1500,6 +1490,52 @@ def propose_from_inventory(root: Path, inventory: dict[str, Any]) -> tuple[list[
     return milestones, _unique_tools(python_tools)
 
 
+def number_new_milestones(milestones: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Number a new proposal and remap references without changing input aliases or tools."""
+    ids = [item["id"] for item in milestones]
+    if len(ids) != len(set(ids)):
+        raise FlowError("cannot number a proposal with duplicate milestone IDs")
+    names = {old: f"milestone{index:02d}" for index, old in enumerate(ids, 1)}
+    result = copy.deepcopy(milestones)
+
+    def source_ref(value: str) -> str:
+        source, separator, contract = value.partition(".")
+        return names.get(source, source) + separator + contract
+
+    for item in result:
+        item["id"] = names[item["id"]]
+        item["gem"] = f"references/{item['id']}.md"
+        executor = (item.get("execution") or {}).get("candidate_executor") or {}
+        ref = str(executor.get("ref") or "")
+        if ref.startswith("handler.") and "@" in ref:
+            identity, version = ref.rsplit("@", 1)
+            namespace, old = identity.rsplit(".", 1)
+            executor["ref"] = f"{namespace}.{names.get(old, old)}@{version}"
+        for alias, binding in (item.get("inputs") or {}).items():
+            if isinstance(binding, str):
+                item["inputs"][alias] = source_ref(binding)
+            elif isinstance(binding, dict) and "from" in binding:
+                binding["from"] = source_ref(binding["from"])
+        for edge in item.get("next") or []:
+            if isinstance(edge, dict) and "then" in edge:
+                edge["then"] = names.get(edge["then"], edge["then"])
+        if isinstance(item.get("join"), list):
+            item["join"] = [names.get(mid, mid) for mid in item["join"]]
+        if isinstance(item.get("else"), str):
+            item["else"] = names.get(item["else"], item["else"])
+        branch = item.get("branch") or {}
+        if "join" in branch:
+            branch["join"] = names.get(branch["join"], branch["join"])
+        for path in branch.get("paths") or []:
+            if "then" in path:
+                path["then"] = names.get(path["then"], path["then"])
+        cycle = item.get("cycle") or {}
+        for field in ("ledger", "start", "join"):
+            if field in cycle:
+                cycle[field] = names.get(cycle[field], cycle[field])
+    return result
+
+
 def goal_text(inventory: dict[str, Any], grade: dict[str, Any], milestones: list[dict[str, Any]]) -> str:
     name = inventory.get("name") or Path(grade["target"]).name
     last = milestones[-1]["output_contract"] if milestones else "the final payload"
@@ -1589,6 +1625,8 @@ def audit_skill(root: Path) -> dict[str, Any]:
     python_tools = _ensure_intel_toolbox(milestones, python_tools)
     milestones = _rechain_milestones(root, milestones)
     milestones = infer_schema_control(milestones)
+    if grade.get("flow_schema") != FLOW_SCHEMA:
+        milestones = number_new_milestones(milestones)
     if len(milestones) >= 2 and all(str(item.get("loop") or "") == "judge" for item in milestones):
         grade.setdefault("findings", []).append(
             {
@@ -1838,7 +1876,7 @@ def render_audit_markdown(report: dict[str, Any]) -> str:
             "",
             "## Schema control",
             "",
-            "Milestone success is authored in workflow source; Gems contain only FlowStep guidance. Candidate schema PASS validates declared ports.",
+            "Milestone success is authored in workflow source; each Gem is the complete milestone master prompt, read before its FlowSteps. Candidate schema PASS validates declared ports.",
             "judge = stay on this box until the worker accepts the current candidate; only then commit chosen-output.json.",
             "cycle and branch keep their own receipts. Do not wrap them in a shared judge module.",
             "",

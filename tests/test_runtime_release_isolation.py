@@ -131,7 +131,7 @@ class RuntimeReleaseIsolationTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.temporary = tempfile.TemporaryDirectory()
-        cls.codebase = Path(cls.temporary.name)
+        cls.codebase = Path(cls.temporary.name) / "codebase with spaces"
         cls.harness = cls.codebase / "flowsteps" / "flows" / "sample_v1"
         cls.product_roots = [
             cls.codebase / ".agents" / "skills" / "sample",
@@ -209,41 +209,67 @@ class RuntimeReleaseIsolationTests(unittest.TestCase):
     def test_bootstraps_reexec_before_sibling_stdlib_shadow_can_load(self) -> None:
         sentinel = self.codebase / "shadow-imported.txt"
         shadow_source = (
-            "from pathlib import Path\n"
-            f"Path({str(sentinel)!r}).write_text('loaded', encoding='utf-8')\n"
+            f"open({str(sentinel)!r}, 'w', encoding='utf-8').write('loaded')\n"
             "raise RuntimeError('sibling shadow imported')\n"
         )
         pointer = self.product_roots[0] / "scripts" / "m8m_run.py"
-        pointer_shadow = pointer.parent / "hashlib.py"
         launcher = Path(self.release["codebase_launcher_path"])
-        launcher_shadow = launcher.parent / "hashlib.py"
-        try:
-            pointer_shadow.write_text(shadow_source, encoding="utf-8")
-            pointer_run = subprocess.run(
-                [sys.executable, "-B", str(pointer), "--run-mode", "resume"],
-                cwd=self.codebase,
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            self.assertNotEqual(pointer_run.returncode, 0)
-            self.assertFalse(sentinel.exists())
-            pointer_shadow.unlink()
+        for program in (pointer, launcher):
+            for name in ("__future__", "hashlib", "pathlib", "subprocess", "json"):
+                with self.subTest(program=program.name, shadow=name):
+                    shadow = program.parent / f"{name}.py"
+                    try:
+                        shadow.write_text(shadow_source, encoding="utf-8")
+                        completed = subprocess.run(
+                            [sys.executable, "-B", str(program), "--run-mode", "resume"],
+                            cwd=self.codebase,
+                            capture_output=True,
+                            text=True,
+                            check=False,
+                            timeout=45,
+                        )
+                        self.assertNotEqual(completed.returncode, 0)
+                        self.assertFalse(sentinel.exists(), completed.stderr)
+                        self.assertIn("Pinned M8M resume requires the exact", completed.stderr)
+                    finally:
+                        shadow.unlink(missing_ok=True)
+                        sentinel.unlink(missing_ok=True)
 
-            launcher_shadow.write_text(shadow_source, encoding="utf-8")
-            launcher_run = subprocess.run(
-                [sys.executable, "-B", str(launcher), "--run-mode", "resume"],
-                cwd=self.codebase,
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            self.assertNotEqual(launcher_run.returncode, 0)
-            self.assertFalse(sentinel.exists())
-        finally:
-            pointer_shadow.unlink(missing_ok=True)
-            launcher_shadow.unlink(missing_ok=True)
-            sentinel.unlink(missing_ok=True)
+    def test_generated_isolation_prefixes_preserve_exact_argument_tokens(self) -> None:
+        # Observe the exact generated prefix at the isolation boundary. The
+        # appended recorder is a bootstrap diagnostic, not an M8M runtime.
+        probe_root = self.codebase / "argument probes with spaces"
+        probe_root.mkdir()
+        pointer = self.product_roots[0] / "scripts" / "m8m_run.py"
+        launcher = Path(self.release["codebase_launcher_path"])
+        arguments = [
+            "--request", "request with spaces.json", "--run-dir", "same run directory",
+            "--draft", "literal $(never-run); draft.json", "", 'embedded"quote',
+            "trailing\\", 'backslashes\\\\"and quote', "single\\slash",
+            "two\\\\slashes", "資料 café.json",
+        ]
+        for name, generated in (("pointer", pointer), ("launcher", launcher)):
+            with self.subTest(bootstrap=name):
+                prefix = generated.read_text(encoding="utf-8").split("import hashlib", 1)[0]
+                probe = probe_root / f"{name}.py"
+                capture = probe_root / f"{name}.json"
+                probe.write_text(
+                    prefix + "import json\n"
+                    + f"open({str(capture)!r}, 'w', encoding='utf-8').write("
+                    + "json.dumps({'argv':sys.argv[1:],'isolated':sys.flags.isolated,"
+                    + "'no_bytecode':sys.dont_write_bytecode}))\n"
+                    + "raise SystemExit(17)\n",
+                    encoding="utf-8",
+                )
+                completed = subprocess.run(
+                    [sys.executable, "-B", str(probe), *arguments],
+                    cwd=probe_root, capture_output=True, text=True, check=False, timeout=45,
+                )
+                self.assertEqual(completed.returncode, 17, completed.stderr)
+                self.assertEqual(
+                    json.loads(capture.read_text(encoding="utf-8")),
+                    {"argv": arguments, "isolated": 1, "no_bytecode": True},
+                )
 
     def test_codebase_dispatcher_rejects_missing_resume_pin_before_runtime(self) -> None:
         launcher = Path(self.release["codebase_launcher_path"])
@@ -265,6 +291,36 @@ class RuntimeReleaseIsolationTests(unittest.TestCase):
         )
         self.assertNotEqual(completed.returncode, 0)
         self.assertIn("missing the exact run-local runtime lock", completed.stderr)
+
+    def test_direct_generated_launcher_preserves_request_and_draft_paths(self) -> None:
+        _write_resumable_flow(self.harness)
+        with tempfile.TemporaryDirectory(dir=self.codebase) as temporary:
+            execution = Path(temporary) / "direct execution with spaces"
+            execution.mkdir()
+            run_dir = execution / "runs" / "run with spaces"
+            request = execution / "request with spaces.json"
+            request.write_text('{"message":"exact request"}\n', encoding="utf-8")
+            launcher = Path(self.release["codebase_launcher_path"])
+            common = [sys.executable, "-B", str(launcher), "--run-dir", str(run_dir),
+                      "--harness-root", str(execution)]
+            started = subprocess.run(
+                [*common, "--request", str(request)], cwd=execution,
+                capture_output=True, text=True, check=False, timeout=60,
+            )
+            self.assertEqual(started.returncode, 0, started.stderr)
+            self.assertEqual(json.loads(started.stdout)["state"], "ACTION_REQUIRED")
+            self.assertEqual(json.loads((run_dir / "request.json").read_text(encoding="utf-8")),
+                             {"message": "exact request"})
+            self.assertTrue((run_dir / RUNTIME_LOCK_FILENAME).is_file())
+            draft = execution / "draft with spaces.json"
+            draft.write_text('{"message":"accepted draft"}\n', encoding="utf-8")
+            resumed = subprocess.run(
+                [*common, "--run-mode", "resume", "--draft", str(draft),
+                 "--draft-for", "source_ready"], cwd=execution,
+                capture_output=True, text=True, check=False, timeout=60,
+            )
+            self.assertEqual(resumed.returncode, 0, resumed.stderr)
+            self.assertEqual(json.loads(resumed.stdout)["state"], "COMPLETE")
 
     def test_stage_produces_self_contained_verified_release(self) -> None:
         release = self.release
@@ -429,9 +485,10 @@ class RuntimeReleaseIsolationTests(unittest.TestCase):
         first = self.release
         _write_resumable_flow(self.harness)
         with tempfile.TemporaryDirectory() as temp:
-            execution_root = Path(temp)
-            run_dir = execution_root / "runs" / "run"
-            request = execution_root / "request.json"
+            execution_root = Path(temp) / "execution with spaces"
+            execution_root.mkdir()
+            run_dir = execution_root / "runs" / "run with spaces"
+            request = execution_root / "request with spaces.json"
             request.write_text('{"message": "hello"}\n', encoding="utf-8")
             pointer = self.product_roots[0] / "scripts" / "m8m_run.py"
             environment = dict(os.environ)
@@ -479,7 +536,7 @@ class RuntimeReleaseIsolationTests(unittest.TestCase):
                     self.harness, ["--run-dir", str(run_dir)]
                 )
                 self.assertEqual(resolved.parent.name, first["runtime_id"])
-                draft = execution_root / "draft.json"
+                draft = execution_root / "draft with spaces.json"
                 draft.write_text('{"message": "accepted"}\n', encoding="utf-8")
                 resumed = subprocess.run(
                     [

@@ -476,10 +476,11 @@ def _validate_chosen_member_bytes(
             )
         return value
 
-    # Hashing is used only as a bounded full-file readability pass. The digest
-    # is not persisted and does not turn chosen state into a cryptographic lock.
+    # Check readability without generating a checksum for milestone admission.
     try:
-        _sha256(asset_path)
+        with asset_path.open("rb") as stream:
+            while stream.read(1024 * 1024):
+                pass
     except OSError as exc:
         raise FlowError(f"chosen member asset is unreadable: {asset_path}") from exc
     if kind == "file":
@@ -569,7 +570,7 @@ def _file_value_for_schema(
         if isinstance(properties, dict):
             if "path" in properties or "path" in required:
                 fields["path"] = path_value
-            if "sha256" in properties or "sha256" in required:
+            if "sha256" in required:
                 fields["sha256"] = _sha256(asset_path)
             if "mime_type" in properties or "mime_type" in required:
                 fields["mime_type"] = str(member.get("mime_type") or "")
@@ -707,8 +708,6 @@ def _stage_image_provider_output(
     destination.parent.mkdir(parents=True, exist_ok=True)
     if normalized_source != _absolute(destination):
         shutil.copy2(source, destination)
-    if _sha256(destination) != _sha256(source):
-        raise FlowError(f"image provider output changed while staging: {source}")
     return destination
 
 
@@ -835,12 +834,7 @@ def admit_candidate(
                 if kind == "image":
                     assert_image_provider_on_execution_volume(run_root, source)
                 destination = member_dir / f"asset.{_member_extension(source, kind)}"
-                source_digest = _sha256(source)
                 shutil.copy2(source, destination)
-                if _sha256(destination) != source_digest:
-                    raise FlowError(
-                        f"{step['id']}.{output_id}: media changed while admitting {member_id}"
-                    )
                 normalized_item = _candidate_with_path(item, destination)
             normalized_values.append(normalized_item)
         normalized_outputs[output_id] = normalized_values if cardinality == "many" else normalized_values[0]
@@ -854,7 +848,8 @@ def admit_candidate(
 
 def _milestone_max_attempts(step: dict[str, Any]) -> int:
     loop = str(step.get("loop") or "none")
-    if loop in {"judge", "for"} or step.get("on_cycle") or step.get("cycle"):
+    if (loop in {"judge", "for"} or step.get("on_cycle") or step.get("cycle")
+            or step.get("on_tool_fail") == "need_model"):
         return max(1, int(step.get("max_attempts") or step.get("max_model_attempts") or 8))
     return 1
 
@@ -1499,13 +1494,13 @@ def materialize_bytes_into_slot(
         assert_image_provider_on_execution_volume(run_dir, src)
     if _absolute(src) != _absolute(dest):
         shutil.copy2(src, dest)
-    digest = _sha256(dest)
     out = dict(result)
     out["asset"] = {
         "path": dest.as_posix(),
-        "sha256": digest,
         "slot": addr["slot"],
     }
+    if asset.get("sha256"):
+        out["asset"]["sha256"] = _sha256(dest)
     assert_in_run(run_dir, dest)
     return out
 
@@ -1525,7 +1520,7 @@ def record_slot(run_dir: Path, step: dict[str, Any], result: dict[str, Any]) -> 
             "milestone": step["id"],
             "kind": ((step.get("asset") or {}).get("kind") if isinstance(step.get("asset"), dict) else None),
             "path": asset.get("slot"),
-            "sha256": asset.get("sha256"),
+            **({"sha256": asset["sha256"]} if asset.get("sha256") else {}),
         }
     )
     data["slots"] = slots
