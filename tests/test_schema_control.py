@@ -247,11 +247,10 @@ class WriterSkillTests(unittest.TestCase):
         self.assertIn("roster", text)
         self.assertIn("never pushes or deploys", pointer)
 
-    def test_github_docs_use_images_not_mermaid(self) -> None:
+    def test_github_docs_describe_runtime_state_and_example_diagram(self) -> None:
         root = Path(__file__).resolve().parents[1]
         readme = (root / "README.md").read_text(encoding="utf-8")
         self.assertNotIn("```mermaid", readme)
-        self.assertIn("docs/m8m-chart.jpg", readme)
         self.assertIn("m8m_run_roster_v1", readme)
         self.assertIn("<run>/roster.json", readme)
         self.assertIn("cycles/<id>/ledger.json", readme)
@@ -260,7 +259,6 @@ class WriterSkillTests(unittest.TestCase):
         )
         self.assertNotIn("```mermaid", sample)
         self.assertIn("m8m-flowchart.jpg", sample)
-        self.assertTrue((root / "docs" / "m8m-chart.jpg").is_file())
         self.assertTrue(
             (root / "examples" / "article_infographic" / "planning" / "m8m-flowchart.jpg").is_file()
         )

@@ -1,861 +1,350 @@
-# M8M harness builder
+# M8M Harness Builder
 
-Default: coordinate existing tools and FlowSteps, validate milestone outputs,
-and track progress. `run_m8m.py --mode coordinate` compiles and validates local
-workflow edits without a runtime release, archive, or installer.
-Use `--mode package` explicitly for the packaged distribution workflow described
-below. See [authoring](references/builder-authoring.md) for current commands.
+**Milestone to Milestone — 用完整主提示詞與具名輸出，串連現有工具。**
+**Connect existing tools through complete milestone master prompts and named outputs.**
 
-[![tests](https://github.com/dse120071750/m8m-harness-builder/actions/workflows/tests.yml/badge.svg)](https://github.com/dse120071750/m8m-harness-builder/actions/workflows/tests.yml)
+[繁體中文](#繁體中文) · [English](#english) · [Skill instructions](SKILL.md) · [Authoring reference](references/builder-authoring.md)
 
-[中文](#中文) · [English](#english)
+## 繁體中文
 
-给 Codex / Claude 用的 skill。它把一条 skill 拆成里程碑、FlowStep、工具，再写出一张表和一张流程图。
+### M8M 是甚麼？
 
-M8M 是 milestone to milestone，里程碑到里程碑。3.1 版把 Codex skill 原生文件编译成
-`flowstep_flow_v4`：FlowStep 生成候选结果，runtime 先做结构 admission；只有声明
-`loop: judge` 的语义关卡才调用独立 judge。通过后才写成唯一的
-`chosen-output.json` 给下游读取。选择锁是 session 目录里的逻辑状态，不是 hash、lock ID 或 revision。
-所有 active milestone 默认 `loop: none`，以实际命名输出和 schema 检查完成；
-不自动增加 hashes、revisions、proof graphs 或图片审核。文件路径无须附带 hash。
-下文出现的 hash/judge 工具只用于用户明确要求或既有外部 API 合约。
+M8M Harness Builder 用來建立及修改多階段工作流程。它協調現有工具與 FlowSteps，處理輸入綁定、輸出驗證、執行進度及中斷後續跑。每個 milestone 代表一項有明確交付物的工作；不需要把每次工具呼叫都拆成 milestone，也不需要重新實作已有工具。
 
-Builder 3.1 是 compiler/packager，不是产品运行时。它产出确定性的
-`m8m.workflow_source_bundle.v1`，并把不可变、digest-addressed 的 runtime release
-安装到目标 codebase 的 `flowsteps/flows/<flow_id>/runtime/releases/`。产品 skill
-只保留指向 codebase `launch.py` 的薄入口，绝不调用安装中的 Builder。
-Builder 自己不 push、不发布、不部署。
+目前預設使用 **coordination 模式**：編譯及驗證工作流程，沿用現有實作。只有明確需要可分發或隔離執行的套件時，才使用 package 模式。
 
-`agents/openai.yaml` 也可以声明封闭的 workflow request、configuration、result schema，
-以及成功终点的精确 output binding。这些 authoring-only contracts 会进入 source bundle，
-但不会塞进 `flowstep_flow_v4` 或改变 runtime chosen state。
+### 每個 milestone 都從自己的完整主提示詞開始
+
+1. 新建 milestone 使用 `milestone01`、`milestone02`、`milestone03` 等穩定 ID。
+2. 先在 `references/milestoneNN.md` 撰寫該階段完整、可獨立理解的 master prompt，再設定工具及輸出。
+3. 以現有的 `gem` 欄位指向這份文件，不需要另一份提示詞檔案或新增 YAML 欄位。
+4. 主提示詞包括角色、目標、實際輸入及參考素材用途、工作指示、限制和確切交付物。篇幅及章節按工作需要決定。
+5. 執行、模型復原及等待後續跑都帶入完整主提示詞；不能只傳某個 FlowStep 的片段，也不能依賴之前的對話補足內容。
+
+這些規則適用於圖片生成、文字撰寫、資料處理、工具執行及上傳。確定性工具階段仍有自己的主提示詞，但不需要為此額外呼叫模型。簡短的 `success` 描述、schema 或工具清單都不能取代完整主提示詞。使用者提供的長提示詞應完整保留，只按明確指定的工作流程調整。
+
+修改現有工作流程時保留原有 ID。插入新階段時使用下一個未用編號，不要重新編號；執行先後由 graph 決定。
+
+### 簡化完成條件
+
+預設 `loop: none`。每個活躍 milestone 的執行路徑**不要求雜湊、修訂鏈、證明圖或自動圖片審核**。
+
+完成條件是所需具名輸出確實存在，並符合宣告的 schema、種類及數量。圖片或檔案必須是實際產物，不能只有一句「已完成」。只有工作流程明確要求評審時才設定 judge；圖片生成不會因此自動多出評審階段。
+
+套件與 runtime 仍可能有內部完整性檢查；這些不會變成每個業務 milestone 必須建立的額外交付物。
+
+### 跨 milestone 引用輸出
+
+後續階段可引用任何已宣告的上游輸出，不限於前一個階段。例如：
+
+| 階段 | 具名輸出 | 用途 |
+| --- | --- | --- |
+| `milestone01` | `master_image` | 建立原始連續性參考圖 |
+| `milestone02` | `prompts` | 產生包含 `img1` 至 `img6` 的 JSON |
+| `milestone03` | `images` | 同時使用以上兩項輸出，產生六張圖片 |
+
+在提示詞中，`milestone01.master_image` 表示第一階段的 `master_image` 輸出。實際傳遞資料仍需 YAML 綁定。以下只是綁定片段，不是完整可執行的 milestone：
+
+```yaml
+id: milestone03
+gem: references/milestone03.md
+inputs:
+  master_image:
+    from: milestone01.waterfront_setup
+    output: master_image
+  prompts:
+    from: milestone02.waterfront_prompts
+    output: prompts
+```
+
+`from` 由生產者 ID 與其宣告的 `output_contract` 組成；`output` 選取具名輸出。此例的兩個 contract 分別是 `waterfront_setup` 與 `waterfront_prompts`。原生 agent YAML 使用 `agent_id`，而不是 `id`。兩個生產者都必須在 graph 中宣告為上游。
+
+對 `cardinality: many` 的輸出，可用 `member` 選取已宣告的成員。`img1` 等 JSON key 則從解析後的 JSON 讀取，不是 `member`。綁定解析目前 run 的已選定輸出；缺失時回報錯誤，不會改用其他 run 的素材。主提示詞文件本身也不等於輸出產物。
+
+### 範例：海旁汽車攝影的三個階段
+
+以下是工作流程設計範例，需要接上實際圖片工具、V1 設定與 Case I/O；並非已附帶部署的攝影服務。
+
+| Milestone | 自己的 master prompt 必須完整定義的工作 |
+| --- | --- |
+| `milestone01` — 生成主圖 | 結合 V1 的 `anchor_prompt`、所選汽車參考圖，以及汽車與 Design Package 文字。生成乾燥夜間海旁路邊場景：行人步道、淺色混凝土護欄、暗色海面、遠處城市燈光及暖色路燈。完整汽車以前側三分之四角度入鏡，沒有人物。固定車輛外觀、停車位置、環境與光線，輸出 `master_image`；它不是 `img1`。 |
+| `milestone02` — 生成六份提示詞 | 使用原始主圖、V1 完整 `master_prompt` 及汽車／人物／套件文字，輸出單一扁平 JSON，只有 `img1` 至 `img6` 六個欄位。每個字串都是完整獨立提示詞，以 “Generate an image according to the attached MASTER CONTINUITY IMAGE.” 開始，包含完整連續性指示與 V1 指定的七個章節。 |
+| `milestone03` — 生成六張成品 | 依序執行六份完整提示詞，每次都附上同一張原始 `master_image`。汽車不移動，只改變鏡頭位置。不得附上之前生成的成品、人物照片或深度圖。輸出六張有順序的實際圖片。 |
+
+六個鏡頭分別是：人物背面行走近景、純車尾側三分之四、人物背向全身並在右耳附近整理頭髮（汽車前角從畫面左側進入）、純車前側三分之四、純車側面，以及前輪／輪胎／煞車／相鄰葉子板特寫。
+
+人物只出現在 `img1`、`img3`，保持白色長袖上衣、寬鬆藍色牛仔褲、小黑肩袋及平底鞋。V1 的可選深度參考不參與此執行；`car-girl` 只是標籤，不選擇另一個引擎。
+
+若需要上傳，透過現有 Case I/O 傳送六張排序圖片、workflow／car／person／package ID 及可選 caption。上傳可屬於第三階段的明確工作範圍，或另設 `milestone04`，並為它撰寫完整主提示詞。詳見[主提示詞與引用規格](references/master-prompts.md)。
+
+### 安裝與使用
+
+CI 使用 Python 3.12。需要 Git；各產品工具的認證及外部服務設定由該工具管理。
+
+以下 PowerShell 指令將本 repository 安裝為 Codex skill（只適用於尚未安裝）：
+
+```powershell
+git clone https://github.com/dse120071750/m8m-harness-builder.git "$env:USERPROFILE/.codex/skills/m8m-harness-builder"
+Set-Location "$env:USERPROFILE/.codex/skills/m8m-harness-builder"
+python -m pip install -r requirements.txt
+```
+
+其他系統可將 repository 放在 `~/.codex/skills/m8m-harness-builder`。已有安裝時保留本機修改，於該 repository 使用 `git pull --ff-only` 更新。
+
+在 Codex 中可這樣提出需求：
+
+> 使用 $m8m-harness-builder，在指定的專案建立海旁汽車攝影流程。沿用現有圖片工具與 Case I/O。每個階段先寫完整 master prompt，使用 milestone01、milestone02、milestone03，並綁定具名輸出。第三階段同時引用第一階段主圖及第二階段六份提示詞。不要加入雜湊、修訂鏈、證明圖或自動圖片審核。
+
+Builder 先了解已有實作與輸入，再撰寫完整提示詞、graph、工具綁定及輸出契約。典型原生來源結構如下（`schemas/` 內容按契約需要建立）：
+
+```text
+<project>/flowsteps/flows/<flow_id>/
+  SKILL.md
+  agents/
+    openai.yaml          # graph 與工作流程契約的來源
+    milestone01.yaml
+    milestone02.yaml
+    milestone03.yaml
+  references/
+    milestone01.md       # 完整主提示詞
+    milestone02.md
+    milestone03.md
+  schemas/
+  flow.yaml              # 原生來源編譯後的產物
+```
+
+現有工具留在原有位置，所需工具綁定位於 `<project>/flowsteps/tools/<id>/`。原生工作流程修改 `agents/openai.yaml` 及相應 agent 來源，不直接修改生成的 `flow.yaml`。既有手寫 v4 工作流程仍可直接驗證及執行，不強制轉換格式。
+
+### 編譯、驗證與執行
+
+以下命令都從 **Builder repository 根目錄**執行。請替換範例路徑；Windows 可用 `D:/project` 等路徑。目標工作流程、工具實作與 request JSON 必須先存在。
+
+```sh
+python scripts/run_m8m.py --mode coordinate --target "/path/to/project/flowsteps/flows/waterfront_v1" --codebase "/path/to/project"
+python scripts/validate_harness.py --codebase "/path/to/project" --flow-id waterfront_v1 --scope workflow
+```
+
+`coordinate` 是預設模式。它編譯及驗證定義，不會生成圖片或打包 runtime。成功回傳的 `run_command` 是該流程應使用的執行命令；已打包流程會使用自己的 `launch.py`。
+
+對尚未打包的 coordination 工作流程，首次執行範例如下。把可變執行資料放在專案外：
+
+```sh
+python scripts/run_flow.py --execution-mode coordination --codebase "/path/to/project" --flow-id waterfront_v1 --harness-root "/path/to/m8m-runs" --request "/path/to/request.json"
+```
+
+執行器預設建立 fresh run，快取預設關閉。若工作需要模型回覆，依回傳 action 的 task、context 及 draft 路徑完成內容，再提交該 draft；不要猜測路徑或另找其他 run 的素材。
+
+```sh
+python scripts/run_flow.py --execution-mode coordination --codebase "/path/to/project" --flow-id waterfront_v1 --run-mode resume --run-dir "/path/to/exact-run"
+python scripts/run_flow.py --execution-mode coordination --codebase "/path/to/project" --flow-id waterfront_v1 --run-mode resume --run-dir "/path/to/exact-run" --draft "/path/from/action/draft.json" --draft-for milestone02
+```
+
+續跑必須指定同一個 `--run-dir`。相容的工作流程修改可透過 runner 的 `--continue-after-edit milestoneNN` 接續；需要重新生成時用 `--replace-milestone milestoneNN`，它會使該階段及依賴它的結果失效。改變 graph 或輸出介面而無法相容時，建立新 run。
+
+執行資料包括：
+
+| 路徑 | 內容 |
+| --- | --- |
+| `<run>/roster.json` | `m8m_run_roster_v1` 執行進度 |
+| `<run>/milestones/<milestone>/out/chosen-output.json` | 已選定具名輸出的 manifest |
+| `cycles/<id>/ledger.json`（run 內） | 工作流程使用 cycle 時的記錄 |
+
+### 何時才需要 package？
+
+需要可分發或隔離 runtime 時才明確使用：
+
+```sh
+python scripts/run_m8m.py --mode package --target "/path/to/source-skill" --codebase "/path/to/project"
+```
+
+Package 模式驗證及安裝套件，要求完整可執行實作；只有 scaffold 或待建工具時不能宣稱已可運行。這個命令本身不會推送 GitHub，也不會部署到遠端伺服器。詳見[套件文件](references/runtime-packaging.md)。
+
+### 開發與排查
+
+```sh
+python -m pip install -r requirements.txt pytest==9.0.1 requests==2.32.4
+python -m pytest -q tests
+```
+
+CI 使用 Ubuntu 24.04、Python 3.12。常見問題：
+
+- **缺少主提示詞**：補齊 `gem` 指向的完整 Markdown，而不是只補一句成功條件。
+- **上游綁定失敗**：確認 producer、`output_contract`、具名 port 及 graph 關係一致，且目前 run 已有該輸出。
+- **只有 scaffold**：接上實際工具與 handler，再驗證；編譯成功不代表外部服務已設定完成。
+- **續跑資料不符**：使用 action 所屬的 exact run；不相容的流程變更使用新 run。
+
+延伸閱讀：[編寫規格](references/builder-authoring.md) · [主提示詞](references/master-prompts.md) · [FlowStep 開發](references/flowstep-development.md) · [Milestone 規格](references/milestone.md) · [架構](references/architecture.md)
+
+## English
+
+### What is M8M?
+
+M8M Harness Builder creates and edits workflows made of milestones. It coordinates existing tools and FlowSteps, binds inputs, validates outputs, tracks progress, and resumes interrupted work. Each milestone represents work with a clear deliverable; every tool call does not need its own milestone, and existing tools do not need to be rebuilt.
+
+The default is **coordination mode**: compile and validate the workflow while reusing existing implementations. Use package mode only when a distributable or isolated runtime is explicitly needed.
+
+### Every milestone begins with its own complete master prompt
+
+1. Name new milestones `milestone01`, `milestone02`, `milestone03`, and so on.
+2. Write the milestone's complete, standalone master prompt in `references/milestoneNN.md` before binding tools and declaring outputs.
+3. Point the existing `gem` field to that document. No second prompt file or new YAML field is needed.
+4. Include the worker's role, objective, actual inputs and reference roles, domain instructions, constraints, and exact deliverable. Use the length and sections the task needs.
+5. Execution, model recovery, and wait/resume instructions carry the full master prompt. Do not send only one FlowStep fragment or rely on earlier conversation to fill gaps.
+
+This applies to image generation, writing, data processing, tool execution, and uploads. Deterministic tool milestones also have master prompts, without requiring an extra model call. A short `success` sentence, schema, or tool list cannot replace the prompt. Preserve user-supplied long prompts in full, adapting them only for explicitly requested workflow choices.
+
+Keep existing IDs when editing workflows. Allocate the next unused number when inserting a milestone; do not renumber existing nodes. The graph determines execution order.
+
+### Simple completion requirements
+
+Use `loop: none` by default. Active milestone execution paths **do not require hashes, revision chains, proof graphs, or automatic image reviews**.
+
+Completion requires actual named outputs that satisfy their declared schemas, kinds, and cardinalities. Images and files must exist as artifacts; a statement saying “done” is insufficient. Configure a judge only when the workflow explicitly requires review. Image generation does not automatically add a review stage.
+
+Packaging and runtime internals may retain integrity checks. These do not become additional deliverables required from each business milestone.
+
+### Referencing another milestone's output
+
+A later milestone can consume any declared upstream output, not just the immediately preceding milestone:
+
+| Milestone | Named output | Purpose |
+| --- | --- | --- |
+| `milestone01` | `master_image` | Establish the original continuity reference |
+| `milestone02` | `prompts` | Produce JSON containing `img1` through `img6` |
+| `milestone03` | `images` | Use both earlier outputs to generate six images |
+
+In prompt prose, `milestone01.master_image` means the `master_image` output of the first milestone. Actual data transfer still requires a YAML binding. This is a binding excerpt, not a complete runnable milestone:
+
+```yaml
+id: milestone03
+gem: references/milestone03.md
+inputs:
+  master_image:
+    from: milestone01.waterfront_setup
+    output: master_image
+  prompts:
+    from: milestone02.waterfront_prompts
+    output: prompts
+```
+
+`from` combines the producer ID and its declared `output_contract`; `output` selects the named port. The contracts in this example are `waterfront_setup` and `waterfront_prompts`. Native agent YAML uses `agent_id` instead of `id`. Both producers must be declared upstream in the graph.
+
+For an output with `cardinality: many`, use `member` to select a declared member. JSON keys such as `img1` are read from the resolved JSON value, not selected with `member`. Bindings resolve chosen outputs from the current run. Missing outputs cause an error, rather than substitution from another run. The master-prompt document itself is not the output artifact.
+
+### Example: three-stage waterfront automotive photography
+
+This is a workflow design example requiring actual image tools, V1 configuration, and Case I/O integration; it is not a bundled deployed photography service.
+
+| Milestone | Work its own master prompt must fully define |
+| --- | --- |
+| `milestone01` — Generate the master image | Combine V1's `anchor_prompt`, the selected car reference image, and car/Design Package text. Generate a dry waterfront roadside at night: pedestrian footway, pale concrete barrier, dark water, distant city lights, and warm road lamps. Show the complete car from a front three-quarter angle with no person. Establish vehicle appearance, parking position, environment, and lighting. Return `master_image`; this setup reference is not `img1`. |
+| `milestone02` — Generate six prompts | Use the original master image, V1's full `master_prompt`, and car/person/package text. Return one flat JSON object containing only `img1` through `img6`. Each string is a complete standalone prompt beginning “Generate an image according to the attached MASTER CONTINUITY IMAGE.” Include the full continuity instructions and V1's seven specified sections. |
+| `milestone03` — Generate six final images | Execute the six complete prompts sequentially, attaching the same original `master_image` every time. Keep the car parked and change camera position. Do not attach previous final images, person photographs, or depth maps. Return six actual images in order. |
+
+The six shots are: a close rear view of the person walking; a car-only rear three-quarter view; a rear-facing full-body person adjusting hair near the right ear, with the car's front corner entering the left of frame; a car-only front three-quarter view; a car-only side profile; and a front-wheel, tire, brake, and adjacent fender detail.
+
+The person appears only in `img1` and `img3`, consistently wearing a white long-sleeve top, loose blue jeans, a small black shoulder bag, and flat footwear. V1's optional depth references are not execution inputs. The `car-girl` tag is metadata, not an engine selector.
+
+If uploading is requested, use existing Case I/O with the six ordered images, workflow/car/person/package IDs, and an optional caption. Upload can be explicitly included in milestone03 or separated into `milestone04` with its own complete master prompt. See the [master-prompt and reference specification](references/master-prompts.md).
+
+### Install and use
+
+CI uses Python 3.12. Git is required. Product tools own their authentication and external service configuration.
+
+These PowerShell commands install this repository as a Codex skill when it is not already installed:
+
+```powershell
+git clone https://github.com/dse120071750/m8m-harness-builder.git "$env:USERPROFILE/.codex/skills/m8m-harness-builder"
+Set-Location "$env:USERPROFILE/.codex/skills/m8m-harness-builder"
+python -m pip install -r requirements.txt
+```
+
+On other systems, place the repository at `~/.codex/skills/m8m-harness-builder`. For an existing installation, preserve local changes and update from that repository with `git pull --ff-only`.
+
+Example request in Codex:
+
+> Use $m8m-harness-builder to build a waterfront automotive photography workflow in the specified project. Reuse the existing image tools and Case I/O. Write a complete master prompt for every stage, use milestone01, milestone02, and milestone03, and bind named outputs. The third stage must reference both the first stage's master image and the second stage's six prompts. Do not add hashes, revision chains, proof graphs, or automatic image reviews.
+
+The Builder inventories existing implementations and inputs, then authors the full prompts, graph, tool bindings, and output contracts. A typical native source layout is below; populate `schemas/` as the contracts require:
+
+```text
+<project>/flowsteps/flows/<flow_id>/
+  SKILL.md
+  agents/
+    openai.yaml          # source of graph and workflow contracts
+    milestone01.yaml
+    milestone02.yaml
+    milestone03.yaml
+  references/
+    milestone01.md       # complete master prompt
+    milestone02.md
+    milestone03.md
+  schemas/
+  flow.yaml              # compiled native-source artifact
+```
+
+Keep existing implementations where they are maintained; required tool bindings live under `<project>/flowsteps/tools/<id>/`. For native workflows, edit `agents/openai.yaml` and the corresponding agent source, not the generated `flow.yaml`. Existing authored v4 workflows can still be validated and executed without a mandatory format migration.
+
+### Compile, validate, and execute
+
+Run these commands from the **Builder repository root**. Replace example paths; Windows paths such as `D:/project` work too. The authored target workflow, tool implementations, and request JSON must already exist.
+
+```sh
+python scripts/run_m8m.py --mode coordinate --target "/path/to/project/flowsteps/flows/waterfront_v1" --codebase "/path/to/project"
+python scripts/validate_harness.py --codebase "/path/to/project" --flow-id waterfront_v1 --scope workflow
+```
+
+`coordinate` is the default mode. It compiles and validates definitions; it does not generate images or package a runtime. The returned `run_command` identifies the runner to use. Already packaged workflows use their own `launch.py`.
+
+For an unpackaged coordination workflow, start a run as follows. Keep mutable execution data outside the project:
+
+```sh
+python scripts/run_flow.py --execution-mode coordination --codebase "/path/to/project" --flow-id waterfront_v1 --harness-root "/path/to/m8m-runs" --request "/path/to/request.json"
+```
+
+The runner starts a fresh run by default, with caching off. When model work is needed, follow the returned action's task, context, and draft paths, then submit that draft. Do not invent paths or look in another run for missing artifacts.
+
+```sh
+python scripts/run_flow.py --execution-mode coordination --codebase "/path/to/project" --flow-id waterfront_v1 --run-mode resume --run-dir "/path/to/exact-run"
+python scripts/run_flow.py --execution-mode coordination --codebase "/path/to/project" --flow-id waterfront_v1 --run-mode resume --run-dir "/path/to/exact-run" --draft "/path/from/action/draft.json" --draft-for milestone02
+```
+
+Resume with the same exact `--run-dir`. Use the runner's `--continue-after-edit milestoneNN` for compatible workflow edits. Use `--replace-milestone milestoneNN` for intentional regeneration; it invalidates that milestone and its dependents. Start a fresh run for incompatible graph or output-interface changes.
+
+Runtime records include:
+
+| Path | Content |
+| --- | --- |
+| `<run>/roster.json` | Progress in `m8m_run_roster_v1` format |
+| `<run>/milestones/<milestone>/out/chosen-output.json` | Manifest of chosen named outputs |
+| `cycles/<id>/ledger.json` within the run | Cycle records when the workflow uses cycles |
+
+### When to package
+
+Explicitly select package mode when a distributable or isolated runtime is needed:
+
+```sh
+python scripts/run_m8m.py --mode package --target "/path/to/source-skill" --codebase "/path/to/project"
+```
+
+Package mode validates and installs the package and requires complete executable implementations. A scaffold or unimplemented tool is not a runnable installation. This command does not itself push to GitHub or deploy to a remote server. See [runtime packaging](references/runtime-packaging.md).
+
+### Development and troubleshooting
+
+```sh
+python -m pip install -r requirements.txt pytest==9.0.1 requests==2.32.4
+python -m pytest -q tests
+```
+
+CI runs on Ubuntu 24.04 with Python 3.12. Common issues:
+
+- **Missing master prompt:** complete the Markdown referenced by `gem`; a success sentence is insufficient.
+- **Upstream binding failure:** check the producer, `output_contract`, named port, graph relationship, and availability of the output in this run.
+- **Scaffold only:** connect actual tools and handlers before validation. Successful compilation does not configure external services.
+- **Resume mismatch:** use the exact run associated with the action; start a fresh run after incompatible workflow changes.
+
+Further reading: [Authoring](references/builder-authoring.md) · [Master prompts](references/master-prompts.md) · [FlowStep development](references/flowstep-development.md) · [Milestones](references/milestone.md) · [Architecture](references/architecture.md)
 
 ---
 
-# 中文
-
-## 问题
-
-要出图、出包、抓文件、做渲染的 skill，老栽同一类坑。
-
-1. 模型把活全干了。session 里写 SQL、裁图、Playwright、一次性 downloader。本来该是 typed 的小事，变成 prompt。
-2. 工具住在 skill 文件夹。脚本躺在 `~/.codex/skills`、`~/.claude/skills`，不在产品 repo。下一轮又现场发明一遍。
-3. n8n 太硬。一次 HTTP、一次 crop 就是一个画布节点。人要检查的关卡（来源绑好了、计划定了）被动作节点盖住。
-4. 管太死也不行。工具一失败就不让 agent 找路，或者把 FlowStep 当成 production 护栏，管道就死了。关卡里面仍是普通 skill。
-
-问题不是「用了 AI」。是 AI 当第一手，该交出来的东西没有护栏，该是 Python 的东西没有首选 repo 工具。
-
-## 解法
-
-把 n8n 的粒度反过来。I/O 还是 typed。画布升到 Milestone（里程碑）。里面放 FlowStep。每个 FlowStep 优先用一支 repo 工具。Builder 要把这支工具做出来：抓表、调 MCP、crop、hash。工具没有或挂了，就像普通 agent 找路。里程碑产出不能商量。
-
-```text
-n8n:   节点 = 一个动作
-M8M:   节点 = 一个里程碑（护栏）
-       this.in = previous.out
-       FlowStep = 节点里的原子目标（指引）
-       Tool = 这个 FlowStep 首选的一支 Python（可选）
-```
-
-| 词 | 硬性？ | 意思 |
-| --- | --- | --- |
-| Milestone（里程碑） | 是，护栏 | 声明 `success`、output schema 和命名 output ports。结构 admission（以及可选 judge）通过后，当前候选成为唯一 chosen bundle；没有 `chosen-output.json` 就 BLOCK。 |
-| FlowStep（流程步） | 指引 | 里程碑里面的原子目标，比如绑五张图、抓一条 record。优先一支工具。顺序跟表走。怎么做到，像普通 skill。 |
-| Tool（工具） | 首选，可选 | Python，放在 `<repo>/flowsteps/tools/<id>/`。Builder 该开发它：已有、从 skill script promote、或 generate-new。未实现的 generate-new 只能标记 `BUILD_REQUIRED/non_runnable`，不能通过 validation 或 install。 |
-
-这个 skill 就干这件事：
-
-```text
-认出里程碑
-  → 每个里面列出 FlowStep（原子；优先一支工具）
-  → 开发该工具（existing / promote / generate-new）
-  → 写一张 FlowStep 表 + 一张里程碑流程图
-     （markdown + 人话 JPEG；cycle / judge / branch）
-  → 编译 canonical JSON、review-only flow.yaml 和 source bundle
-```
-
-`$m8m-harness-builder` 写这个拆法。名字长得像 `crop_*` 不会拒绝画图。Stub 工具可以保留作修复草图，但状态必须是 `BUILD_REQUIRED`，不能安装。里程碑 output schema 不是草图。
-
-## 图：里程碑到里程碑，以及一关里面有什么
-
-画布上只有里程碑，静态 workflow JSON 显示命名 output ports。FlowSteps 生成／改善当前候选，runtime admission 通过后，`loop:none` 直接提交；`loop:judge` 再由独立 judge 作语义决定。下一关只能查询 `chosen-output.json`。没有 manifest → BLOCK。
-
-一关**里面**是 N 个 FlowStep，以及按需声明的独立 **judge**。runtime 从 YAML 的 `success + output_contract + output_schema + outputs` 派生 expectation。所有候选先经过结构 admission；`loop:none` 不调用 judge，`loop:judge` 才发送封闭 typed request。Gem 是整個 milestone 的完整 master prompt，執行時先讀全文；FlowStep 段落只是可選實作備註。
-
-![M8M 演示：上面是里程碑画布；下面打开 source_ready，里面是 N 个 FlowStep，然后 judge 按派生 expectation 发出 pass 收据或 keep working](docs/m8m-chart.jpg)
-
-生成 skill 时写出 `planning/m8m-flowchart.md` 和 `planning/m8m-flowchart.jpg`。开发中每改一步（`write` / `mark`）两份都重写。JPEG 给人审：可携带、好核对、不靠 mermaid。人话来自 humanizer（`source_ready` → Source is ready）。
-
-怎么往下走：
-
-```text
-request
-  → source_ready     必须选定命名 file output
-      里面：FlowStep fetch_record → tool fetch_record
-            FlowStep hash_bind    → tool hash_bind
-            然后 judge 读 runtime 派生的 typed expectation
-            PASS → chosen-output.json → 下一关。RETRY → session 继续做。
-  → plan_frozen      必须交出 json plan
-  → release_packaged 必须交出 file package
-```
-
-| 种类 | chosen bundle 成员 |
-| --- | --- |
-| `file` | runtime 复制到 `out/members/<id>/asset.<ext>` |
-| `image` / `video` / `audio` | 同样复制媒体 bytes，可在 canvas preview |
-| `json` / `data` | 写成 JSON asset，并按 output schema 验证 |
-
-## 表（指引）
-
-`planning/m8m-flowchart.md` 里有 FlowStep 表。那是关卡**里面**的顺序，不是第二张画布。
-
-| Milestone | # | FlowStep（在关卡里面） | 首选工具 |
-| --- | ---: | --- | --- |
-| `source_ready` | 1 | `fetch_record` | `fetch_record` |
-| `source_ready` | 2 | `hash_bind` | `hash_bind` |
-| `plan_frozen` | 1 | `compact_plan` | `compact_editorial_config` |
-| `release_packaged` | 1 | `materialize_package` | `materialize_package` |
-
-来源说这支 Python 从哪来。现成 toolbox、把 skill script promote 进 repo、或 generate-new。Stub 算草图。
-
-| Milestone | Asset | 现成 toolbox | 从 skill script promote | Generate new |
-| --- | --- | --- | --- | --- |
-| `source_ready` | `file` | `hash_bind` | `fetch_record` ← `scripts/fetch_record.py` | — |
-| `plan_frozen` | `json` | — | — | `compact_editorial_config` |
-| `release_packaged` | `file` | — | `materialize_package` ← `scripts/package.py` | — |
-
-## cycle / judge / branch
-
-n8n 的画布是动作。M8M 的画布是关卡。人话来自 humanizer（`source_ready` → 来源已就绪）。不要把下面三件事叫 FOR / IF。
-
-这份仓库实现的是本机可审计、标准化的 M8M authoring、compile 和 workflow-state 合约。节点是关卡，不是一次 HTTP；来源已就绪必须交出文件，卡片已对齐会重试到 judge PASS。server Codex SDK、tenant binding、scheduler 和远端 execution 属于平台后续工作，不是 Builder 3 的现有能力或保证。
-
-| n8n | M8M |
-| --- | --- |
-| 节点 = 一次 HTTP / 一次 crop | 节点 = 一个里程碑。动作在关卡**里面**（FlowStep + 工具） |
-| Retry 同一节点 | **judge**：只在显式 `loop:judge` 关卡内重试。worker 返回 `{decision,reasons,blockers}`；PASS 后提交 chosen bundle。 |
-| IF / Switch 节点 | **branch**：**这一关之后**选路。AI 起草，工具写 `{ok, branch}`。另一条路 skipped |
-| Loop Over Items / Split in Batches | **cycle**：先冻账本，再**包一圈关卡**。每一轮 AI 起草 pass/fail，工具改账本。pass 保留；fail 清 residual，可 resume |
-
-每一关都有一份只指导 FlowStep 的 gem。gem 不是画布节点。judge 也不是第二关；大多数确定性关卡只用 admission，只有作者明确声明的语义关卡才使用 `loop: judge` 和独立 `<id>_judge`。cycle / branch 仍用自己的控制收据。
-
-模型不能填 `ok` / `branch` / `cycle`。收据 ok 仍不能免掉 required outputs 和 chosen manifest。
-
-### wait — 回复已就绪
-
-等待回复是**一关**，不是 n8n 的 Wait 节点，也不叫 `loop: wait`。里面仍是 N 个 FlowStep + 一支按需声明的 judge。session 一开始就冻一份**名册** `<run>/roster.json`（`m8m_run_roster_v1`），每关走完改一行。还没有 draft → 该行走 `waiting`、run 变 `paused`、session **退出**。人把回复写进 `milestones/response_ready/work/draft.json` 之后，skill 找到这份名册 resume；FlowStep 按 Gem 处理回复，judge 只读取 runtime 派生的 expectation 和当前 candidate，再返回 PASS、RETRY 或 BLOCKED。因为他们说了什么才选路，那是这一关 **之后** 的 branch。不要画 `roster_frozen` 关卡。名册不是 cycle 的账本 `cycles/<id>/ledger.json`。
-
-```text
-问已写下  →  回复已就绪（judge：暂停 / 继续 / pass）  →  下一关
-```
-
-```yaml
-- id: response_ready
-  success: "回复已经到达并可供下一关使用"
-  output_contract: response_ready_v1
-  output_schema: milestones/response_ready/output.schema.json
-  outputs:
-    - { id: reply, name: Reply, kind: json, cardinality: one, required: true }
-  gem: references/response_ready.md
-  intelligence: completion
-  loop: judge
-  worker: response_ready_judge@3.1.0
-```
-
-| 本子 | 文件 | 干什么 |
-| --- | --- | --- |
-| 名册（roster） | `<run>/roster.json` | 开跑就冻。每关 `done` / `waiting` / `skipped`。wait 时 `paused`，退出 session。人给回复后找这份名册 resume。 |
-| 账本（cycle） | `cycles/<id>/ledger.json` | 某一圈的行。pass 留 `items/NNN`；fail 清 residual。 |
-
-### judge — 卡片已对齐
-
-出图、空间对齐不自动产生 judge。若 **卡片已对齐** 明确声明了语义 judge，candidate 先通过结构 admission，再由独立 judge 返回 PASS、RETRY 或 BLOCKED；只有 PASS 才提交 chosen reply。
-
-```text
-来源已就绪  →  卡片已对齐（admission → 可选 judge，直到 PASS）  →  发布包已打包
-```
-
-```yaml
-- id: card_aligned
-  gem: references/card_aligned.md
-  loop: judge
-  worker: card_aligned_judge@3.1.0
-  intelligence: image
-  flowsteps:
-    - { id: align_compare, tool: align_compare }
-    - { id: draw_red_circles, tool: draw_red_circles }
-    - { id: align_edit, tool: align_edit }
-    - { id: hash_bind, tool: hash_bind }
-```
-
-### branch — 入口已就绪
-
-入口 chosen bundle 提交之后，AI 起草走哪条生成路。不要叫 IF。
-
-```text
-入口已就绪
-  ├─ branch=直接改款（默认，case_type 不是 source_case）
-  │     平面图来源案 skipped: true
-  │     → 直接改款 → 改款已就绪
-  └─ branch=平面图来源案
-        要 source record + 平面图，冻标题
-        → 平面图来源已就绪 → 来源标题已冻结 → 改款已就绪
-```
-
-```yaml
-- id: intake_ready
-  intelligence: completion
-  branch:
-    worker: branch_receipt
-    default: direct
-    paths:
-      - { id: direct, then: restyle_direct }
-      - { id: floorplan_source_case, then: floorplan_source_ready }
-    join: restyle_ready
-```
-
-### cycle — 页账本已冻结
-
-先冻账本，再包一圈。不要叫 FOR。`remaining == 0` 只是数据，不是闸门。
-
-```text
-页账本已冻结
-  → [cycle pages]
-        页已绑定
-        页已渲染     ← milestone judge PASS，然后提交 chosen output
-            pass → 保留 items/001，账本该行走 done
-            fail → 清掉这一轮 out/，行仍 unfinished，可再做
-  → 发布包已打包
-```
-
-```yaml
-- id: pages_ledger_frozen
-  success: "页账本已经冻结"
-  output_contract: pages_ledger_v1
-  output_schema: milestones/pages_ledger_frozen/output.schema.json
-  outputs:
-    - { id: ledger, name: Page ledger, kind: json, cardinality: one, required: true }
-- id: page_bound
-  on_cycle: pages
-- id: page_rendered
-  on_cycle: pages
-  cycle:
-    worker: cycle_receipt
-    ledger: pages_ledger_frozen
-    start: page_bound
-    join: release_packaged
-    pass: "这一行走完：页图已成为 chosen output member"
-```
-
-`--milestone` 写成 `crop_4x5` 只是备注：看起来像工具。不是拒绝画图。
-
-工具在 `<repo>/flowsteps/tools/`，不在 `~/.codex/skills` 或 `~/.claude/skills`。教学合约由作者写在 `<skill>/references/<milestone>.md`；Builder 验证后，才把 hash-bound 副本编译到 `<repo>/flowsteps/flows/<id>/references/`。
-
-## 怎么跑
-
-Codex（`$m8m-harness-builder`）和 Claude Code 都能用。不传 `--run-dir` 时，Windows driver 默认在 `%SystemDrive%\NisanRuntime\runs\<run-id>` 开 session（本机是 `C:\NisanRuntime`）。repo 只放 code/spec；run、goal、retry、checkpoint、milestone media 和 cache 都不能写进 repo。生成的图必须写进该树的 `address.write_to`，不要另开文件夹。
-
-```powershell
-python scripts/run_m8m.py --mode package --target <skill-or-flow-dir> --codebase <repo> --harness-root C:\NisanRuntime
-```
-
-```powershell
-python scripts/audit_harness.py --target <skill-or-flow-dir>
-python scripts/generate_harness.py --codebase <repo> --from-audit <skill>/planning/flowstep-audit.json
-```
-
-这两条 piecemeal 命令只供审计和修 scaffold；生成的 harness 会保留
-`BUILD_REQUIRED_RUNTIME`，不能执行或安装。必须完成上面的 `run_m8m.py` 五关，才会
-移除 marker、安装 codebase-owned runtime release 和 product skill pointer。
-
-会写出：
-
-- `planning/flowstep-audit.md`
-- `planning/m8m-flowchart.md`：图（护栏）+ FlowStep 表（指引）+ Cycle / Judge / Branch 表
-- `planning/m8m-flowchart.jpg`：人话审计 JPEG（生成时写，改一步就重写）
-- `<run>/work/builder/.../source-bundle.json`：portable source bundle
-- 最终 chosen `installation_receipt`：记录 bundle byte SHA、portable digest、resource root、runtime release 和本机安装清单
-- 返回值 `source_bundle_path`、`source_bundle_resource_root`、`source_bundle_digest`：本机 handoff，非远端 submission
-- validation chosen 之后才复制 `<repo>/flowsteps/flows/<flow_id>/`、不可变 runtime release、工具和本机 product skill target
-
-新 run 会把当前 codebase runtime 写进自己的 `m8m-runtime-lock.json`。旧 run resume
-时只认自己的 pin；即使 Builder 升级或 codebase 的 active release 已更新，也不会要求
-修改产品 workflow。新版 release 并排安装，产品 skill 的 `scripts/m8m_run.py` 只指向
-codebase launcher。显式 overwrite 可把旧 v1 bootstrap 在可恢复安装交易内升级到
-加固后的 v2；v2 不允许原位改写，下一代 bootstrap 必须并排安装。不可变 runtime
-release 不会被改写，旧 run 仍按自己的 run-local pin 执行。
-产品 skill 还会固定 codebase launcher 的精确 SHA-256；任何绕过 Builder 的修改都会在启动前被拒绝。
-两段 launcher 都会在导入非 built-in module 以前用 Python isolated mode 重启，
-所以旁边的产品文件不能 shadow standard library；run implementation lock
-覆盖已绑定工具包的 helper 与本地资源，不只 `tool.py`。每次执行都会重新枚举并
-hash 完整 closure；run-local verification receipt 只能作审计证据，不能跳过检查。
-
-Builder 本身也用同一个 v4 runtime：audit → toolbox → staged generation → validation → local install。所有五关都必须有 chosen manifest；validation chosen 以前不会写 target。`run_flow.py` 负责 schema、judge、chosen output、resume 和 `--replace-milestone`。本项目不部署。
-
-旧 `flowstep_flow_v4` 不再自动 heuristic 转换。先用 `scripts/import_flow_v4.py`
-做 inspect → digest-bound accept → stage → verify，再把通过 equivalence proof 的
-skill-native stage 交给 Builder 3。Importer 只写新 staging folder，不安装、不部署。
-Local install 以 managed-root snapshot + `PREPARED`/`COMMITTED` journal 做原子提升和
-crash recovery，不会逐个 file 暴露半完成 target。
-
-真实样本（一篇文章做成七页 infographic）：[examples/article_infographic/planning/m8m-flowchart.md](examples/article_infographic/planning/m8m-flowchart.md)
-
-### Fresh rerun、resume、修 workflow、十件式 goal
-
-一般调用和明确说 **rerun** 都默认开新 folder、`--cache-mode off`，并写
-`run-context.json`：`context_policy: isolated`、`chat_history_allowed: false`。
-不能把当前 Codex/Claude 对话、上一次 run、或前一件 case 的记忆偷偷当输入。
-runtime 回 `ACTION_REQUIRED` 时，adapter 必须按 `context_capsule_path` 开一个
-fresh no-history worker；它只能读 `allowed_files`、只能写 `write_file`。
-新 run 会在 `m8m_run_context_v2` 冻结 source root、execution root、active run
-和 cache root。request 里的 `file_ref_v2` 会按 SHA-256 验证、去重并只复制一次
-到 `inputs/source-assets`；milestone 只收到 run-local path。ImageGen/provider
-输出必须物理落在 execution volume，不能用指向 D: 的 C: junction。旧 D: run
-只可用 exact `--run-dir` resume，默认 discovery 不扫描、不迁移、不删除。
-
-```powershell
-# fresh（默认）
-python <installed-skill>/scripts/m8m_run.py --harness-root C:\NisanRuntime --request <request.json>
-
-# 同一 run resume
-python <installed-skill>/scripts/m8m_run.py --run-mode resume --run-dir <exact-run>
-
-# 修好 workflow 后，保留 compatible upstream chosen，再从这一关继续
-python <installed-skill>/scripts/m8m_run.py --run-dir <exact-run> --continue-after-edit <milestone>
-```
-
-`resume` 是同一个 run 的 chosen/attempt/roster/asset 复用，不是 cache。
-`--continue-after-edit` 会审计 frozen flow 与 implementation lock，只准选择关卡
-及 downstream 的改动；flow-level、关卡换序、或 preserved port 不相容就要求
-fresh。明确要放弃当前 attempt 才另开，不会暗中清掉旧资产。
-
-十件 interior case 这类 goal 用外层 ledger：
-
-```powershell
-python <installed-skill>/scripts/m8m_run.py --harness-root C:\NisanRuntime --goal <goal.json>
-```
-
-`goal-ledger.json` 只记每 row 的 pending/running/done/blocked；每 row 都在
-`rows/<row>/attempt-NNN/run` 开独立、cache-off、无 chat history 的 child M8M
-session、roster 和 milestone/cycle ledger。修 workflow 后用同一 goal folder 的
-`--continue-after-edit` 继续当前 child；只有 `--abandon-row` 才保留旧 attempt
-并开新 attempt。这样第十件不会继承前九件越来越长的对话。
-
-### Workflow state 不是跨 run cache
-
-`chosen-output.json`、attempt、roster、ledger、branch、wait、resume 和
-replacement 全是一个 session 的 workflow state。跨 run cache 只是可选的
-候选结果优化，短任务默认不开。要用必须两边都同意：milestone 声明
-`cache: {reuse: candidate, ttl_seconds, side_effects: none}`，而新 run 传
-`--cache-mode read|write|read-write`。平台还必须用 tenant ID 传
-`--cache-namespace`。
-
-cache hit 会先复制进新 run，再做 schema 验证并让**现在的 judge**重判；
-不会直接成为 chosen，也不会重放旧 judge receipt。cache 坏掉、过期、
-被拒或写不进去都只当 miss／warning，不能 BLOCK workflow。Resume 已完成
-节点不读 cache；`--replace-milestone` 对整段失效子图绕过 cache read。
-`--cache-mode write` 是明确请求的 cache-refresh run（不读、完成后可写），
-不是一般「rerun」的默认。过期条目只由显式命令清理：
-Generic M8M 不会把 milestone 资产导出回 repo；最终 archive 只能由 product
-runtime 在验证后写入自己的 final-output 位置。
-
-```powershell
-python <installed-skill>/scripts/m8m_run.py cache-prune --harness-root C:\NisanRuntime
-```
-
-## 安装
-
-```bash
-npx skills add dse120071750/m8m-harness-builder
-```
-
-Codex：
-
-```powershell
-git clone https://github.com/dse120071750/m8m-harness-builder.git $env:USERPROFILE\.codex\skills\m8m-harness-builder
-pip install -r $env:USERPROFILE\.codex\skills\m8m-harness-builder\requirements.txt
-```
-
-```bash
-git clone https://github.com/dse120071750/m8m-harness-builder.git ~/.codex/skills/m8m-harness-builder
-pip install -r ~/.codex/skills/m8m-harness-builder/requirements.txt
-```
-
-Claude Code：
-
-```powershell
-git clone https://github.com/dse120071750/m8m-harness-builder.git $env:USERPROFILE\.claude\skills\m8m-harness-builder
-pip install -r $env:USERPROFILE\.claude\skills\m8m-harness-builder\requirements.txt
-```
-
-```bash
-git clone https://github.com/dse120071750/m8m-harness-builder.git ~/.claude/skills/m8m-harness-builder
-pip install -r ~/.claude/skills/m8m-harness-builder/requirements.txt
-```
-
-Repo 里：`<repo>/.agents/skills/m8m-harness-builder/` 或 `<repo>/.claude/skills/m8m-harness-builder/`。
-
-```powershell
-pip install -r requirements.txt
-python -m unittest discover -s tests -v
-```
-
-## 目录
-
-```text
-SKILL.md                         Builder 3 writer 工作方法（authored）
-agents/                          Builder 自己的五关 agents（authored）
-flows/m8m_build_v2.yaml          Builder canonical workflow（authored）
-contracts/                       runtime、source-bundle、stage schemas（authored）
-flowsteps/tools/                 五支可执行 Builder tools（authored）
-scripts/                         compiler、runtime、validation
-templates/                       product skill source templates（authored）
-references/                      Builder 五关 Gems + architecture（authored）
-tests/                           contract、runtime、两次 clean dogfood
-examples/                        generated/reference fixtures
-```
-
-目标 skill 的 `agents/`、`references/` 和所有声明 schema 是 editable source；
-目标 `flow.yaml`、flowchart、staged harness 和 source bundle 都是 generated representation。
-
----
-
-# English
-
-A Codex / Claude skill that splits another skill into milestones, FlowSteps, and tools, then writes one table and one flowchart.
-
-M8M means milestone to milestone. Builder 3.1 compiles `flowstep_flow_v4`:
-FlowSteps generate/refine a candidate, and only a judge PASS commits the
-current result as the milestone's single `chosen-output.json`. This is
-logical session state—not a hash lock, lock ID, or revision system.
-Every active milestone defaults to `loop: none` and completes from actual named
-outputs and schema checks. Hashes, revisions, proof graphs, and automatic image
-reviews are not prerequisites; ordinary file paths need no checksum. Hash/judge
-tools shown below apply only to an explicit request or an existing external API
-contract.
-
-Builder 3.1 is a local, deterministic compiler and packager, not a product
-runtime. A skill-native canvas
-must declare closed workflow request, configuration, and result schemas plus
-exact terminal output bindings in `agents/openai.yaml`. Those authoring-only
-contracts travel in `m8m.workflow_source_bundle.v1`; they are not injected
-into the runtime graph. A successful build returns the local bundle identity
-and installs an immutable, digest-addressed runtime release under the owning
-codebase harness. The product skill points only to that codebase launcher and
-never invokes the mutable Builder installation. The builder does not push or
-deploy.
-
-The release includes byte-locked transitive Python dependencies and runs with
-system site-packages disabled; only the pinned host Python interpreter remains
-external. Repository-local handler imports must be explicitly included in the
-frozen implementation dependency closure, so an undeclared live helper cannot
-drift underneath an existing run.
-
-## The problem
-
-Skills that ship assets (infographics, packages, fetches, renders) keep hitting the same bugs.
-
-1. The model does the whole job. In the session it writes SQL, crop math, Playwright, or a one-off downloader. Work that should be typed becomes a prompt.
-2. Tools live in the skill folder. Scripts sit in `~/.codex/skills` or `~/.claude/skills` instead of the product repo. The next run invents them again.
-3. n8n is too stiff. Each HTTP call and crop is its own canvas node. The checkpoint a person would inspect ("source is bound", "plan is frozen") disappears under action nodes.
-4. The other extreme is a dead pipeline. If a tool fails and the agent cannot recover, or if FlowSteps act like a production guardrail, the run stops for the wrong reason. Inside a checkpoint, the work is still a normal skill.
-
-The problem is not that AI exists. The problem is using the model first, with no check on the thing that must exist, and no preferred repo tool for the thing that should be Python.
-
-## The solution
-
-Keep typed I/O while raising the canvas to milestones. Put FlowSteps inside each one. Each FlowStep prefers one repo tool. The builder should write that tool (fetch a table, call MCP, crop). If the tool is missing or fails, recover the way a normal agent would. Every candidate needs structural admission; only explicitly semantic milestones add a judge before chosen output.
-
-```text
-n8n:   node = one action
-M8M:   node = one milestone (harness)
-       this.in = previous.out
-       FlowSteps = atomic goals inside that node (guide)
-       Tool = the one preferred Python for a FlowStep (optional)
-```
-
-| Word | Compulsory? | Meaning |
-| --- | --- | --- |
-| Milestone | Yes. This is the harness. | A checkpoint with `success`, an output schema, and named output ports. Admission, plus an optional authored judge, commits the current candidate as the one chosen bundle. No chosen manifest means BLOCKED. |
-| FlowStep | Guide | An atomic goal inside a milestone (bind five images, fetch a record). Prefers one tool. Follow the table order. How you get there is a normal skill. |
-| Tool | Preferred, optional | Python at `<repo>/flowsteps/tools/<id>/`. The builder should write it: existing, promote from a skill script, or generate new. An unfinished generated tool is `BUILD_REQUIRED/non_runnable` and cannot pass validation or installation. |
-
-The skill does this:
-
-```text
-identify milestones
-  → list FlowSteps inside each (atomic; prefer ONE tool)
-  → develop that tool (existing / promote / generate-new)
-  → write one FlowStep table + one milestone flowchart
-     (markdown + humanized JPEG; cycle / judge / branch)
-  → compile canonical JSON, review-only flow.yaml, and a source bundle
-```
-
-`$m8m-harness-builder` writes that split. A name like `crop_*` is not a reason to refuse the chart. A stub may be kept as a repairable `BUILD_REQUIRED` sketch, but it is not runnable or installable. The milestone output schema is not a sketch.
-
-## Chart: milestone to milestone, and what is inside one
-
-The canvas is only milestones. Workflow JSON displays declared output ports. FlowSteps produce a current candidate; structural admission always runs, and an authored semantic judge runs only for `loop: judge`. PASS commits `chosen-output.json`, and only that manifest is visible downstream. No manifest → BLOCK.
-
-**Inside** a milestone are N FlowSteps plus an **optional judge**. The runtime derives a typed expectation from `success + output_contract + output_schema + outputs` and admits the candidate first. `loop:none` commits with zero judge calls. `loop:judge` sends the separate judge a closed request; `RETRY` keeps work inside the node and `PASS` commits. The Gem is the complete milestone master prompt, read in full before execution. Optional FlowStep notes support it.
-
-![M8M demo: top is the milestone canvas; bottom opens source_ready with N FlowSteps, then a judge that evaluates the derived expectation and either issues a pass receipt or tells the session to keep working](docs/m8m-chart.jpg)
-
-Generate writes `planning/m8m-flowchart.md` and `planning/m8m-flowchart.jpg`. Every step edit during development (`write` / `mark`) rewrites both. The JPEG is the audit copy: portable, easy to review, no mermaid. Labels come from the humanizer (`source_ready` → Source is ready).
-
-How a run proceeds:
-
-```text
-request
-  → source_ready     must choose its named file output
-      inside: FlowStep fetch_record → tool fetch_record
-              FlowStep hash_bind    → tool hash_bind
-              then the judge reads the runtime-derived typed expectation
-              PASS → chosen-output.json → next. RETRY → keep working.
-  → plan_frozen      must produce a json plan
-  → release_packaged must produce a file package
-```
-
-| Kind | Chosen bundle member |
-| --- | --- |
-| `file` | copied to `out/members/<id>/asset.<ext>` |
-| `image` / `video` / `audio` | copied media bytes, available for canvas preview |
-| `json` / `data` | JSON asset validated by the milestone output schema |
-
-## Table (guide)
-
-`planning/m8m-flowchart.md` has the FlowStep table. That is the order **inside** a checkpoint, not a second canvas.
-
-| Milestone | # | FlowStep (inside the milestone) | Preferred tool |
-| --- | ---: | --- | --- |
-| `source_ready` | 1 | `fetch_record` | `fetch_record` |
-| `source_ready` | 2 | `hash_bind` | `hash_bind` |
-| `plan_frozen` | 1 | `compact_plan` | `compact_editorial_config` |
-| `release_packaged` | 1 | `materialize_package` | `materialize_package` |
-
-The origin table says where the Python comes from: existing toolbox, promote a skill script into the repo, or generate-new. An unfinished stub counts only as a `BUILD_REQUIRED` finding.
-
-| Milestone | Asset | Existing toolbox | Promote from a skill script | Generate new |
-| --- | --- | --- | --- | --- |
-| `source_ready` | `file` | `hash_bind` | `fetch_record` ← `scripts/fetch_record.py` | — |
-| `plan_frozen` | `json` | — | — | `compact_editorial_config` |
-| `release_packaged` | `file` | — | `materialize_package` ← `scripts/package.py` | — |
-
-A real run on a seven-page article infographic is in [examples/article_infographic/planning/m8m-flowchart.md](examples/article_infographic/planning/m8m-flowchart.md).
-
-## cycle / judge / branch
-
-n8n’s canvas is actions. M8M’s canvas is checkpoints. Labels come from the humanizer (`source_ready` → Source is ready). Do not call the three rows below FOR / IF.
-
-This repository implements local, auditable M8M authoring, compilation, and workflow-state contracts. A node is a checkpoint, not one HTTP call: Source is ready must produce a file, and Card is aligned retries until judge PASS. Server-side Codex SDK integration, tenant binding, scheduling, and remote execution are platform work outside Builder 3's current capabilities and guarantees.
-
-| n8n | M8M |
-| --- | --- |
-| Node = one HTTP call / one crop | Node = one milestone. Actions sit **inside** it (FlowStep + tool) |
-| Retry the same node | **judge**: only explicit `loop: judge` milestones retry. The worker returns exactly `{decision,reasons,blockers}`; the runtime persists `m8m.milestone_judge_receipt.v1`. |
-| IF / Switch node | **branch**: pick a path **after this milestone**. AI drafts; the tool writes `{ok, branch}`. The other path is skipped |
-| Loop Over Items / Split in Batches | **cycle**: freeze a ledger, then **wrap a stretch of milestones**. Each round AI drafts pass/fail; the tool updates the ledger. Pass preserves; fail purges residue so you can resume |
-
-Every milestone starts with a complete master-prompt Gem: role, goal, bound inputs and reference roles, instructions, constraints, and exact output. The Gem is not a canvas node. The judge is not a second box, and Builder never infers one from a name or intelligence mode. Deterministic boxes use admission only; explicitly semantic boxes use `loop: judge` plus a named `<id>_judge`. Cycle and branch keep their own control receipts.
-
-Every milestone has at least one required business output. Its local candidate binding is exactly `handler.<flow_id>.<milestone_id>@3.1.0`; the implementation fingerprint separately freezes the handler path and bytes, so an arbitrary ref cannot relabel the same behavior. Authored AI milestones also close the exact executor profile, Gem, schemas, tools, capabilities, token budgets, and timeouts; semantic judge milestones additionally close an independent judge profile. Missing execution terms are `BUILD_REQUIRED`; Builder 3.1 never infers a runnable server profile from chat or `intelligence`. Strict judges declare `judge_abi: m8m_milestone_judge_v1`, so the worker evaluates the current candidate separately from its producer. Audit heuristics remain review proposals only: inferred expectation or judge authority cannot emit canonical `flow.yaml`, install a skill, or execute.
-
-The candidate executor must not set `decision` / `branch` / `cycle`. A semantic PASS or a dedicated control receipt cannot waive missing required outputs or a missing chosen manifest.
-
-### wait — Response is ready
-
-Wait-for-response is **one milestone**, not an n8n Wait node, and not `loop: wait`. Inside it is still N FlowSteps plus an optional authored judge. The session freezes a **roster** at start (`<run>/roster.json`, `m8m_run_roster_v1`) with one row per canvas milestone, and updates it as each box finishes. No draft yet → that row becomes `waiting`, the run `paused`, and the session **exits**. After the reply is in `milestones/response_ready/work/draft.json`, the skill finds that roster and resumes. FlowSteps use the Gem; the judge reads only the derived expectation, resolved inputs, and admitted candidate, then returns PASS, RETRY, or BLOCKED. A path because of what they said is **branch after** this box. Do not draw a `roster_frozen` milestone. Roster is not the cycle ledger at `cycles/<id>/ledger.json`.
-
-```text
-ask is written  →  Response is ready (judge: pause / keep working / pass)  →  next
-```
-
-```yaml
-- id: response_ready
-  success: "A reply is present and consumable downstream."
-  output_contract: response_ready_v1
-  output_schema: milestones/response_ready/output.schema.json
-  outputs:
-    - { id: reply, name: Reply, kind: json, cardinality: one, required: true }
-  gem: references/response_ready.md
-  intelligence: completion
-  loop: judge
-  worker: response_ready_judge@3.1.0
-```
-
-| Book | File | Job |
-| --- | --- | --- |
-| Roster | `<run>/roster.json` | Frozen when the session starts. Each milestone row is `done` / `waiting` / `skipped`. Wait sets `paused` and exits. Find this file to resume after feedback. |
-| Ledger | `cycles/<id>/ledger.json` | Rows inside one wrap. Pass keeps `items/NNN`. Fail purges residue. |
-
-### judge — Card is aligned
-
-Image generation does not automatically imply a judge. When **Card is aligned** has an authored semantic judge, stay on it until that judge returns PASS; otherwise structural admission commits its declared output.
-
-```text
-Source is ready  →  Card is aligned (judge until PASS)  →  Release is packaged
-```
-
-```yaml
-- id: card_aligned
-  gem: references/card_aligned.md
-  loop: judge
-  worker: card_aligned_judge@3.1.0
-  intelligence: image
-  flowsteps:
-    - { id: align_compare, tool: align_compare }
-    - { id: draw_red_circles, tool: draw_red_circles }
-    - { id: align_edit, tool: align_edit }
-    - { id: hash_bind, tool: hash_bind }
-```
-
-### branch — Intake is ready
-
-After the intake chosen bundle is committed, AI drafts which generation path to take. Do not call this IF.
-
-```text
-Intake is ready
-  ├─ branch=direct (default, case_type is not source_case)
-  │     floorplan source case skipped: true
-  │     → Restyle direct → Restyle is ready
-  └─ branch=floorplan source case
-        source record + floor plan required, freeze the title
-        → Floorplan source is ready → Source title is frozen → Restyle is ready
-```
-
-```yaml
-- id: intake_ready
-  intelligence: completion
-  branch:
-    worker: branch_receipt
-    default: direct
-    paths:
-      - { id: direct, then: restyle_direct }
-      - { id: floorplan_source_case, then: floorplan_source_ready }
-    join: restyle_ready
-```
-
-### cycle — Pages ledger is frozen
-
-Freeze the ledger first, then wrap. Do not call this FOR. `remaining == 0` is data, not the gate.
-
-```text
-Pages ledger is frozen
-  → [cycle pages]
-        Page is bound
-        Page is rendered     ← milestone judge PASS, then commit chosen output
-            pass → keep items/001, mark the ledger row done
-            fail → purge this round’s out/, row stays unfinished, can redo
-  → Release is packaged
-```
-
-```yaml
-- id: pages_ledger_frozen
-  success: "The page ledger is frozen."
-  output_contract: pages_ledger_v1
-  output_schema: milestones/pages_ledger_frozen/output.schema.json
-  outputs:
-    - { id: ledger, name: Page ledger, kind: json, cardinality: one, required: true }
-- id: page_bound
-  on_cycle: pages
-- id: page_rendered
-  on_cycle: pages
-  cycle:
-    worker: cycle_receipt
-    ledger: pages_ledger_frozen
-    start: page_bound
-    join: release_packaged
-    pass: "this row is done: page image is a chosen output member"
-```
-
-A name like `crop_4x5` on `--milestone` is a note that it looks like a tool. It is not a refusal to draw.
-
-Tools belong in `<repo>/flowsteps/tools/`, not in `~/.codex/skills` or `~/.claude/skills`. Authors write teaching contracts at `<skill>/references/<milestone>.md`; after validation, Builder compiles hash-bound copies into `<repo>/flowsteps/flows/<id>/references/`.
-
-## Run
-
-Works in Codex (`$m8m-harness-builder`) and Claude Code. If you omit `--run-dir`, the Windows driver opens `%SystemDrive%\NisanRuntime\runs\<run-id>` (`C:\NisanRuntime` on this host). The repo stores code/specifications only; runs, goals, retries, checkpoints, milestone media, and cache must stay outside it. Generated images must be written to `address.write_to` in the execution tree.
-
-```powershell
-python scripts/run_m8m.py --mode package --target <skill-or-flow-dir> --codebase <repo> --harness-root C:\NisanRuntime
-```
-
-```powershell
-python scripts/audit_harness.py --target <skill-or-flow-dir>
-python scripts/generate_harness.py --codebase <repo> --from-audit <skill>/planning/flowstep-audit.json
-```
-
-Those piecemeal commands are audit/scaffold repair tools only. Their harness
-keeps `BUILD_REQUIRED_RUNTIME` and cannot execute or install. Complete the
-five-stage `run_m8m.py` workflow to remove the marker and install the
-codebase-owned runtime release plus product-skill pointer.
-
-This writes:
-
-- `planning/flowstep-audit.md`
-- `planning/m8m-flowchart.md`: chart (harness), FlowStep table (guide), Cycle / Judge / Branch tables
-- `planning/m8m-flowchart.jpg`: humanized audit JPEG (written on generate, rewritten on every step edit)
-- `<run>/work/builder/.../source-bundle.json`: the portable source bundle
-- final chosen `installation_receipt`: bundle byte SHA, portable digest, resource root, runtime release, and local install manifest
-- returned `source_bundle_path`, `source_bundle_resource_root`, and `source_bundle_digest`: a local handoff, not a remote submission
-- `<repo>/flowsteps/flows/<flow_id>/`, immutable runtime release, tools, and the local product-skill target only after validation is chosen
-
-Each fresh run pins the selected codebase runtime in
-`m8m-runtime-lock.json`. Resume loads that exact release even after a later
-Builder build changes the active release. Releases install side by side, and
-the product skill's `scripts/m8m_run.py` remains only a pointer to the
-codebase-owned launcher. With explicit overwrite, an old v1 bootstrap upgrades
-transactionally to hardened v2. V2 is immutable in place; future bootstraps must
-install side by side. Runtime releases are never rewritten, and existing runs
-continue through their run-local release pin.
-The product pointer also pins the exact dispatcher SHA-256 and refuses to launch
-after any out-of-band dispatcher mutation.
-
-The release also locks the Python ABI and exact runtime dependency versions.
-Both bootstrap hops re-exec in Python isolated mode before importing non-builtin
-modules, so sibling product files cannot shadow the standard library ahead of
-verification. The dispatcher then launches an isolated process and adds only
-the already-verified release scripts directory, preventing live Builder modules,
-`PYTHONPATH`, or another release from leaking through `sys.modules`.
-Run implementation locks cover each bound tool package's helpers and local
-resources, not only `tool.py`. Every execution boundary rediscovers and hashes
-that closure; run-local verification receipts never bypass the live-code check.
-Python itself is a locked host prerequisite rather than a vendored interpreter;
-host ABI drift fails before milestone work.
-
-The builder dogfoods the same v4 runtime: audit → toolbox → staged generation → validation → local installation. All five milestones require chosen manifests, and the target is untouched until validation is chosen. `run_flow.py` owns schema checks, judge loops, chosen output, resume, and `--replace-milestone`. Nothing here deploys the result.
-
-Legacy `flowstep_flow_v4` is never converted heuristically. Run
-`scripts/import_flow_v4.py` through inspect → digest-bound accept → stage →
-verify, then give the equivalence-proven skill-native stage to Builder 3. The
-importer only creates a new staging folder; it never installs or deploys.
-Local installation promotes verified managed-root snapshots through a
-`PREPARED`/`COMMITTED` journal, so a crash cannot expose a file-by-file partial
-target.
-
-### Fresh rerun, resume, workflow repair, and repeated goals
-
-An ordinary invocation and an explicit **rerun** create a new folder with
-cache mode `off`. `run-context.json` freezes `context_policy: isolated` and
-`chat_history_allowed: false`. Current Codex/Claude chat, another run, and a
-previous case are not implicit inputs. When the runtime returns
-`ACTION_REQUIRED`, the adapter must launch a fresh no-history worker from
-`context_capsule_path`; it may read only `allowed_files` and write only
-`write_file`.
-Each new `m8m_run_context_v2` freezes the source root, execution root, active
-run directory, and cache root. Request `file_ref_v2` bytes are SHA-256
-verified, deduplicated, and copied once into `inputs/source-assets`; milestones
-receive only run-local paths. Image provider output must physically live on
-the execution volume, not behind a C: junction to D:. Legacy D: runs are
-supported only by exact `--run-dir`; default discovery never scans, migrates,
-or deletes them.
-
-```powershell
-# fresh (default)
-python <installed-skill>/scripts/m8m_run.py --harness-root C:\NisanRuntime --request <request.json>
-
-# same-run resume
-python <installed-skill>/scripts/m8m_run.py --run-mode resume --run-dir <exact-run>
-
-# adopt a workflow fix, preserve compatible upstream chosen state, rerun downstream
-python <installed-skill>/scripts/m8m_run.py --run-dir <exact-run> --continue-after-edit <milestone>
-```
-
-Resume reuses one run's chosen outputs, attempts, roster, and generated
-assets; it is not cache. Continue-after-edit audits the frozen flow and
-implementation lock and only accepts changes owned by the selected milestone
-or its downstream graph. Flow-level changes, milestone reordering, or
-incompatible preserved ports require a fresh run.
-
-Use the outer goal ledger for ten-case work:
-
-```powershell
-python <installed-skill>/scripts/m8m_run.py --harness-root C:\NisanRuntime --goal <goal.json>
-```
-
-`goal-ledger.json` tracks row status, while every row receives a distinct
-cache-off, no-history child session, roster, and milestone/cycle ledger at
-`rows/<row>/attempt-NNN/run`. After repairing a workflow, continue the current
-child with `--continue-after-edit`. Only `--abandon-row` retains that attempt
-and creates a fresh one. Later cases therefore cannot drift through an
-accumulating multi-case chat.
-
-### Workflow state is not cross-run cache
-
-`chosen-output.json`, attempts, roster, ledger, branch, wait, resume, and
-replacement are state of one session. Cross-run cache is only an optional
-candidate optimization and short tasks stay uncached. It requires both a
-milestone declaration (`reuse: candidate`, positive TTL, `side_effects:
-none`) and an enabled run mode. Platform runs must partition it with the
-tenant ID in `--cache-namespace`.
-
-A hit is copied into the new run, schema-validated, and judged by the
-current judge. It is never directly chosen and never replays an old judge
-receipt. Expired, corrupt, rejected, missing, or unwritable cache becomes a
-miss/warning, not BLOCKED. Resume does not consult cache for completed
-milestones; replacement bypasses reads for its invalidated subgraph. Write
-mode is an explicitly requested cache-refresh run that skips reads; it is not
-the default meaning of “rerun.”
-Generic M8M never exports milestone assets back into the repo. A product
-runtime remains the sole authority for its verified final archive delivery.
-
-```powershell
-python <installed-skill>/scripts/m8m_run.py ... --cache-mode read-write --cache-namespace <tenant-or-local>
-python <installed-skill>/scripts/m8m_run.py cache-prune --harness-root C:\NisanRuntime
-```
-
-## Install
-
-```bash
-npx skills add dse120071750/m8m-harness-builder
-```
-
-Codex:
-
-```powershell
-git clone https://github.com/dse120071750/m8m-harness-builder.git $env:USERPROFILE\.codex\skills\m8m-harness-builder
-pip install -r $env:USERPROFILE\.codex\skills\m8m-harness-builder\requirements.txt
-```
-
-```bash
-git clone https://github.com/dse120071750/m8m-harness-builder.git ~/.codex/skills/m8m-harness-builder
-pip install -r ~/.codex/skills/m8m-harness-builder/requirements.txt
-```
-
-Claude Code:
-
-```powershell
-git clone https://github.com/dse120071750/m8m-harness-builder.git $env:USERPROFILE\.claude\skills\m8m-harness-builder
-pip install -r $env:USERPROFILE\.claude\skills\m8m-harness-builder\requirements.txt
-```
-
-```bash
-git clone https://github.com/dse120071750/m8m-harness-builder.git ~/.claude/skills/m8m-harness-builder
-pip install -r ~/.claude/skills/m8m-harness-builder/requirements.txt
-```
-
-Repo-local: `<repo>/.agents/skills/m8m-harness-builder/` or `<repo>/.claude/skills/m8m-harness-builder/`.
-
-```powershell
-pip install -r requirements.txt
-python -m unittest discover -s tests -v
-```
-
-## Layout
-
-```text
-SKILL.md                         Builder 3 writer method (authored)
-agents/                          Builder's five milestone agents (authored)
-flows/m8m_build_v2.yaml          Builder canonical workflow (authored)
-contracts/                       runtime, source-bundle, and stage schemas (authored)
-flowsteps/tools/                 five executable Builder tools (authored)
-scripts/                         compiler, runtime, and validation
-templates/                       product-skill source templates (authored)
-references/                      five Builder Gems and architecture (authored)
-tests/                           contract, runtime, and two-clean-run dogfood coverage
-examples/                        generated/reference fixtures
-```
-
-For a target skill, `agents/`, `references/`, and every declared schema are
-editable source. Its `flow.yaml`, flowchart, staged harness, and source bundle
-are generated representations.
+License / 授權：[MIT](LICENSE)
