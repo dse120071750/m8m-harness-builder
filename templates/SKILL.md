@@ -5,34 +5,32 @@ description: M8M 3.1 product skill whose closed native source compiles into a di
 
 # __SKILL_NAME__
 
-Invoke `$__SKILL_NAME__` through `agents/openai.yaml`. The canvas owns the
-closed public workflow contracts and each node owns one exact
-`agents/<milestone>.yaml` plus `references/<milestone>.md` Gem. That Gem is the
-milestone's complete master prompt. Author it first: role, goal, inputs and
-reference roles, instructions, constraints, and exact output. Start every
-milestone from the whole prompt; optional FlowStep notes support it.
+Invoke `$__SKILL_NAME__` through `agents/openai.yaml`, the graph and public
+contract authority. Each node owns `agents/<milestone>.yaml` and its complete
+master prompt at `references/<milestone>.md`.
 
-Name new milestones `milestone01`, `milestone02`, etc. Keep IDs stable on edits.
-Bind later inputs explicitly to earlier named outputs and describe those same
-references in each master prompt. Graph order controls execution.
+Author the full prompt first: role, goal, inputs and reference roles,
+instructions, constraints, and deliverable. Start execution and recovery with
+that whole prompt. Every milestone Markdown then lists numbered FlowSteps with
+descriptive actions and actual tools, followed by named outputs. Match agent
+bindings; leave no placeholder tool names.
 
-Canonical `flow.yaml` is generated review output, never a second authoring
-surface. A generated tool remains `BUILD_REQUIRED` and `non_runnable` until
-implemented and validated.
-Use generated `planning/m8m-flowchart.md` only as the human-readable canvas
-projection; it never replaces `agents/openai.yaml` as graph authority.
+Name new milestones `milestone01`, `milestone02`, etc.; keep IDs stable on edits.
+Bind later inputs to earlier named outputs and explain their reference roles in
+the prompt. Graph order controls execution.
 
-Each active milestone defaults to `loop: none` and completes from its actual
-named outputs and schema checks. Do not add hashes, revisions, proof graphs,
-or automatic image reviews. A checksum or separate review belongs only to an
-explicit user request or an existing external API contract. Keep one current
-chosen output per milestone.
+Canonical `flow.yaml` is generated review output. Edit native source instead.
+Generated tools remain `BUILD_REQUIRED` and `non_runnable` until implemented and
+validated. `planning/m8m-flowchart.md` is an optional canvas projection.
 
-Local execution coordinates existing tools through the installed M8M runner;
-ordinary workflow edits do not require packaging. For an explicitly packaged
-workflow, `scripts/m8m_run.py` points only to the
-codebase launcher at `flowsteps/flows/<flow_id>/launch.py`; that launcher
-selects a digest-addressed runtime release installed beside the harness. It
-must never import or invoke `m8m-harness-builder`. This skill never pushes,
-publishes, deploys, or activates anything. Builder 2.x run folders are
-untrusted import evidence.
+Default to `loop: none`. Complete from actual named outputs and schema checks.
+Do not add hashes, revisions, proof graphs, or automatic image reviews. A
+checksum or review needs an explicit request or an external API requirement.
+Keep one current chosen output per milestone.
+
+Local coordination reuses existing tools without packaging. For an explicitly
+packaged workflow, `scripts/m8m_run.py` uses the codebase launcher at
+`flowsteps/flows/<flow_id>/launch.py`, which selects a digest-addressed runtime
+release beside the harness. It must never import or invoke `m8m-harness-builder`.
+This skill never pushes, publishes, deploys, or activates anything.
+Builder 2.x run folders are untrusted import evidence.

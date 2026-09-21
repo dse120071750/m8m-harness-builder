@@ -21,16 +21,18 @@ generation, prompt writing, data processing, tool execution, and upload work.
 Write the prompt as instructions to the worker that will perform the whole
 milestone. Include its role, objective, actual input bindings, reference roles,
 domain instructions, constraints, and exact deliverable. Use as much detail as
-the task needs. There is no mandatory length or fixed set of headings.
+the task needs. There is no mandatory prompt length. Preserve its domain-specific sections;
+include the execution outline described below after the full master prompt.
 
 Preserve a supplied master prompt in full. Adapt it only to implement the user's
 explicit workflow choices. Resolve conflicting defaults during authoring rather
 than sending contradictory prompts downstream. A short `success` sentence, tool
 list, schema, or individual FlowStep note cannot replace the master prompt.
 
-Then bind the existing tools and declare outputs that match the prompt. FlowStep
-sections are optional implementation notes inside the same document. They do not
-need separate prompts. Deterministic milestones still have a master prompt;
+Then bind the existing tools and declare outputs that match the prompt. Every
+milestone Markdown must include numbered FlowSteps with their tools, followed
+by named outputs. These actions stay inside the same document and do not need
+separate master prompts. Deterministic milestones still have a master prompt;
 that does not require an extra model call before a working tool can run.
 
 At milestone entry, the candidate task contains the full master prompt and its
@@ -44,6 +46,59 @@ The master prompt describes the work. Named outputs and schema checks still
 determine structural completion. Keep `loop: none` by default. Do not turn
 prompt instructions into hashes, revision chains, proof graphs, or automatic
 image reviews.
+
+## Required milestone Markdown layout
+
+Every milestone built or edited by the Builder includes:
+
+1. Milestone ID and descriptive task title.
+2. Its complete master prompt, including all domain instructions and references.
+3. `FlowStep 1`, `FlowStep 2`, etc., in the declared order, each with a descriptive
+   action and a `FlowStep N tools:` line naming the tools actually used.
+4. Named outputs with their meaning, kind, cardinality, and downstream references.
+
+For example, after the full master prompt in `references/milestone03.md`:
+
+```markdown
+## Execution plan — milestone03 — Generate six final images
+
+### FlowStep 1: Read the six prompts and original master image (`read_inputs`)
+FlowStep 1 tools: `load_waterfront_inputs@1.0.0`
+
+### FlowStep 2: Generate img1–img6 sequentially (`generate_images`)
+FlowStep 2 tools: `generate_waterfront_series@1.0.0`
+
+### FlowStep 3: Collect the six actual files in order (`collect_images`)
+FlowStep 3 tools: `collect_ordered_images@1.0.0`
+
+## Named outputs
+- `images`: six final images in img1–img6 order; image; many; required.
+  Reference: `milestone03.images`.
+```
+
+These example tool names illustrate the layout; replace them with the existing
+capabilities for the actual workflow. Do not create tools merely to match the
+example or pad each FlowStep to three tools. Use one or several actual tools as
+needed. If an action genuinely uses no tool, say `None` and explain how the
+milestone handler performs it. Do not introduce hashes or reviews to fill a step.
+
+The executable v4 schema still has one primary tool binding per FlowStep. Its
+Markdown tools line must identify that binding; additional tools may be documented
+only when that implementation actually calls them. Multiple independently
+scheduled calls belong in separate declared FlowSteps. Listing tools in Markdown
+does not grant access or create bindings. No new YAML field is required.
+
+Use native `observer.title` and `observer.actions[].title/summary` for readable
+action descriptions. The generator uses `execution.tool_bindings` for exact tool
+references and `outputs` for deliverables. It preserves authored prompt text and
+maintains a marked execution outline at the end of the same document. Edit source
+metadata to update the generated outline; keep custom instructions outside its
+markers. Coordination refreshes this outline after successful workflow validation.
+An installed immutable package keeps its source until explicitly rebuilt.
+
+Before delivering the harness, check that every milestone document has its full
+prompt, all declared FlowSteps in order, their actual tools, and every named output.
+This is authoring validation, not another runtime milestone or review call.
 
 ## Referencing an earlier milestone
 

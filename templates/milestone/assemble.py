@@ -1,4 +1,4 @@
-"""Assemble milestone __STEP_ID__. Prefer each FlowStep's one tool, in table order."""
+"""Assemble milestone __STEP_ID__. Prefer each FlowStep's one tool, in the declared order."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from flowstep_tools import run_library_tool
+from gem_text import read_gem_section
 
 STEP_ID = "__STEP_ID__"
 M8M_BUILD_STATUS = "BUILD_REQUIRED"
@@ -58,33 +59,7 @@ def _first_path(value: Any) -> str | None:
 
 
 def _gem_section(flowstep: str) -> str:
-    path = Path(GEM_PATH)
-    fid = str(flowstep or "").strip().lower().replace("-", "_")
-    if not fid or not path.is_file():
-        return ""
-    try:
-        text = path.read_text(encoding="utf-8")
-    except OSError:
-        return ""
-    current = ""
-    chunks: list[str] = []
-    found: str = ""
-    for line in text.splitlines():
-        stripped = line.strip()
-        if stripped.startswith("#"):
-            if current == fid and chunks:
-                found = "\n".join(chunks).strip()
-                break
-            title = stripped.lstrip("#").strip().strip("`").strip()
-            token = title.split()[0].strip("`").lower().replace("-", "_") if title else ""
-            current = token
-            chunks = []
-            continue
-        if current:
-            chunks.append(line)
-    if not found and current == fid:
-        found = "\n".join(chunks).strip()
-    return found
+    return read_gem_section(Path(GEM_PATH), flowstep)
 
 
 def _need_model(flowstep: str, tool_id: str, error: str) -> dict[str, Any]:

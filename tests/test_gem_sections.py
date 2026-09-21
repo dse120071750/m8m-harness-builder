@@ -48,9 +48,10 @@ class GemTextTests(unittest.TestCase):
                 {"id": "hash_bind", "tool": "hash_bind"},
             ]
         )
-        self.assertIn("## `align_compare`", body)
-        self.assertIn("## `hash_bind`", body)
-        self.assertIn("not a canvas node", body)
+        self.assertIn("### FlowStep 1: Align compare (`align_compare`)", body)
+        self.assertIn("### FlowStep 2: Hash bind (`hash_bind`)", body)
+        self.assertIn("FlowStep 1 tools: `align_compare`", read_gem_section(body, "align_compare"))
+        self.assertIn("FlowStep 2 tools: `hash_bind`", read_gem_section(body, "hash_bind"))
 
 
 class GemWriteTests(unittest.TestCase):
@@ -132,14 +133,14 @@ class GemWriteTests(unittest.TestCase):
             gem = (harness / "references" / "card_aligned.md").read_text(encoding="utf-8")
             self.assertNotIn("Rule of success", gem)
             self.assertIn("machine completion", gem)
-            self.assertIn("## Tool versus intelligence", gem)
+            self.assertIn("### Tool versus intelligence", gem)
             self.assertIn("deterministic tool work", gem)
-            self.assertIn("not shell-heavy", gem)
+            self.assertIn("Reuse existing functions, scripts, CLIs, or APIs", gem)
             self.assertNotIn("__CLASSIFICATION__", gem)
-            self.assertIn("## `align_compare`", gem)
-            self.assertIn("## `draw_red_circles`", gem)
-            self.assertIn("## `align_edit`", gem)
-            self.assertIn("## `hash_bind`", gem)
+            self.assertIn("FlowStep 1 tools: `align_compare@1.0.0`", read_gem_section(gem, "align_compare"))
+            self.assertIn("FlowStep 2 tools: `draw_red_circles@1.0.0`", read_gem_section(gem, "draw_red_circles"))
+            self.assertIn("FlowStep 3 tools: `align_edit@1.0.0`", read_gem_section(gem, "align_edit"))
+            self.assertIn("FlowStep 4 tools: `hash_bind@1.0.0`", read_gem_section(gem, "hash_bind"))
             chart = (harness / "planning" / "m8m-flowchart.md").read_text(encoding="utf-8")
             self.assertIn("Milestone master prompt", chart)
             self.assertIn("references/card_aligned.md", chart)
@@ -156,7 +157,7 @@ class GemWriteTests(unittest.TestCase):
                 tools=["hash_bind"], milestone_specs=[spec],
             )
             source_root = Path(authored["harness_dir"])
-            self.assertEqual((source_root / "references/source_ready.md").read_text(encoding="utf-8"), prompt)
+            self.assertTrue((source_root / "references/source_ready.md").read_text(encoding="utf-8").startswith(prompt))
             self.assertNotIn("master_prompt:", (source_root / "flow.yaml").read_text(encoding="utf-8"))
 
     def test_need_model_loads_gem_section(self) -> None:

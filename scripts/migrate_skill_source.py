@@ -914,6 +914,9 @@ def write_migrated_skill_source(
             {
                 "id": milestone_id,
                 "success": success,
+                "output_contract": agent["output_contract"],
+                "execution": agent["execution"],
+                "observer": agent["observer"],
                 "outputs": outputs,
                 "flowsteps": flowsteps,
                 "tools": tool_ids,

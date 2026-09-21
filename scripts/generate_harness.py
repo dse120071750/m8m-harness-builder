@@ -910,7 +910,8 @@ def generate_v4_flow(
                 created.append(str(receipt_path))
         previous_id = mid
     gem_items = [
-        {**item, "master_prompt": spec_by_id.get(item["id"], {}).get("master_prompt")}
+        {**item, "master_prompt": spec_by_id.get(item["id"], {}).get("master_prompt"),
+         "observer": spec_by_id.get(item["id"], {}).get("observer") or {}}
         for item in public_items
     ]
     gems = write_milestone_gems(harness, gem_items, overwrite=overwrite)

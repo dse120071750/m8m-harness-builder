@@ -1,8 +1,9 @@
-"""A Gem is the complete milestone master prompt; FlowStep notes are optional."""
+"""A Gem contains the full master prompt, numbered FlowSteps, and named outputs."""
 
 from __future__ import annotations
 
 from pathlib import Path
+import re
 from typing import Any
 
 
@@ -20,6 +21,9 @@ def heading_id(line: str) -> str | None:
     title = text.lstrip("#").strip().strip("`").strip()
     if not title:
         return None
+    numbered = re.match(r"FlowStep \d+: .*\(`([a-z][a-z0-9_]*)`\)$", title)
+    if numbered:
+        return numbered.group(1)
     token = title.split()[0].strip("`").strip()
     return token.lower().replace("-", "_") if token else None
 
@@ -70,7 +74,15 @@ def read_gem_section(source: str | Path, flowstep_id: str) -> str:
     return ""
 
 
-def render_flowstep_gem_sections(flowsteps: list[dict[str, Any]] | None) -> str:
+def render_flowstep_gem_sections(
+    flowsteps: list[dict[str, Any]] | None,
+    *,
+    actions: list[dict[str, Any]] | None = None,
+    bindings: list[dict[str, Any]] | None = None,
+) -> str:
+    """Project actual step order and tool bindings; never invent tool names."""
+    descriptions = {row["flowstep_id"]: row for row in actions or []}
+    refs = {row["tool"]: row["ref"] for row in bindings or []}
     rows: list[str] = []
     for item in flowsteps or []:
         if not isinstance(item, dict):
@@ -78,16 +90,57 @@ def render_flowstep_gem_sections(flowsteps: list[dict[str, Any]] | None) -> str:
         fid = str(item.get("id") or item.get("tool") or "").strip()
         if not fid:
             continue
-        tool = str(item.get("tool") or "—").strip() or "—"
+        number = len(rows) + 1
+        action = descriptions.get(fid, {})
+        title = action.get("title") or fid.replace("_", " ").capitalize()
+        tool = refs.get(fid) or item.get("tool")
+        tool_text = f"`{tool}`" if tool else "None — performed by the milestone handler."
         rows.append(
-            f"## `{fid}`\n\n"
-            f"Preferred tool: `{tool}`.\n\n"
-            "This optional implementation note supports the complete milestone master prompt. "
-            "Read the master prompt first; this note never replaces it. It is not a canvas node. "
-            "The model may not set `ok`.\n"
+            f"### FlowStep {number}: {title} (`{fid}`)\n\n"
+            f"FlowStep {number} tools: {tool_text}\n\n"
+            + (f"{action['summary']}\n" if action.get("summary") else "")
         )
     if not rows:
-        return (
-            "Follow the milestone master prompt using the declared tools.\n"
-        )
+        return "No FlowSteps declared. Define the internal actions before building this milestone.\n"
     return "\n".join(rows)
+
+
+OUTLINE_START = "<!-- m8m:execution-plan:start -->"
+OUTLINE_END = "<!-- m8m:execution-plan:end -->"
+
+
+def with_milestone_outline(prompt: str, milestone: dict[str, Any]) -> str:
+    """Refresh only the generated outline, keeping all authored prompt text intact."""
+    from flowstep_runtime import FlowError, normalize_flowsteps
+
+    flowsteps, _ = normalize_flowsteps(
+        flowsteps=milestone.get("flowsteps"), tools=milestone.get("tools"),
+    )
+    observer = milestone.get("observer") or {}
+    steps = render_flowstep_gem_sections(
+        flowsteps, actions=observer.get("actions"),
+        bindings=(milestone.get("execution") or {}).get("tool_bindings"),
+    )
+    mid = milestone.get("id") or milestone.get("agent_id")
+    title = observer.get("title") or milestone.get("success") or str(mid)
+    rows = [OUTLINE_START, f"## Execution plan — {mid} — {title}", "",
+            "Read the complete master prompt above, then perform these internal actions.", "",
+            steps.rstrip(), "", "## Named outputs", ""]
+    for port in milestone.get("outputs") or []:
+        rows.append(
+            f"- `{port['id']}`: {port.get('name') or port['id']}; {port['kind']}; "
+            f"{port.get('cardinality', 'one')}; {'required' if port.get('required') else 'optional'}."
+        )
+        if milestone.get("output_contract"):
+            rows.append(f"  Reference: `{mid}.{port['id']}`; binding: "
+                        f"`from: {mid}.{milestone['output_contract']}`, `output: {port['id']}`.")
+    if not milestone.get("outputs"):
+        rows.append("No named outputs declared. Define the deliverable before building this milestone.")
+    rows.append(OUTLINE_END)
+    outline = "\n".join(rows)
+    start, end = prompt.find(OUTLINE_START), prompt.find(OUTLINE_END)
+    if start >= 0 or end >= 0:
+        if start < 0 or end < start or prompt.count(OUTLINE_START) != 1 or prompt.count(OUTLINE_END) != 1:
+            raise FlowError(f"{mid}: malformed generated execution plan markers")
+        return prompt[:start] + outline + prompt[end + len(OUTLINE_END):]
+    return prompt + ("\n\n" if not prompt.endswith("\n\n") else "") + outline + "\n"

@@ -36,7 +36,10 @@ Start each milestone by authoring its complete master prompt. Describe the
 worker's role, goal, bound inputs and reference roles, domain procedure,
 constraints, and exact output. This applies equally to image, text, deterministic
 tool, and upload milestones. Read `master-prompts.md` for guidance and an example.
-Then bind tools and outputs to that prompt. A later milestone can consume any
+Then bind tools and outputs to that prompt. In every milestone Markdown, include
+numbered FlowSteps with descriptive actions and actual tool names, followed by
+named outputs. Check these lists against the executable bindings; use the layout
+in `master-prompts.md`. A later milestone can consume any
 available upstream milestone's named output, including several earlier milestones
 at once. Declare each dependency in `inputs` and identify the same reference and
 its purpose in the master prompt; see the binding examples in `master-prompts.md`.
@@ -69,9 +72,12 @@ python scripts/run_m8m.py --target <repo>/flowsteps/flows/<flow_id> --codebase <
 ```
 
 `--mode coordinate` is the default. It validates source and existing
-implementations, then atomically refreshes only generated `flow.yaml` for native
-source. A stale snapshot does not block recompilation; validation failure
-preserves the previous snapshot. Authored v4 flows are validated without rewriting.
+implementations, then refreshes the generated FlowStep/tool/output outlines in
+milestone Markdown while preserving authored prompts. For native source it also
+atomically refreshes generated `flow.yaml`. A stale snapshot does not block
+recompilation; validation failure preserves the previous snapshot and prompts.
+Authored v4 flow definitions keep their format. Installed packages keep their
+immutable source until explicitly rebuilt.
 
 The result contains milestone IDs and a `run_command` argument array. Validation
 does not run product operations or build runtime releases, source bundles,

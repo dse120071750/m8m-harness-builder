@@ -23,6 +23,27 @@ M8M Harness Builder 用來建立及修改多階段工作流程。它協調現有
 
 這些規則適用於圖片生成、文字撰寫、資料處理、工具執行及上傳。確定性工具階段仍有自己的主提示詞，但不需要為此額外呼叫模型。簡短的 `success` 描述、schema 或工具清單都不能取代完整主提示詞。使用者提供的長提示詞應完整保留，只按明確指定的工作流程調整。
 
+每份 milestone Markdown 都按以下次序呈現：**完整 master prompt → 編號 FlowSteps 及各自工具 → 具名輸出**。例如，在第三階段的完整主提示詞之後：
+
+```text
+milestone03 — 生成六張成品
+
+FlowStep 1: 讀取六份提示詞及原始主圖
+FlowStep 1 tools: load_waterfront_inputs@1.0.0
+
+FlowStep 2: 依序生成 img1–img6
+FlowStep 2 tools: generate_waterfront_series@1.0.0
+
+FlowStep 3: 按順序收集六個實際圖片檔案
+FlowStep 3 tools: collect_ordered_images@1.0.0
+
+Named outputs: images
+```
+
+以上工具名稱只示範格式，Builder 會填入實際工作流程的工具綁定，不能留下 `<>` 或為湊數建立工具。每一步可記述一個或多個實際使用的工具；執行規格仍是每個 FlowStep 一個主要 binding，額外列出的工具必須確實由該實作呼叫。獨立排程的工具呼叫應分開宣告。每個 FlowStep 不需要另一份 master prompt。
+
+生成器保留完整已撰寫提示詞，並從來源設定更新文末的 FlowStep／工具／輸出清單。詳見[文件格式](references/master-prompts.md#required-milestone-markdown-layout)。
+
 修改現有工作流程時保留原有 ID。插入新階段時使用下一個未用編號，不要重新編號；執行先後由 graph 決定。
 
 ### 簡化完成條件
@@ -124,7 +145,7 @@ python scripts/run_m8m.py --mode coordinate --target "/path/to/project/flowsteps
 python scripts/validate_harness.py --codebase "/path/to/project" --flow-id waterfront_v1 --scope workflow
 ```
 
-`coordinate` 是預設模式。它編譯及驗證定義，不會生成圖片或打包 runtime。成功回傳的 `run_command` 是該流程應使用的執行命令；已打包流程會使用自己的 `launch.py`。
+`coordinate` 是預設模式。它編譯及驗證定義，並更新 milestone 文件的執行清單；不會生成圖片或打包 runtime。成功回傳的 `run_command` 是該流程應使用的執行命令；已打包流程會使用自己的 `launch.py`。
 
 對尚未打包的 coordination 工作流程，首次執行範例如下。把可變執行資料放在專案外：
 
@@ -192,6 +213,27 @@ The default is **coordination mode**: compile and validate the workflow while re
 5. Execution, model recovery, and wait/resume instructions carry the full master prompt. Do not send only one FlowStep fragment or rely on earlier conversation to fill gaps.
 
 This applies to image generation, writing, data processing, tool execution, and uploads. Deterministic tool milestones also have master prompts, without requiring an extra model call. A short `success` sentence, schema, or tool list cannot replace the prompt. Preserve user-supplied long prompts in full, adapting them only for explicitly requested workflow choices.
+
+Every milestone Markdown follows this order: **complete master prompt → numbered FlowSteps with their tools → named outputs**. For example, after the third milestone's full prompt:
+
+```text
+milestone03 — Generate six final images
+
+FlowStep 1: Read the six prompts and original master image
+FlowStep 1 tools: load_waterfront_inputs@1.0.0
+
+FlowStep 2: Generate img1–img6 sequentially
+FlowStep 2 tools: generate_waterfront_series@1.0.0
+
+FlowStep 3: Collect the six actual image files in order
+FlowStep 3 tools: collect_ordered_images@1.0.0
+
+Named outputs: images
+```
+
+These tool names illustrate the format. The Builder fills in the actual workflow bindings, leaving no `<>` placeholders and inventing no tools to pad a list. A step may document one or several tools it actually uses. The executable schema still binds one primary tool per FlowStep; additional listed tools must really be called by that implementation. Independently scheduled calls should be separate declared steps. Each FlowStep does not need another master prompt.
+
+The generator preserves the complete authored prompt and refreshes the FlowStep/tool/output outline at the end from source metadata. See the [document format](references/master-prompts.md#required-milestone-markdown-layout).
 
 Keep existing IDs when editing workflows. Allocate the next unused number when inserting a milestone; do not renumber existing nodes. The graph determines execution order.
 
@@ -294,7 +336,7 @@ python scripts/run_m8m.py --mode coordinate --target "/path/to/project/flowsteps
 python scripts/validate_harness.py --codebase "/path/to/project" --flow-id waterfront_v1 --scope workflow
 ```
 
-`coordinate` is the default mode. It compiles and validates definitions; it does not generate images or package a runtime. The returned `run_command` identifies the runner to use. Already packaged workflows use their own `launch.py`.
+`coordinate` is the default mode. It compiles and validates definitions and refreshes milestone execution outlines; it does not generate images or package a runtime. The returned `run_command` identifies the runner to use. Already packaged workflows use their own `launch.py`.
 
 For an unpackaged coordination workflow, start a run as follows. Keep mutable execution data outside the project:
 

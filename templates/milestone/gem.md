@@ -1,14 +1,16 @@
-# MASTER PROMPT — __TITLE__
+# __MID__ — __TITLE__
+
+## Master prompt
 
 You are responsible for completing **__TITLE__**. Start with this entire prompt,
 then use the bound inputs and declared tools to produce the requested result.
 This is the master prompt for milestone `__MID__`.
 
-## Objective
+### Objective
 
 __SUCCESS__
 
-## Inputs and references
+### Inputs and references
 
 __INPUTS__
 
@@ -17,19 +19,18 @@ reference roles. Earlier milestones are available through these explicit binding
 use their chosen outputs, including outputs from milestones before the immediate
 predecessor. A mention in prose alone does not create an executable binding.
 
-## Instructions
+### Instructions
 
 Carry out the complete task described above using the supplied domain instructions.
 Preserve the specified identities, constraints, order, and reference relationships.
 Resolve the inputs before calling the tools. If required input is missing, report
-the missing input rather than inventing it. FlowStep notes below support this
-master prompt and never replace it.
+the missing input rather than inventing it. The numbered FlowSteps below identify
+each internal action and its actual tools; they never replace this master prompt.
 
-## Required output
+### Deliverable
 
-__OUTPUTS__
-
-Later milestones can bind the named outputs using the references above. Keep
+Return the named outputs listed after the FlowSteps. Later milestones can bind
+them using their declared references. Keep
 this milestone's ID and output IDs stable when editing its prompt or tools.
 
 Return the complete named output bundle in its declared format. File and media
@@ -51,22 +52,18 @@ that contract. The runtime owns progress and completion.
 - Separate judge binding: `__WORKER__` (used only when `loop: judge`)
 __JUDGE_LINE__
 
-## Tool versus intelligence
+### Tool versus intelligence
 
 __CLASSIFICATION__
 
-Tool-heavy means declared in-process product functions, not shell-heavy
-workflow steps. Do not launch subprocesses or secondary workflows, recursively
-discover the execution root, or hand-write M8M chosen/control artifacts. If an
-approval boundary exists, the only later FlowStep is one declared in-process
-`finalize`; otherwise keep working on the candidate.
+Reuse existing functions, scripts, CLIs, or APIs through declared bindings.
+Respect their existing approval and idempotency contracts. Do not discover other
+runs or hand-write M8M chosen/control artifacts. Explicit packaging can impose
+additional implementation restrictions; local coordination does not require
+rewriting working tools.
 
-Follow the FlowStep table as a guide. If the preferred tool fails,
+Follow the numbered FlowSteps. If the preferred tool fails,
 recover within the same complete master prompt.
 The runtime admits the named result against this expectation before any
 semantic judge. PASS commits only that admitted result to
 `chosen-output.json`; missing or invalid declared members BLOCK first.
-
-## FlowSteps
-
-__FLOWSTEP_SECTIONS__

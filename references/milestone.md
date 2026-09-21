@@ -28,7 +28,8 @@ Every milestone starts with one complete master prompt at
 `references/<milestone>.md`, selected by `gem`. Author the role, objective,
 inputs and reference roles, domain instructions, constraints, and exact output
 before choosing its FlowSteps. The whole document is the execution prompt;
-FlowStep headings are optional. See `master-prompts.md`.
+Every milestone Markdown lists numbered FlowSteps with their actual tools,
+then named outputs; these describe internal actions under the full prompt. See `master-prompts.md`.
 
 Use stable IDs `milestone01`, `milestone02`, etc. for new milestones. Later
 master prompts name their upstream producers and outputs; matching `inputs`

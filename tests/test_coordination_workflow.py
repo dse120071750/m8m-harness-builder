@@ -112,6 +112,28 @@ class CoordinationTests(unittest.TestCase):
         self.assertFalse(list(self.repo.rglob("*.m8mpkg")))
         self.assertFalse(list(self.repo.rglob("*.jpg")))
 
+    def test_coordination_updates_documents_from_validated_bindings(self) -> None:
+        original = {name: (self.harness / agent["gem"]).read_text(encoding="utf-8")
+                    for name, agent in self.fixture.agents.items()}
+        result = prepare_workflow(self.harness, self.repo)
+        self.assertEqual(len(result["updated_milestone_documents"]), len(original))
+        documents = {}
+        for name, agent in self.fixture.agents.items():
+            text = (self.harness / agent["gem"]).read_text(encoding="utf-8")
+            self.assertTrue(text.startswith(original[name]))
+            for binding in agent["execution"]["tool_bindings"]:
+                self.assertIn(binding["ref"], text)
+            for port in agent["outputs"]:
+                self.assertIn(f"`{port['id']}`:", text)
+            documents[name] = text
+        second = prepare_workflow(self.harness, self.repo)
+        self.assertEqual(second["updated_milestone_documents"], [])
+        write(self.harness / "handlers/source.py", "M8M_RUNNABLE = False\ndef run(data, **kwargs):\n    return {}\n")
+        with self.assertRaises(FlowError):
+            prepare_workflow(self.harness, self.repo)
+        for name, agent in self.fixture.agents.items():
+            self.assertEqual((self.harness / agent["gem"]).read_text(encoding="utf-8"), documents[name])
+
     def test_failed_compile_preserves_snapshot(self) -> None:
         prepare_workflow(self.harness, self.repo)
         before = (self.harness / "flow.yaml").read_bytes()

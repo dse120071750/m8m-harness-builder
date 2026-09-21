@@ -6,7 +6,7 @@ import shutil
 from pathlib import Path
 from typing import Any
 
-from gem_text import render_flowstep_gem_sections
+from gem_text import with_milestone_outline
 from milestone_pair import is_wait_milestone
 
 
@@ -140,27 +140,30 @@ def write_milestone_gems(
     *,
     overwrite: bool = False,
 ) -> list[str]:
-    """Keep one complete master prompt per milestone, preserving authored text."""
-    from flowstep_runtime import normalize_flowsteps
+    """Preserve each master prompt and project its current steps, tools, and outputs."""
+    from flowstep_runtime import skill_rel
     from humanize_chart import success_line, title_id
 
     written: list[str] = []
-    dest_dir = Path(harness) / TEACHING_DIRNAME
     template = Path(__file__).resolve().parents[1] / "templates" / "milestone" / "gem.md"
     body = template.read_text(encoding="utf-8") if template.is_file() else (
-        "# MASTER PROMPT — __TITLE__\n\n__SUCCESS__\n\n__FLOWSTEP_SECTIONS__\n"
+        "# __MID__ — __TITLE__\n\n## Master prompt\n\n__SUCCESS__\n"
     )
     for item in milestones:
-        mid = str(item.get("id") or "").strip()
+        mid = str(item.get("id") or item.get("agent_id") or "").strip()
         if not mid:
             continue
-        dest = dest_dir / f"{mid}.md"
-        if dest.exists() and not overwrite:
-            continue
+        dest = skill_rel(Path(harness), str(item.get("gem") or f"references/{mid}.md"))
+        existing = dest.read_text(encoding="utf-8") if dest.is_file() else None
         authored_prompt = item.get("master_prompt")
+        if existing is not None and not overwrite:
+            authored_prompt = existing
         if isinstance(authored_prompt, str) and authored_prompt.strip():
+            text = with_milestone_outline(authored_prompt, item)
+            if text == existing:
+                continue
             dest.parent.mkdir(parents=True, exist_ok=True)
-            dest.write_text(authored_prompt, encoding="utf-8", newline="\n")
+            dest.write_text(text, encoding="utf-8", newline="\n")
             written.append(str(dest))
             continue
         declared_outputs = item.get("outputs") if isinstance(item.get("outputs"), list) else []
@@ -188,7 +191,7 @@ def write_milestone_gems(
         if intelligence == "none":
             classification = (
                 "This milestone is deterministic tool work (`model: none`). Each "
-                "FlowStep must be a typed, fixture-testable, in-process product tool."
+                "FlowStep uses an existing capability through its declared binding."
             )
         else:
             justification = str(
@@ -198,12 +201,8 @@ def write_milestone_gems(
             classification = (
                 f"This milestone uses bounded `{intelligence}` intelligence because "
                 f"{justification}. Deterministic sub-operations remain declared "
-                "in-process tools; the model returns only candidate data."
+                "tools; the model returns only candidate data."
             )
-        flowsteps, _ = normalize_flowsteps(
-            flowsteps=item.get("flowsteps"),
-            tools=item.get("tools"),
-        )
         input_lines = []
         for name, binding in (item.get("inputs") or {}).items():
             if isinstance(binding, dict):
@@ -214,7 +213,7 @@ def write_milestone_gems(
             else:
                 input_lines.append(f"- `{name}`: `{binding}`.")
         text = (
-            body.replace("__TITLE__", title_id(mid))
+            body.replace("__TITLE__", str((item.get("observer") or {}).get("title") or item.get("success") or title_id(mid)))
             .replace("__SUCCESS__", str(item.get("success") or success_line(item)))
             .replace("__MID__", mid)
             .replace("__KIND__", kind)
@@ -222,15 +221,8 @@ def write_milestone_gems(
             .replace("__JUDGE_LINE__", judge_line)
             .replace("__CLASSIFICATION__", classification)
             .replace("__INPUTS__", "\n".join(input_lines) or "Use the request and inputs bound to this milestone.")
-            .replace("__OUTPUTS__", "\n".join(
-                f"- `{port['id']}`: {port.get('name', port['id'])}; {port['kind']}; "
-                f"{port.get('cardinality', 'one')}; {'required' if port.get('required') else 'optional'}. "
-                + (f"Downstream binding: `from: {mid}.{item['output_contract']}`, `output: {port['id']}`."
-                   if item.get("output_contract") else "")
-                for port in declared_outputs
-            ) or "Return the declared named outputs.")
-            .replace("__FLOWSTEP_SECTIONS__", render_flowstep_gem_sections(flowsteps))
         )
+        text = with_milestone_outline(text, item)
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_text(text, encoding="utf-8", newline="\n")
         written.append(str(dest))

@@ -207,7 +207,11 @@ class MigrateSkillSourceTests(unittest.TestCase):
             self.assertEqual(source["canvas"]["flow_id"], "case_caption_v1")
             self.assertEqual([item["id"] for item in compiled["milestones"]], result["milestones"])
             self.assertTrue((dest / "references" / "source_ready.md").is_file())
-            self.assertEqual((dest / "references/source_ready.md").read_text(encoding="utf-8"), master_prompt)
+            generated_prompt = (dest / "references/source_ready.md").read_text(encoding="utf-8")
+            self.assertTrue(generated_prompt.startswith(master_prompt))
+            self.assertEqual(generated_prompt.count(master_prompt), 1)
+            self.assertIn("FlowStep 1 tools:", generated_prompt)
+            self.assertIn("## Named outputs", generated_prompt)
             self.assertTrue((dest / "agents" / "openai.yaml").is_file())
 
     def test_candidate_bind_tool_is_not_a_passthrough(self) -> None:

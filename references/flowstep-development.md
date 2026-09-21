@@ -42,7 +42,11 @@ Do not infer a judge from image output, model type, or milestone name. Do not ad
 hashes, revision chains, proof graphs, or automatic image reviews to active
 milestone paths. Named outputs and their schema are the completion contract.
 
-For each FlowStep, identify its capability, input, output, and failure behavior.
+Every milestone Markdown lists its FlowSteps in numbered order after the full
+master prompt. Give each a descriptive action and an explicit tools line, then
+list the milestone's named outputs. Use actual binding names, not placeholders;
+do not add tools solely to fill a list. For each FlowStep, identify its capability,
+input, output, and failure behavior.
 Add a model justification or approval boundary when relevant. Avoid mandatory
 analysis tables and new fixtures for unchanged working tools.
 

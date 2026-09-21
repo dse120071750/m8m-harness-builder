@@ -153,7 +153,7 @@ Provider-neutral member kinds are `json`, `data`, `file`, `image`,
 Those four existing fields are one logical Milestone Expectation. The runtime
 derives `m8m.milestone_expectation.v1` from them; authors do not add an
 `expectation:` object, a new node, or a flow v5. Each Gem is the complete
-milestone master prompt; FlowStep notes are optional. A legacy Gem may retain `## Rule of success` during migration,
+milestone master prompt, numbered FlowSteps with their actual tools, and named outputs. A legacy Gem may retain `## Rule of success` during migration,
 but the compiler accepts it only when it exactly matches `success`.
 
 ## Execution closure in authored source
