@@ -100,7 +100,58 @@ Before delivering the harness, check that every milestone document has its full
 prompt, all declared FlowSteps in order, their actual tools, and every named output.
 This is authoring validation, not another runtime milestone or review call.
 
+## Semantic inputs, structured outputs
+
+Inputs are context for the master prompt, not a per-milestone form to validate.
+Accept rough notes, natural language, attachments, reference paths, selected
+upstream results, and mixed session context. The worker interprets their meaning
+and extracts what the task needs. Do not author or require `input_schema`, add a
+normalization milestone, or make an extra model call just to standardize context.
+Ask about a missing detail only when it materially blocks the task.
+
+Keep useful executable `inputs` bindings so later workers receive the intended
+chosen artifacts. A binding describes where a reference comes from, not the shape
+of all incoming context. Missing declared upstream outputs remain real dependency
+errors. The runner transports context through JSON files and named aliases;
+string values, arrays, and mixed objects do not need a milestone input schema.
+Workers receive explicitly supplied context; this does not enable hidden access
+to earlier Codex conversation history or unrelated runs.
+
+Every milestone still declares `output_contract`, `output_schema`, and named
+`outputs`. Return actual structured results, including JSON facts or file/media
+references. Output admission remains mandatory. `draft_schema` describes a model's
+proposed output, not the incoming context, and remains applicable when declared.
+Individual tools retain their own argument contracts; interpret the semantic
+context before making a tool call. Workflow/API transport contracts are separate
+from per-milestone context validation.
+
+New builds omit milestone input schema files. Existing `input_schema` fields are
+accepted as legacy metadata but are not loaded, validated, or used to gate a
+milestone by the current runner. Explicit `read_paths` and tool dependencies
+remain required when independently declared. Existing packaged runs use their
+pinned runtime; rebuild an installed package to adopt this behavior.
+
 ## Referencing an earlier milestone
+
+### Structured results visible to people and downstream tools
+
+Specify the actual machine-readable deliverable in each output schema and master
+prompt. A statement such as "content selected" or "published successfully" is
+not the selected content or publication result. For example, a content selection
+output should carry the content identity, selected assets and caption; a publish
+result should carry the platform, post identity, returned permalink (when provided
+by the provider), and actual status. Preserve working domain contracts instead of
+wrapping them in a second generic result protocol.
+
+Bind downstream tools to these named values, not to the prompt, transcript, or a
+human-readable summary. Final milestones bind their result to the workflow result
+contract. The frontend should render accepted chosen values alongside the prompt,
+FlowSteps and tool names, and label a milestone complete only from runtime-owned
+admission status. A tool-start event or assistant claim is not completion evidence.
+Large-output previews must identify truncation; downstream execution still receives
+the complete chosen value. Keep credentials and private provider responses outside
+business output ports. Check one real structured result and its consuming binding
+when validating a visualization integration; prose-only screenshots are insufficient.
 
 Declare meaningful named outputs for each milestone. A later milestone can use
 any available upstream output, not only the immediately preceding milestone.

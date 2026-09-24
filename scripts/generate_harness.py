@@ -606,7 +606,6 @@ def generate_v4_flow(
             "id": mid,
             "output_contract": spec["output_contract"],
             "output_schema": f"schemas/{mid}_v1.json",
-            "input_schema": f"milestones/{mid}/input.schema.json",
             "flowsteps": flowsteps,
             "tools": step_tools,
             "intelligence": intel_value,
@@ -616,7 +615,6 @@ def generate_v4_flow(
             "outputs": output_declarations,
             "draft_schema": f"milestones/{mid}/draft.schema.json",
             "_output_schema_object": output_obj,
-            "_input_schema_object": spec.get("input_schema_object"),
             "_is_last": is_last,
             "_asset_kind": asset_kind,
         }
@@ -771,19 +769,6 @@ def generate_v4_flow(
         schema_path = harness / "schemas" / f"{mid}_v1.json"
         if _write_json(schema_path, output_obj, overwrite=overwrite):
             created.append(str(schema_path))
-        # Bindings may name any upstream output, not just the preceding node.
-        # Leave value types to an authored schema; a port can be a scalar or array.
-        input_obj = item.get("_input_schema_object") or {
-            "$schema": "https://json-schema.org/draft/2020-12/schema",
-            "$id": f"{mid}.input.schema.json",
-            "type": "object",
-            "additionalProperties": True,
-            "required": list(item["inputs"]),
-            "properties": {name: {} for name in item["inputs"]},
-        }
-        input_path = harness / "milestones" / mid / "input.schema.json"
-        if _write_json(input_path, input_obj, overwrite=overwrite):
-            created.append(str(input_path))
         mapping = {
             "STEP_ID": mid,
             "TOOLS_JSON": json.dumps(item["tools"]),
@@ -1127,7 +1112,6 @@ def generate_from_audit(
             "intelligence": item.get("intelligence") or "none",
             "output_contract": item.get("output_contract") or f"{item['id']}_v1",
             "output_schema_object": item.get("output_schema"),
-            "input_schema_object": item.get("input_schema"),
             "outputs": item.get("outputs") if isinstance(item.get("outputs"), list) else None,
             "inputs": item.get("inputs"),
             "model_justification": item.get("model_justification"),

@@ -2018,7 +2018,6 @@ def _execute_step(
             return blocked
     try:
         input_data, bindings = bind_inputs(run_dir, flow, step)
-        validate_against_schema(input_data, skill_dir / step["input_schema"])
         expectation = derive_milestone_expectation(step)
         validate_against_schema(expectation, _expectation_schema_path())
     except FlowError as exc:
@@ -2993,7 +2992,7 @@ def _changed_implementation_owners(
         for milestone_id, item in source_steps.items():
             for dependency in item.get("implementation_dependencies") or []:
                 add_owner(dependency_label(str(dependency)), milestone_id)
-            for field in ("handler", "input_schema", "output_schema", "draft_schema", "receipt_schema", "gem"):
+            for field in ("handler", "output_schema", "draft_schema", "receipt_schema", "gem"):
                 relative = item.get(field)
                 if relative:
                     add_owner(f"skill:{Path(str(relative)).as_posix()}", milestone_id)
@@ -3495,8 +3494,8 @@ def advance(
     # work directories. A standard draft path may live under work/<milestone>/,
     # which replace_milestone_state intentionally removes.
     pending_draft = read_json(draft_path) if draft_path else None
-    if draft_path and not isinstance(pending_draft, dict):
-        raise FlowError("--draft must contain one JSON object")
+    if draft_path and not isinstance(pending_draft, (dict, list)):
+        raise FlowError("--draft must contain one JSON object or array")
     if draft_for and pending_draft is None:
         raise FlowError("--draft-for requires --draft")
     pending_draft_for = str(draft_for or "").strip() or None

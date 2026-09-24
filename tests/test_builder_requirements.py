@@ -509,6 +509,7 @@ class BuilderRequirementTests(unittest.TestCase):
         self.assertEqual(rows[0]["token_budget"], profile["token_budget"])
         self.assertEqual(rows[0]["timeout_seconds"], profile["timeout_seconds"])
         self.assertEqual(rows[1]["tool_refs"], [])
+        self.assertTrue(all("input_schema" not in row["schema_refs"] for row in rows))
 
         missing_implementation = _agent_profile_requirements(
             definition,

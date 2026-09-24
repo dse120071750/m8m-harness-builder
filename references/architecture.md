@@ -203,7 +203,6 @@ milestones:
         cardinality: one
         required: true
     handler: milestones/render/assemble.py
-    input_schema: milestones/render/input.schema.json
     inputs:
       request: user.request
     loop: judge
@@ -234,7 +233,6 @@ milestones:
         cardinality: one
         required: true
     handler: milestones/package/assemble.py
-    input_schema: milestones/package/input.schema.json
     inputs:
       all_rendered:
         from: render.render_v1

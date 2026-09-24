@@ -400,17 +400,6 @@ def _candidate_output_schema(output_ids: list[str]) -> dict[str, Any]:
     }
 
 
-def _input_schema(inputs: dict[str, Any]) -> dict[str, Any]:
-    names = [str(name) for name in (inputs or {"request": "user.request"})]
-    return {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "type": "object",
-        "additionalProperties": True,
-        "required": names,
-        "properties": {name: {"type": "object"} for name in names},
-    }
-
-
 def _candidate_bind_output_schema() -> dict[str, Any]:
     return {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -834,7 +823,6 @@ def write_migrated_skill_source(
         if not inputs:
             inputs = {"request": "user.request"}
         output_schema_rel = f"schemas/{milestone_id}.schema.json"
-        input_schema_rel = f"milestones/{milestone_id}/input.schema.json"
         handler_rel = f"milestones/{milestone_id}/assemble.py"
         test_rel = f"milestones/{milestone_id}/tests/test_assemble.py"
         existing_output = _existing_file(
@@ -846,7 +834,6 @@ def write_migrated_skill_source(
             shutil.copy2(existing_output, dest / output_schema_rel)
         else:
             _write_json(dest / output_schema_rel, _candidate_output_schema([row["id"] for row in outputs]))
-        _write_json(dest / input_schema_rel, _input_schema(inputs))
         existing_handler = _existing_file(
             source_root / str(item.get("handler") or ""),
             source_root / "milestones" / milestone_id / "assemble.py",
@@ -873,7 +860,6 @@ def write_migrated_skill_source(
             "outputs": outputs,
             "handler": handler_rel,
             "test": test_rel,
-            "input_schema": input_schema_rel,
             "inputs": inputs,
             "flowsteps": flowsteps,
             "tools": tool_ids,

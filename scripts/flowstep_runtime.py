@@ -918,7 +918,6 @@ def _load_flow_v4(
             "flowsteps": flowsteps,
             "inputs": inputs,
             "output_contract": item["output_contract"],
-            "input_schema": item.get("input_schema", f"milestones/{step_id}/input.schema.json"),
             "output_schema": item["output_schema"],
             "test": item.get("test", f"milestones/{step_id}/tests/test_assemble.py"),
             "params": item.get("params") or {},
@@ -1714,7 +1713,7 @@ def implementation_files(skill_dir: Path, flow: dict[str, Any]) -> list[Path]:
         ]
         declared_dependencies.extend(step_dependencies)
         files.extend(step_dependencies)
-        for field in ("handler", "input_schema", "output_schema"):
+        for field in ("handler", "output_schema"):
             if step.get(field):
                 files.append(implementation_path(step[field]))
         # These paths may be inferred defaults for recovery/judge modes even
@@ -2220,17 +2219,11 @@ def bind_inputs(run_dir: Path, flow: dict[str, Any], step: dict[str, Any]) -> tu
         ),
         None,
     )
-    input_schema_path = skill_rel(Path(flow["_skill_dir"]), step["input_schema"])
-    input_schema = read_json(input_schema_path) if input_schema_path.is_file() else {}
-    allowed_dynamic_inputs = set(
-        (input_schema.get("properties") or {}).keys()
-        if isinstance(input_schema, dict)
-        else []
-    )
-    if branch_source is not None and any(
-        item["id"] in allowed_dynamic_inputs
-        for item in flow["steps"]
-        if str(item.get("on_path") or "")
+    # Explicit branch aliases already supply the chosen arm. Otherwise expose
+    # its terminal output by milestone ID, without consulting an input schema.
+    if branch_source is not None and not any(
+        by_id.get(binding["source_step_id"], {}).get("on_path")
+        for binding in bindings
     ):
         record_path = run_dir / "flow-execution-record.json"
         record = read_json(record_path) if record_path.is_file() else {}
@@ -2256,10 +2249,6 @@ def bind_inputs(run_dir: Path, flow: dict[str, Any], step: dict[str, Any]) -> tu
             )
         selected = candidates[-1]
         selected_id = str(selected["id"])
-        if selected_id not in allowed_dynamic_inputs:
-            raise FlowError(
-                f"{step['id']}: selected branch output {selected_id} is absent from the input schema"
-            )
         selected_path = chosen_output_path(run_dir, selected_id)
         load_chosen_output(
             run_dir,

@@ -14,6 +14,11 @@ __SUCCESS__
 
 __INPUTS__
 
+Interpret the supplied context semantically: notes, text, files, references, and
+prior results may vary in shape. Do not require or validate an input schema or
+insert a separate normalization milestone. Ask only for information actually
+needed to perform the work. Tool calls still follow the tool's own API contract.
+
 Use each input for its declared purpose. Follow the supplied specifications and
 reference roles. Earlier milestones are available through these explicit bindings;
 use their chosen outputs, including outputs from milestones before the immediate

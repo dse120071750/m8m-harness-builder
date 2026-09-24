@@ -320,7 +320,7 @@ def validate_harness(
                     errors.append(f"{step_id}: milestone master prompt must not be empty")
             except (FlowError, OSError, UnicodeError):
                 errors.append(f"{step_id}: missing or unreadable milestone master prompt at {prompt_ref}")
-        required_files = ["handler", "input_schema", "output_schema", "test"]
+        required_files = ["handler", "output_schema", "test"]
         if step["model"] != "none" or step.get("on_tool_fail") == "need_model":
             if (skill_dir / step.get("draft_schema", "")).is_file() or step.get("draft_schema"):
                 required_files.append("draft_schema")
@@ -394,7 +394,7 @@ def validate_harness(
         test_path = skill_dir / step["test"]
         if test_path.is_file() and not flow.get("_v4"):
             errors.extend(inspect_step_test(test_path.read_text(encoding="utf-8"), step_id=step_id))
-        for schema_key in ("input_schema", "output_schema", "draft_schema"):
+        for schema_key in ("output_schema", "draft_schema"):
             if schema_key == "draft_schema" and not step.get("draft_schema"):
                 continue
             path = skill_dir / step[schema_key]
@@ -405,8 +405,9 @@ def validate_harness(
             except FlowError as exc:
                 errors.append(str(exc))
                 continue
-            if schema.get("type") != "object":
-                errors.append(f"{step_id}: {schema_key} must be a JSON object schema")
+            allowed_types = {"object", "array"} if schema_key == "draft_schema" else {"object"}
+            if schema.get("type") not in allowed_types:
+                errors.append(f"{step_id}: {schema_key} must have type in {sorted(allowed_types)}")
             try:
                 Draft202012Validator(
                     schema, resolver=RefResolver(base_uri=path.resolve().as_uri(), referrer=schema)

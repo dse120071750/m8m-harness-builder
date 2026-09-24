@@ -1492,17 +1492,17 @@ def _validate_agent_profile_requirement(
     _require_allowed_and_required_keys(
         schema_refs,
         allowed={"input_schema", "draft_schema", "output_schema", "receipt_schema"},
-        required={"input_schema", "output_schema"},
+        required={"output_schema"},
         label=f"{label}.schema_refs",
     )
     for field in schema_refs:
         _required_trimmed_string(schema_refs, field, f"{label}.schema_refs")
     required_schema_fields = (
-        {"input_schema", "draft_schema", "output_schema"}
+        {"draft_schema", "output_schema"}
         if role == "candidate_executor"
-        else {"input_schema", "output_schema", "receipt_schema"}
+        else {"output_schema", "receipt_schema"}
     )
-    if set(schema_refs) != required_schema_fields:
+    if set(schema_refs) - {"input_schema"} != required_schema_fields:
         raise SourceBundleError(
             f"{label}.schema_refs must exactly contain: "
             + ", ".join(sorted(required_schema_fields))

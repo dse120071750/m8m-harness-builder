@@ -36,6 +36,10 @@ Start each milestone by authoring its complete master prompt. Describe the
 worker's role, goal, bound inputs and reference roles, domain procedure,
 constraints, and exact output. This applies equally to image, text, deterministic
 tool, and upload milestones. Read `master-prompts.md` for guidance and an example.
+Inputs are semantic context interpreted by the worker, with no milestone
+`input_schema`. Keep useful reference bindings without requiring normalized
+context fields. Every milestone must still declare structured named outputs and
+an output schema. See `master-prompts.md` for this boundary.
 Then bind tools and outputs to that prompt. In every milestone Markdown, include
 numbered FlowSteps with descriptive actions and actual tool names, followed by
 named outputs. Check these lists against the executable bindings; use the layout
@@ -90,7 +94,7 @@ For validation alone:
 python scripts/validate_harness.py --codebase <repo> --flow-id <flow_id> --scope workflow
 ```
 
-`workflow` validates milestone master prompts, handlers, bindings, schemas, outputs, and implementation
+`workflow` validates milestone master prompts, handlers, bindings, output/draft schemas, outputs, and implementation
 availability. `package` adds installed runtime verification. The Python
 `validate_harness()` API retains its legacy package default for existing callers;
 new coordination callers pass `scope="workflow"` explicitly.

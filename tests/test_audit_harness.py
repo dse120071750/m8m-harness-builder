@@ -29,7 +29,7 @@ REQUIRED_HEADINGS = (
     "## Teaching contracts",
     "## Tools to standardize to Python",
     "## Schema control",
-    "## FlowStep input and output schemas",
+    "## Milestone context and output schemas",
 )
 
 
@@ -370,7 +370,8 @@ class AuditWorkerTests(unittest.TestCase):
         markdown = render_audit_markdown(report)
         for heading in REQUIRED_HEADINGS:
             self.assertIn(heading, markdown)
-        self.assertIn("**Input schema**", markdown)
+        self.assertNotIn("input_schema", source)
+        self.assertNotIn("input_schema", labeled)
         self.assertIn("**Output schema**", markdown)
         validate_against_schema(report, AUDIT_CONTRACT)
 

@@ -9,6 +9,11 @@ The master prompt defines the whole task; FlowSteps are the internal means of
 performing it. Read the full prompt before execution or recovery. Do not replace
 it with an isolated FlowStep section or add a model call just to recite it.
 
+Milestone inputs are semantic context, with no input schema gate. Interpret notes,
+files, and prior outputs through the full prompt. A tool's own typed arguments
+remain its calling contract; do not impose those fields on the whole milestone.
+Every milestone returns structured named outputs checked by its output schema.
+
 ## Reuse tools
 
 Deterministic work belongs in a tool: a Python function, existing script or CLI,

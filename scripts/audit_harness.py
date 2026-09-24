@@ -883,16 +883,8 @@ def _intel_value(step: dict[str, Any]) -> str:
 
 
 def _attach_schemas(root: Path, milestone: dict[str, Any]) -> dict[str, Any]:
-    input_raw = _schema_from_step(root, milestone.get("input_schema_path"))
     output_raw = _schema_from_step(root, milestone.get("output_schema_path"))
-    input_summary = summarize_schema(input_raw) if input_raw else None
     output_summary = summarize_schema(output_raw) if output_raw else None
-    milestone["input_schema"] = dict(input_raw) if isinstance(input_raw, dict) else proposed_schema_object(
-        step_id=milestone["id"],
-        kind="input",
-        summary=input_summary,
-        inputs=milestone.get("inputs") or {"request": "user.request"},
-    )
     milestone["output_schema"] = dict(output_raw) if isinstance(output_raw, dict) else proposed_schema_object(
         step_id=milestone["id"],
         kind="output",
@@ -961,11 +953,6 @@ def _rechain_milestones(root: Path, milestones: list[dict[str, Any]]) -> list[di
         elif not _inputs_point_at_milestones(current, known):
             item["inputs"] = {previous["id"]: f"{previous['id']}.{previous['output_contract']}"}
             item["input_schema_path"] = None
-            item["input_schema"] = proposed_schema_object(
-                step_id=item["id"],
-                kind="input",
-                inputs=item["inputs"],
-            )
         previous = item
     return milestones
 
@@ -1903,7 +1890,7 @@ def render_audit_markdown(report: dict[str, Any]) -> str:
             lines.append(
                 f"| `{item.get('milestone')}` | `{item.get('kind')}` | `{item.get('criterion')}` | {detail} |"
             )
-    lines.extend(["", "## FlowStep input and output schemas", ""])
+    lines.extend(["", "## Milestone context and output schemas", ""])
     for index, item in enumerate(report.get("proposed_milestones") or [], start=1):
         inputs = ", ".join(f"{name}={ref}" for name, ref in (item.get("inputs") or {}).items()) or "request=user.request"
         lines.extend(
@@ -1922,10 +1909,6 @@ def render_audit_markdown(report: dict[str, Any]) -> str:
                 ),
                 f"- inputs: {inputs}",
                 f"- output_contract: `{item['output_contract']}`",
-                "",
-                "**Input schema**",
-                "",
-                _json_fence(item.get("input_schema") or {}),
                 "",
                 "**Output schema**",
                 "",

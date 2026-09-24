@@ -229,7 +229,7 @@ def _skill_file(skill_dir: Path, relative: str | None) -> Path | None:
 
 def milestone_implementation_fingerprint(skill_dir: Path, step: dict[str, Any]) -> str:
     files: dict[str, str] = {}
-    for field in ("handler", "input_schema", "output_schema", "draft_schema", "receipt_schema", "gem"):
+    for field in ("handler", "output_schema", "draft_schema", "receipt_schema", "gem"):
         path = _skill_file(skill_dir, step.get(field))
         if path is not None:
             files[f"milestone:{field}:{path.name}"] = sha256_file(path)

@@ -40,7 +40,7 @@
       "minItems": 1,
       "items": {
         "type": "object",
-        "required": ["id", "intelligence", "tools", "output_contract", "input_schema", "output_schema"],
+        "required": ["id", "intelligence", "tools", "output_contract", "output_schema"],
         "properties": {
           "id": { "type": "string", "minLength": 1 },
           "intelligence": { "enum": ["none", "completion", "image", "judge"] },

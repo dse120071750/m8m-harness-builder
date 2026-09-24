@@ -514,6 +514,20 @@ class SkillSourceTests(unittest.TestCase):
         self.fixture.agents["source"] = baseline
         self.fixture.write()
 
+    def test_ai_candidate_and_judge_need_no_milestone_input_schema(self) -> None:
+        self._configure_ai_source()
+        agent = self.fixture.agents["source"]
+        schema_path = self.root / agent.pop("input_schema")
+        schema_path.unlink()
+        self.fixture.write()
+        compiled = compile_skill_source(self.root)
+        self.assertNotIn("input_schema", compiled["milestones"][0])
+        # Old declarations are readable metadata, even if the file is gone.
+        agent["input_schema"] = "schemas/retired_input.json"
+        self.fixture.write()
+        source = load_skill_source(self.root)
+        self.assertFalse(any(row["id"] == "input_schema" for row in source["resources"]))
+
     def test_output_schema_ports_exactly_match_declarations(self) -> None:
         path = self.root / "schemas" / "source.schema.json"
         baseline = json.loads(path.read_text(encoding="utf-8"))
@@ -575,6 +589,10 @@ class SkillSourceTests(unittest.TestCase):
             "items": {"type": "object"},
         }
         path.write_text(json.dumps(array_schema), encoding="utf-8")
+        self.fixture.write()
+        # A JSON array is one JSON document, not necessarily a set of members.
+        load_skill_source(self.root)
+        self.fixture.agents["source"]["outputs"][0]["kind"] = "image"
         self.fixture.write()
         with self.assertRaisesRegex(SkillSourceError, "cardinality one cannot use an array"):
             load_skill_source(self.root)

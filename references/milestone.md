@@ -35,6 +35,13 @@ Use stable IDs `milestone01`, `milestone02`, etc. for new milestones. Later
 master prompts name their upstream producers and outputs; matching `inputs`
 bindings resolve the actual values. See `master-prompts.md` for YAML examples.
 
+## Semantic input boundary
+
+No milestone input schema is generated, required, or validated. Workers interpret
+supplied context and bound references through the full master prompt. The runner
+still resolves declared dependencies and validates structured outputs. A tool's
+own argument contract remains local to that tool call.
+
 ## Milestone contract
 
 A valid `flowstep_flow_v4` milestone declares all of:

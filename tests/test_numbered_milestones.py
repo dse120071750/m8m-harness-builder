@@ -8,7 +8,6 @@ import yaml
 
 import support  # noqa: F401
 from audit_harness import audit_skill, number_new_milestones
-from flowstep_runtime import validate_against_schema
 from generate_harness import generate_v4_flow
 from run_flow import advance
 from session_layout import resolve_chosen_output
@@ -39,7 +38,7 @@ def test_numbering_remaps_dependencies_and_controls_without_changing_tool_contra
     assert numbered[1]["gem"] == "references/milestone02.md"
 
 
-def test_generated_bindings_and_input_schemas_follow_actual_upstream_references(tmp_path):
+def test_generated_bindings_follow_upstream_references_without_input_schemas(tmp_path):
     specs = []
     for index in range(1, 4):
         mid = f"milestone{index:02d}"
@@ -60,10 +59,8 @@ def test_generated_bindings_and_input_schemas_follow_actual_upstream_references(
     steps = yaml.safe_load((harness / "flow.yaml").read_text(encoding="utf-8"))["milestones"]
     assert steps[1]["inputs"] == {"milestone01": "milestone01.value_1"}
     assert steps[2]["inputs"] == specs[2]["inputs"]
-    schema_path = harness / steps[2]["input_schema"]
-    validate_against_schema({"original": {"value": 7}, "derived": {"value": 14}}, schema_path)
-    schema = json.loads(schema_path.read_text(encoding="utf-8"))
-    assert schema["required"] == ["original", "derived"]
+    assert all("input_schema" not in step for step in steps)
+    assert not list((harness / "milestones").glob("*/input.schema.json"))
     prompt = (harness / "references/milestone03.md").read_text(encoding="utf-8")
     assert "from: milestone01.value_1" in prompt
     assert "from: milestone02.value_2" in prompt

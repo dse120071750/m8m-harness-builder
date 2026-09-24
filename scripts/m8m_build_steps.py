@@ -497,7 +497,6 @@ def _source_resources(harness: Path, definition: dict[str, Any]) -> list[dict[st
     seen: set[tuple[str, str]] = set()
     roles = {
         "gem": ("gem", "milestone_gem", "text/markdown"),
-        "input_schema": ("json_schema", "milestone_input_schema", "application/schema+json"),
         "output_schema": ("json_schema", "milestone_output_schema", "application/schema+json"),
         "draft_schema": ("json_schema", "milestone_draft_schema", "application/schema+json"),
         "receipt_schema": ("json_schema", "milestone_receipt_schema", "application/schema+json"),
@@ -1263,7 +1262,6 @@ def _runtime_harness_execution_paths(
     for milestone in flow.get("steps") or flow.get("milestones") or []:
         for field in (
             "handler",
-            "input_schema",
             "output_schema",
             "draft_schema",
             "receipt_schema",
@@ -1709,9 +1707,9 @@ def _agent_profile_requirements(
         if not gem_ref:
             missing.append("gem")
         schema_fields = (
-            ("input_schema", "output_schema", "draft_schema")
+            ("output_schema", "draft_schema")
             if role == "candidate_executor"
-            else ("input_schema", "output_schema", "receipt_schema")
+            else ("output_schema", "receipt_schema")
         )
         schema_refs: dict[str, str] = {}
         for field in schema_fields:
@@ -2108,7 +2106,6 @@ def _skill_native_source_paths(
         for key in (
             "handler",
             "test",
-            "input_schema",
             "output_schema",
             "draft_schema",
             "receipt_schema",

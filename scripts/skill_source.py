@@ -574,7 +574,7 @@ def _validate_output_schema_ports(
             raise SkillSourceError(
                 f"{label}: output port {output_id} cardinality many requires an array schema"
             )
-        if cardinality == "one" and permits_array:
+        if cardinality == "one" and permits_array and output.get("kind") not in {"json", "data"}:
             raise SkillSourceError(
                 f"{label}: output port {output_id} cardinality one cannot use an array schema"
             )
@@ -933,7 +933,7 @@ def _validate_agent_resources(root: Path, agent: Mapping[str, Any]) -> list[dict
         if path.suffix.lower() == ".json":
             _validate_json_resource(path, label=f"milestone {milestone_id} read_paths[{index}]")
 
-    schema_fields = ("output_schema", "input_schema", "draft_schema", "receipt_schema")
+    schema_fields = ("output_schema", "draft_schema", "receipt_schema")
     for field in schema_fields:
         ref = agent.get(field)
         if ref is None:
@@ -1126,9 +1126,9 @@ def _validate_agent_semantics(
                 raise SkillSourceError(
                     f"milestone {milestone_id}: candidate profile tools must exactly cover FlowStep ids"
                 )
-            if not agent.get("input_schema") or not agent.get("draft_schema"):
+            if not agent.get("draft_schema"):
                 raise SkillSourceError(
-                    f"milestone {milestone_id}: AI candidate requires input_schema and draft_schema"
+                    f"milestone {milestone_id}: AI candidate requires draft_schema"
                 )
         if isinstance(judge_profile, dict) and judge_profile.get("tools"):
             raise SkillSourceError(
@@ -1137,10 +1137,6 @@ def _validate_agent_semantics(
         if isinstance(judge_profile, dict) and not agent.get("receipt_schema"):
             raise SkillSourceError(
                 f"milestone {milestone_id}: AI judge requires receipt_schema"
-            )
-        if isinstance(judge_profile, dict) and not agent.get("input_schema"):
-            raise SkillSourceError(
-                f"milestone {milestone_id}: AI judge requires input_schema"
             )
         if (
             isinstance(candidate_profile, dict)

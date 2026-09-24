@@ -376,7 +376,7 @@
         "schema_refs": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["input_schema", "output_schema"],
+          "required": ["output_schema"],
           "properties": {
             "input_schema": { "$ref": "m8m_workflow_source_bundle_v1.schema.json#/$defs/nonemptyTrimmed" },
             "draft_schema": { "$ref": "m8m_workflow_source_bundle_v1.schema.json#/$defs/nonemptyTrimmed" },
@@ -432,7 +432,7 @@
           "then": {
             "properties": {
               "schema_refs": {
-                "required": ["input_schema", "draft_schema", "output_schema"],
+                "required": ["draft_schema", "output_schema"],
                 "not": { "required": ["receipt_schema"] }
               }
             }
@@ -446,7 +446,7 @@
           "then": {
             "properties": {
               "schema_refs": {
-                "required": ["input_schema", "output_schema", "receipt_schema"],
+                "required": ["output_schema", "receipt_schema"],
                 "not": { "required": ["draft_schema"] }
               }
             }

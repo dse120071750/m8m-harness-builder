@@ -46,6 +46,32 @@ Named outputs: images
 
 修改現有工作流程時保留原有 ID。插入新階段時使用下一個未用編號，不要重新編號；執行先後由 graph 決定。
 
+### 語意輸入，結構化輸出
+
+**每個 milestone 不需要輸入 schema；每個 milestone 都必須有結構化輸出。**
+
+Codex session 的筆記、補充說明、修正、圖片、檔案與上游結果可以是零散或混合格式。Worker 根據完整 master prompt 理解這些內容，提取工作所需資訊。Builder 不會為每個階段建立輸入 schema，也不會先驗證輸入欄位，或額外加一個整理輸入的 milestone／模型呼叫。
+
+`inputs` 綁定仍可指定參考素材來自哪個上游輸出；它不是固定的輸入表格。只有真正缺少必要資訊或已宣告的上游產物時，才需要處理該缺口。工具呼叫仍使用工具本身所需的參數。
+
+輸出則保留 `output_contract`、`output_schema` 及具名 `outputs`。例如：
+
+```json
+{
+  "outputs": {
+    "selection": {
+      "car_id": "car_123",
+      "scene": "dry waterfront at night",
+      "selected_images": ["/run/master.png"]
+    }
+  }
+}
+```
+
+這是輸出格式示例；實際欄位按該 milestone 的交付物定義。完成條件是實際資料或檔案符合輸出 schema，而不是只回覆「已完成」。下游直接使用已接受的具名結果。Model 的 `draft_schema` 描述擬提交的輸出，並非輸入限制。
+
+目前 runner 忽略舊 milestone 的 `input_schema`；新建流程不會生成輸入 schema 檔案。既有已打包流程仍使用其固定 runtime，需重新打包才採用新行為。執行器仍透過 JSON 檔案傳送明確提供的 context；這不表示會自動讀取先前整段對話。外部 API／工作流程傳輸契約及工具參數契約不受此改動影響。
+
 ### 簡化完成條件
 
 預設 `loop: none`。每個活躍 milestone 的執行路徑**不要求雜湊、修訂鏈、證明圖或自動圖片審核**。
@@ -236,6 +262,32 @@ These tool names illustrate the format. The Builder fills in the actual workflow
 The generator preserves the complete authored prompt and refreshes the FlowStep/tool/output outline at the end from source metadata. See the [document format](references/master-prompts.md#required-milestone-markdown-layout).
 
 Keep existing IDs when editing workflows. Allocate the next unused number when inserting a milestone; do not renumber existing nodes. The graph determines execution order.
+
+### Semantic inputs, structured outputs
+
+**No milestone input schema is required. Every milestone must have structured output.**
+
+A Codex session can contain rough notes, corrections, prose, images, files, and upstream results in mixed formats. The worker interprets that context through the complete master prompt and extracts what the task needs. The Builder does not generate or validate per-milestone input schemas, or add a normalization milestone or model call.
+
+`inputs` bindings can still identify where an upstream reference comes from; they do not impose a fixed context form. Address missing information only when it actually blocks the work. Missing declared upstream artifacts remain dependency errors. Tool calls still use the arguments required by the tool itself.
+
+Outputs retain `output_contract`, `output_schema`, and named `outputs`. For example:
+
+```json
+{
+  "outputs": {
+    "selection": {
+      "car_id": "car_123",
+      "scene": "dry waterfront at night",
+      "selected_images": ["/run/master.png"]
+    }
+  }
+}
+```
+
+This illustrates the output shape; define actual fields for the milestone's deliverable. Completion requires actual data or files satisfying the output schema, not just a “done” message. Downstream work consumes those accepted named results. A model's `draft_schema` describes its proposed output, not restrictions on incoming context.
+
+The current runner ignores legacy milestone `input_schema` fields; new builds omit those files. Already packaged workflows retain their pinned runtime and must be rebuilt to adopt this behavior. The runner still transports explicitly supplied context through JSON files; it does not automatically access previous conversation history. External workflow/API transport contracts and individual tool argument contracts remain separate.
 
 ### Simple completion requirements
 

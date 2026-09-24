@@ -23,6 +23,10 @@ Canonical `flow.yaml` is generated review output. Edit native source instead.
 Generated tools remain `BUILD_REQUIRED` and `non_runnable` until implemented and
 validated. `planning/m8m-flowchart.md` is an optional canvas projection.
 
+Inputs are semantic context interpreted through the master prompt. Do not create
+or validate a milestone input schema. Preserve useful upstream bindings. Every
+milestone returns structured named outputs validated against its output schema.
+
 Default to `loop: none`. Complete from actual named outputs and schema checks.
 Do not add hashes, revisions, proof graphs, or automatic image reviews. A
 checksum or review needs an explicit request or an external API requirement.

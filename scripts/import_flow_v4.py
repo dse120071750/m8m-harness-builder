@@ -268,7 +268,7 @@ def _collect_resources(
 
     for agent in agents:
         milestone_id = agent["agent_id"]
-        for field in ("handler", "test", "input_schema", "output_schema", "draft_schema", "receipt_schema", "gem"):
+        for field in ("handler", "test", "output_schema", "draft_schema", "receipt_schema", "gem"):
             if agent.get(field):
                 add("harness", str(agent[field]), str(agent[field]), f"{milestone_id}.{field}")
         for control_field in ("branch", "cycle"):
