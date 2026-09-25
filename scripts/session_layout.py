@@ -578,6 +578,15 @@ def _file_value_for_schema(
                 fields["mime"] = str(member.get("mime_type") or "")
             if "kind" in properties or "kind" in required:
                 fields["kind"] = str(member.get("kind") or "")
+            if "width" in properties or "height" in properties or {"width", "height"} & required:
+                from PIL import Image
+
+                with Image.open(asset_path) as image:
+                    width, height = image.size
+                if "width" in properties or "width" in required:
+                    fields["width"] = width
+                if "height" in properties or "height" in required:
+                    fields["height"] = height
             wrapper = next(
                 (
                     key

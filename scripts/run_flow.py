@@ -3029,6 +3029,22 @@ def _changed_implementation_owners(
     for label in set(old_files) | set(current_files):
         if old_files.get(label) == current_files.get(label) or label == flow_label:
             continue
+        # Older coordinators froze milestone input schemas. They are now
+        # semantic context rather than executable contracts. Explicit adoption
+        # may retire only an unchanged, still-present legacy schema entry.
+        legacy_prefix = "skill:milestones/"
+        if (
+            label.startswith(legacy_prefix)
+            and label.endswith("/input.schema.json")
+            and label not in current_files
+            and label[len(legacy_prefix):].split("/") == [
+                label[len(legacy_prefix):].split("/")[0], "input.schema.json"
+            ]
+            and label[len(legacy_prefix):].split("/")[0] in all_milestones
+        ):
+            legacy_path = skill_root / label.removeprefix("skill:")
+            if legacy_path.is_file() and sha256_file(legacy_path) == old_files[label]:
+                continue
         label_owners = owners.get(label) or set()
         if label_owners:
             changed.update(label_owners)

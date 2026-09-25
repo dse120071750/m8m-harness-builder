@@ -40,6 +40,8 @@ Inputs are semantic context interpreted by the worker, with no milestone
 `input_schema`. Keep useful reference bindings without requiring normalized
 context fields. Every milestone must still declare structured named outputs and
 an output schema. See `master-prompts.md` for this boundary.
+For asset-producing or server-visible work, read `output-lineage.md` for typed
+members and host-owned global IDs and origin links.
 Then bind tools and outputs to that prompt. In every milestone Markdown, include
 numbered FlowSteps with descriptive actions and actual tool names, followed by
 named outputs. Check these lists against the executable bindings; use the layout
